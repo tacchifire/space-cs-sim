@@ -276,7 +276,11 @@ CORES=$(nproc)
 LOAD1=$(awk '{print $1}' /proc/loadavg)
 VIRT_SECONDS=8
 START=$(date +%s.%N)
-renode_run four_zephyr -e "include @$RESC" -e "emulation RunFor \"$VIRT_SECONDS\""
+# GetTimeSourceInfo reports Renode's OWN accounting: "Elapsed Host Time" and "Cumulative load"
+# (= host seconds per virtual second). That excludes process startup and ELF fetch, which the
+# wall-clock figure does not - measuring the wrapper made the emulator look 2x slower than it is.
+renode_run four_zephyr -e "include @$RESC" -e "emulation RunFor \"$VIRT_SECONDS\"" \
+  -e 'emulation GetTimeSourceInfo'
 END=$(date +%s.%N)
 WALL=$(echo "$END - $START" | bc)
 
@@ -291,15 +295,26 @@ else
   [ "$booted"   -eq 4 ] && pass "Zephyr booted on 4/4 nodes"            || fail "Zephyr boot" "only $booted/4 booted"
   [ "$received" -eq 4 ] && pass "4/4 nodes received CAN frames via hub" || fail "inter-node CAN" "only $received/4 received"
 
-  RATIO=$(echo "scale=3; $VIRT_SECONDS / $WALL" | bc)
-  meas "4-node speed" "$VIRT_SECONDS virtual s in $(printf '%.1f' "$WALL") s wall = ${RATIO}x real time (load ${LOAD1}, ${CORES} cores)"
-  # Renode is CPU bound, so this number is meaningless on a contended host. Measured once at
-  # load 0.5 -> 0.30x and again at load 17.7 on the same 14-core machine -> 0.096x. Assert only
-  # when the host is quiet enough for the number to mean anything.
+  WALL_RATIO=$(echo "scale=3; $VIRT_SECONDS / $WALL" | bc)
+  meas "4-node, wall clock incl. startup" "$VIRT_SECONDS virtual s in $(printf '%.1f' "$WALL") s = ${WALL_RATIO}x real time"
+
+  # Renode's own accounting. "Cumulative load" is host seconds per virtual second, so the
+  # emulation-only real-time ratio is 1/load.
+  CUMLOAD=$(grep -m1 'Cumulative load' "$OUT/four_zephyr.log" | sed 's/.*Cumulative load: *//' | tr -d '\r')
+  if [ -n "$CUMLOAD" ] && [ "$(echo "$CUMLOAD > 0" | bc 2>/dev/null)" = "1" ]; then
+    RATIO=$(echo "scale=3; 1 / $CUMLOAD" | bc)
+    meas "4-node, emulation only" "cumulative load ${CUMLOAD} => ${RATIO}x real time (host load ${LOAD1}, ${CORES} cores)"
+  else
+    RATIO="$WALL_RATIO"
+    skip "emulation-only speed" "could not parse Cumulative load; falling back to wall clock"
+  fi
+
+  # Renode is CPU bound, so the number is meaningless on a contended host: the same machine
+  # measured 0.30x at load 0.5 and 0.079x at load 18.5. Assert only when the host is quiet.
   if [ "$(echo "$LOAD1 > $CORES / 2" | bc)" = "1" ]; then
     skip "4-node speed floor" "host too busy to measure (load ${LOAD1} on ${CORES} cores); rerun on an idle machine"
   elif [ "$(echo "$RATIO >= $PERF_FLOOR" | bc)" = "1" ]; then
-    pass "4-node speed at or above the ${PERF_FLOOR}x floor"
+    pass "4-node speed ${RATIO}x is at or above the ${PERF_FLOOR}x floor"
   else
     fail "4-node speed" "${RATIO}x is below the ${PERF_FLOOR}x floor"
   fi
@@ -326,8 +341,14 @@ EOF
 # stdin and quits at EOF, which silently killed an earlier version of this probe and produced a
 # misleading "could not connect". --port keeps Renode listening and does not consume stdin.
 MONPORT=$((LINKPORT + 1))
-( cd "$RENODE_DIR" && timeout 180 ./renode --disable-xwt --plain --hide-analyzers --hide-log \
-    --port "$MONPORT" -e "include @$LINKRESC" -e 'start' ) >"$OUT/link.log" 2>&1 &
+# setsid puts renode and its `timeout` wrapper in their own process group so the whole group can
+# be terminated by PGID. Killing only $! leaves the real renode child alive: a previous run left
+# two stray processes holding port 5078, which then skewed the next run's performance figure.
+# NEVER use `pkill -f renode` for cleanup - it kills other people's Renode instances (and, as
+# learned the hard way, the shell command doing the killing).
+setsid bash -c "cd '$RENODE_DIR' && exec timeout 180 ./renode --disable-xwt --plain \
+    --hide-analyzers --hide-log --port $MONPORT -e \"include @$LINKRESC\" -e 'start'" \
+    >"$OUT/link.log" 2>&1 &
 RENODE_BG=$!
 
 python3 - "$LINKPORT" "$OUT/link_rx.bin" <<'PY' >"$OUT/link_client.log" 2>&1
@@ -388,7 +409,14 @@ open(outp, "wb").write(rx)
 print("UPLINK", uplink.decode())
 PY
 LINK_CLIENT_RC=$?
-kill "$RENODE_BG" 2>/dev/null; wait "$RENODE_BG" 2>/dev/null
+# Terminate the whole process group (negative PID), then verify nothing survives on the port.
+kill -TERM -"$RENODE_BG" 2>/dev/null
+sleep 1
+kill -KILL -"$RENODE_BG" 2>/dev/null
+wait "$RENODE_BG" 2>/dev/null
+if ss -ltn 2>/dev/null | grep -q ":$LINKPORT "; then
+  fail "space link cleanup" "port $LINKPORT still bound after cleanup - a stray Renode survived"
+fi
 
 if [ "$LINK_CLIENT_RC" != 0 ] || grep -q CONNECT_FAILED "$OUT/link_client.log"; then
   fail "space link: host->socket connect" "could not connect to 127.0.0.1:$LINKPORT (see $OUT/link_client.log)"

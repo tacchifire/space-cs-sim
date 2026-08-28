@@ -2,9 +2,8 @@
 
 **リポジトリ**: `space-cs-sim`
 **プロダクト名**: CubeRange（暫定 / 公表前に商標確認）
-**Python パッケージ名**: `cuberange`
-**版**: 2 版（2026-08-28、design-court による是正後）
-**状態**: 実測により裏付け済み。実装計画待ち
+**版**: 3 版（2026-08-28）
+**状態**: 主要な技術前提を実測で確定。実装計画の作成待ち
 
 ---
 
@@ -12,37 +11,14 @@
 
 **実行して確かめていない主張は書かない。**
 
-本書の Renode に関する能力主張は、すべて `tools/renode-probe/probe.sh` により再現できる。
-再現できない主張は本書に載せない。1 版はソースコードを読んだだけで「検証済み」と称しており、
-実際に Renode を起動した結果 **6 件の重大な誤り**が判明した。その記録を §16 に残す。
+1 版はソースを読んだだけで「検証済み」と称し、Renode を起動した結果 6 件が反証された。
+2 版は Codex による独立レビューで 17 件（うち CRITICAL 3 件）の欠陥を指摘された。
+3 版は、それらを **13 のエージェントによる実測プローブ**で決着させた結果である。
+是正の全記録は §16 にある。
 
-CI は `probe.sh` を実行し、前提が壊れたら落ちる。
-
-```
-$ RENODE_DIR=... ./tools/renode-probe/probe.sh
-Renode v1.16.1.17033 (build d66b0c2a-202602160923, .NET 8.0.12)
-
-== A. Core topology ==
-  PASS  emulation CreateCANHub
-  PASS  4x nucleo_h753zi joined to canHub
-  PASS  CreateServerSocketTerminal + connect (space link)
-  PASS  usart CreateFileBackend (headless console capture)
-== B. Peripheral models required by the node design ==
-  PASS  temperature  TMP108 @ i2c1
-  PASS  power monitor PAC1934 @ i2c1
-  PASS  battery gauge MAX77818 @ i2c1
-  PASS  IMU          LSM9DS1_IMU @ i2c1
-  PASS  magnetometer LSM9DS1_Magnetic @ i2c1
-  PASS  gyroscope    LSM330_Gyroscope @ i2c1
-  PASS  light/sun    OB1203 @ i2c1
-== C. Optional host integrations (must NOT be required) ==
-  SKIP  SocketCAN bridge  -- command exists; host vcan0 absent
-  SKIP  LogCANTraffic (Wireshark pcap)  -- Wireshark absent; not usable headless
-== D. Real firmware: Zephyr + FDCAN across four nodes ==
-  PASS  Zephyr booted on 4/4 nodes
-  PASS  4/4 nodes received CAN frames via hub
-  MEAS  4-node speed: 8 virtual s in 41.1 s wall = .19x real time
-```
+再現手段: `tools/renode-probe/probe.sh`（前提の検証ゲート。CI の最初のジョブ）。
+このハーネスは**わざと失敗する自己テスト**を内蔵する — 初版が「出力ディレクトリが無いと全項目 PASS」
+という偽の成功を出したため、**失敗できないハーネスは証拠として認めない**。
 
 ---
 
@@ -50,400 +26,543 @@ Renode v1.16.1.17033 (build d66b0c2a-202602160923, .NET 8.0.12)
 
 ### 1.1 一文で
 
-**Renode 上で衛星のファームウェアを命令レベルで動かし、地上局・無線リンク・衛星内部バス・OBC ファームの
-4 層すべてに実際に攻撃を通せる、宇宙システム版の RAMN。**
+**Renode 上で衛星のファームウェアを命令レベルで動かし、地上局・無線リンク・衛星内部バス・
+OBC ファームの 4 層すべてに実際に攻撃を通せる、宇宙システム版の RAMN。**
 
-### 1.2 背景
+### 1.2 「ビジネスでも使える水準」の定義
 
-Toyota RAMN は「4 個の MCU と CAN バスを 1 枚の基板に載せる」ことで、自動車セキュリティを
-*実際に手を動かして* 学べるものにした。本プロジェクトはその宇宙版を作る。物理基板を先に作るのではなく、
-Renode によるマルチマシン・エミュレーションで同等の体験を先に成立させる。
+これは**成熟度の主張ではなく品質バー**である。適用先はスコープを広げる方向ではなく、狭める方向。
 
-### 1.3 利用者と成功条件
-
-一次利用者はプロジェクトオーナー自身（攻撃検証の PoC 基盤）。ただし**同時にハンズオン学習基盤としても
-成立している**ことを要件とする。品質水準は「ビジネスでも使えるレベル」— すなわち:
-
-| 成功条件 | 測り方 |
+| バー | 具体的に何を満たすか |
 | --- | --- |
 | 攻撃が本当に通る | 各演習に「攻撃成功」を assert する CI テストがある |
-| 防御が本当に効く | 同じ演習に「対策適用後は攻撃が失敗する」を assert する CI テストがある |
-| 誰の手元でも同じに動く | 固定バージョンの Renode で `make demo` が一発で通る。特権も GUI も不要 |
-| 主張が検証可能 | 前提はすべて `probe.sh` で再現でき、CI で継続的に確認される |
-| 現実と地続き | 実標準（CCSDS / ECSS PUS / CSP）のサブセットに準拠 |
-| 実機化の道が塞がっていない | 実在 MCU + 実 HAL(Zephyr)。Renode 固有の抜け道を使わない |
-| 商用利用の障害がない | 自作コードは Apache-2.0。コピーレフト / NOSA コードを取り込まない |
+| 防御が本当に効く | 同じ演習に「対策適用後は攻撃が失敗し、正規動作は成功する」テストがある |
+| 誠実である | 脆弱版と対策版で**防御機構を弱めない**。差分は境界検査 1 行（§7.3） |
+| 再現する | 固定バージョン・決定的実行（§9.2）。特権も GUI も不要 |
+| 主張が検証可能 | すべての前提が `probe.sh` で再現でき、CI で継続確認される |
+| 現実と地続き | 実標準のサブセット。**独立オラクル**で突き合わせる（§9.3） |
+| 実機化を塞がない | 実在 MCU + Zephyr。Renode 固有の抜け道を使わない |
+| 商用利用可 | 自作コードは Apache-2.0。コピーレフト / NOSA を取り込まない |
 
-### 1.4 非目標（YAGNI）
+**明示的に名乗らないもの**: 飛行認定、実時間検証、RF 適合、暗号認証、MCU 完全再現。
+`ASSURANCE.md` にこの境界を書く（§12）。
 
-- 高精度な軌道力学（摂動、詳細熱モデル）— 攻撃の帰結が見える最小限で足りる
-- 実 SDR / RF ハードウェア（Phase 3 以降）
-- CTF スコアサーバ、ユーザ管理、マルチテナント
-- 物理基板の設計・製造（道は塞がないが、作らない）
-- CCSDS フル準拠（COP-1、CLTU/BCH、AOS の完全実装）
+### 1.3 非目標（YAGNI）
+
+高精度軌道力学 / 実 SDR / CTF スコアサーバ / 物理基板の製造 / CCSDS フル準拠。
 
 ---
 
-## 2. ポジショニング — なぜ既存物の再発明でないか
+## 2. ポジショニング
 
-| 既存 | 何であるか | 忠実度 | ライセンス | 空白 |
-| --- | --- | --- | --- | --- |
-| **NASA NOS3** (617★, 活発) | cFS + NOS Engine + 42 + COSMOS/Yamcs を束ねた運用シミュレータ | **システム／運用レベル**。cFS は Linux 上でネイティブ実行。MCU の命令エミュレーションはしない | **NOSA 1.3** | ファーム内部のメモリ破壊・鍵抽出・フォールト注入ができない。NOSA は商用取り込みの障壁 |
-| **Hack-A-Sat** (`solar-wine/tools-for-hack-a-sat-2020`, 97★) | 決勝用に衛星ファームを QEMU でエミュレートした一式 | ファームレベル ✓ | 混在 | 2020 年で更新停止。単発の CTF 用。バスも地上系も統合されていない |
-| **RAMN** (275★, 活発) | 4 ECU + CAN の教材基板 | 命令レベル ✓ | — | **完全に自動車ドメイン** |
-| **Renode** (2786★, MIT) | エミュレータ本体 | — | **MIT** ✓ | 宇宙向けのプラットフォーム記述・シナリオが存在しない |
-| **Yamcs / OpenC3 COSMOS** | 実運用実績のある地上管制ソフト | 運用レベル | **AGPL-3.0** | 攻撃側の道具ではない。AGPL は製品組み込みの障壁 |
+| 既存 | 忠実度 | ライセンス | 空白 |
+| --- | --- | --- | --- |
+| **NASA NOS3** (617★) | システム／運用レベル。cFS は Linux でネイティブ実行 | NOSA 1.3 | ファーム内部の攻撃ができない。NOSA は商用障壁 |
+| **Hack-A-Sat** QEMU 一式 (97★) | ファームレベル | 混在 | 2020 年で停止。単発 CTF。バス・地上系が非統合 |
+| **RAMN** (275★) | 命令レベル | — | 完全に自動車ドメイン |
+| **Renode** (2786★) | エミュレータ本体 | **MIT** | 宇宙向けの記述もシナリオも無い |
+| **Yamcs / OpenC3** | 運用レベル | AGPL-3.0 / source-available | 攻撃側の道具ではない |
 
-**空白＝我々の位置**: *命令レベルで動く衛星ファーム*と*内部バス*と*地上系*を一本に繋ぎ、
-セキュリティ演習を CI で検証済みの形で同梱したもの。NOS3 が「運用レベル」なら CubeRange は
-「シリコン／ファームレベル」であり、両者は競合ではなく補完関係にある。
+**我々の位置**: 命令レベルの衛星ファーム + 内部バス + 地上系を一本に繋ぎ、
+**双方向 CI 検証済みの**セキュリティ演習を同梱したもの。NOS3 とは補完関係。
 
 ---
 
 ## 3. 実測に基づく技術前提
 
-### 3.1 プラットフォーム決定: Renode 1.16.1 + STM32H753 + Zephyr
+### 3.1 プラットフォーム
 
-| 決定 | 実測による根拠 |
+| 決定 | 実測根拠 |
 | --- | --- |
-| **Renode 1.16.1（リリース版に固定）** | 再現性のため master には依存しない。1.16.1 portable を実際に導入し全機能を確認 |
-| **ノード MCU = STM32H753**（`platforms/boards/nucleo_h753zi.repl`） | 1.16.1 の `stm32h743.repl` に `fdcan1/fdcan2: CAN.MCAN @ 0x4000A000/0x4000A400` が実在。4 機同時起動を実測 |
-| **RTOS = Zephyr** | Antmicro 配布の `nucleo_h743zi--zephyr-samples-drivers-can-counter.elf` を 4 ノードで実行し、**4/4 が起動、4/4 が CAN ハブ経由で相互受信**することを実測（`Booting Zephyr OS build v3.5.0-rc2` / `Counter received`） |
-| **実基板 = NUCLEO-H753ZI** | Renode に同名ボード記述があり、実在の入手可能な基板 |
+| **Renode 1.16.1（リリース版に固定）** | portable-dotnet を導入。version/build を `probe.sh` が assert |
+| **ノード MCU = STM32H753**（`platforms/boards/nucleo_h753zi.repl`） | `fdcan1/2: CAN.MCAN`、`crypto: STM32H7_CRYPTO`、`rng`、`watchdog`、`i2c1`、9 本の UART、`ethernet` を `peripherals` 出力で確認 |
+| **RTOS = Zephyr** | Antmicro 配布の `nucleo_h743zi--zephyr-*` ELF が 4 ノードで起動し CAN 相互受信 |
+| **CSP = libcsp を採用（自作しない）** | libcsp 2.1 は**正式な Zephyr モジュール**（`zephyr/CMakeLists.txt`, `src/drivers/can/can_zephyr.c`, `src/arch/zephyr/*`, Zephyr サンプル）。MIT。このホストでビルド・実行し CFP のゴールデンベクタを生成済み |
 
-### 3.2 STM32L552 を採らなかった理由（1 版からの変更）
+**STM32L552 を採らない理由**: 1.16.1 の `stm32l552.repl` に FDCAN が無く（master 限定）、
+Zephyr の `nucleo_l552ze_q` も CAN 非対応（`supported:` に `can` 無し、dtsi は `status="disabled"`）。
+TrustZone を失うため、セキュアブートは TF-M ではなく MCUboot で行う。
 
-1 版は「RAMN と同じ STM32L552」を中核に据えていた。実測の結果、**二重に成立しない**:
+### 3.2 Renode の欠陥登録簿（実測。設計はこれを回避する）
 
-- **Renode 1.16.1 の `platforms/cpus/stm32l552.repl` に FDCAN が存在しない**
-  （`grep -n 'fdcan\|CAN\.' stm32l552.repl` → 0 件）。FDCAN は master にのみ追加されている。
-  リリース版固定という business 要件と両立しない。
-- **Zephyr の `nucleo_l552ze_q` は CAN 非対応**。`nucleo_l552ze_q.yaml` の `supported:` に `can` が無く、
-  `dts/arm/st/l5/stm32l5.dtsi` の `fdcan1` は `status = "disabled"`。Renode 用の `.resc` も無い
-  （`boards/st/nucleo_l552ze_q/support/` は `openocd.cfg` のみ）。
-
-**失うもの**: Cortex-M33 の TrustZone-M。セキュアブート演習は TF-M ではなく **MCUboot** で行う
-（CubeSat の実装としてもこちらが一般的）。
-
-**残す選択肢**: Renode master が安定リリースに入った時点で L552 ノードを追加オプションとして再評価する。
-その場合「RAMN 実基板にそのまま焼ける」という利点が復活する。
-
-### 3.3 確認済みの Renode 機構（すべて `probe.sh` で再現可能）
-
-| 能力 | コマンド | 状態 |
-| --- | --- | --- |
-| マルチマシン + CAN ハブ | `emulation CreateCANHub "canHub"` / `connector Connect sysbus.fdcan1 canHub` | **PASS** |
-| 宇宙リンク（UART→ホスト TCP） | `emulation CreateServerSocketTerminal 5020 "spacelink" false` + `connector Connect sysbus.usart3 spacelink` | **PASS** |
-| ヘッドレスなコンソール捕捉 | `sysbus.usart3 CreateFileBackend @<path> true` | **PASS** |
-| Monitor を TCP 公開（ホスト制御経路） | `renode --port 1234` | **存在確認済み**（`--help`） |
-| ホストが仮想時刻を読む | `machine ElapsedVirtualTime` / `emulation GetTimeSourceInfo` | **PASS** — `RunFor "1.5"` 後に `Elapsed Virtual Time: 00:00:01.500000000` を確認。`Elapsed Host Time` と `Current load` も同時に返るため、実時間比を実行時に自己計測できる |
-| ハードウェア AES | `crypto (STM32H7_CRYPTO)` | **PASS** — `nucleo_h753zi` の `peripherals` 出力に存在 |
-| 乱数 | `rng (STM32F4_RNG)` | **PASS** — 同上 |
-| Ethernet + PHY | `ethernet` + `Network.EthernetPhysicalLayer` | 存在確認済み。Phase 3 の高速ペイロード downlink 候補（Phase 1 では未使用） |
-| ホスト SocketCAN 橋渡し | `machine CreateSocketCANBridge "scb" "vcan0"` | **条件付き** — コマンドは 1.16.1 に実在。`vcan0` 作成に **root が必要**（`sudo modprobe vcan` 等）。Linux 限定 |
-| CAN を pcap で観測 | `emulation LogCANTraffic` | **条件付き** — **Wireshark 必須**。未導入だと "Wireshark is not installed" で失敗し、しかも `.resc` 全体が中断する。ヘッドレス CI では使わない |
-| 時間量子 | `emulation SetGlobalQuantum "0.0001"` | **PASS** |
-| ウォッチドッグ | `Timers.STM32_IndependentWatchdog`（`watchdog`） | 実在確認済み |
-
-### 3.4 実測性能とその設計上の帰結（重要）
-
-| 構成 | 実測 |
-| --- | --- |
-| 4 ノード、NOP ループのみ（非代表的） | 仮想 10 s / 実時間 7.4 s = **1.3× 実時間** |
-| 2 ノード、実 Zephyr、**ログ抑制なし** | 仮想 6 s / 実時間 74 s = **0.08× 実時間** |
-| 2 ノード、実 Zephyr、ログ抑制あり | 仮想 6 s / 実時間 9.95 s = **0.60× 実時間** |
-| 4 ノード、実 Zephyr、ログ抑制あり | 仮想 8 s / 実時間 27〜41 s = **0.19〜0.30× 実時間**（RSS 448 MB） |
-
-ここから 3 つの設計要件が導かれる:
-
-1. **ログ抑制は性能要件である。** 未実装レジスタへのアクセス警告が性能を **約 12 倍**悪化させる。
-   全 `.resc` は `logLevel 3 sysbus` / `rcc` / `fdcan1` を既定で設定する。
-   演習でログが必要なときのみ明示的に引き上げる。
-2. **壁時計に追従する `live` モードは成立しない。** 4 ノードでは実時間の 0.2〜0.3 倍しか進まない。
-   1 版が書いていた「実時間追従」は撤回する（§4.4 参照）。
-3. **ノード数は 4 が上限。** 攻撃者ノードを常設で足すと 5 ノードとなり更に遅くなるため、
-   攻撃者ノードは必要な演習でのみ起動する。
-
-### 3.5 センサ／アクチュエータのモデル（実測で確定）
-
-1 版の表は 3 件が誤りだった。以下は **`probe.sh` で PASS を確認済み**のもののみ。
-
-| CubeSat 機能 | Renode モデル | バス | 用途 |
+| # | 欠陥 | 影響 | 回避 |
 | --- | --- | --- | --- |
-| 電源電圧・電流・電力 | `Sensors.PAC1934` | i2c1 | EPS の電力監視（実 CubeSat EPS も同種の IC を使う） |
-| 電池残量 | `Sensors.MAX77818` | i2c1 | EPS のバッテリ・フューエルゲージ |
-| ジャイロ + 加速度 | `Sensors.LSM9DS1_IMU` | i2c1 | ADCS の姿勢推定 |
-| 磁力計 | `Sensors.LSM9DS1_Magnetic` | i2c1 | ADCS の磁場観測（磁気トルカ制御の入力） |
-| ジャイロ（代替） | `Sensors.LSM330_Gyroscope` | i2c1 | |
-| 太陽センサ（照度で代用） | `Sensors.OB1203` | i2c1 | 日照判定・粗い太陽方向 |
-| 温度 | `Sensors.TMP108` | i2c1 | 熱・FDIR |
-| 磁気トルカ／ロードスイッチ | GPIO + CSP メッセージ | fdcan1 | Physics 側が観測（§4.3） |
+| D1 | `Sensors.OB1203 @ i2c1` がコンストラクタで `ArgumentException("Field LED_FLIP intersects with another range")` → **プロセス abort** | 環境光センサが使えない | 太陽センサは ADC で表現（§3.4） |
+| D2 | `Sensors.VEML7700` が 1.16.1 に存在しない（E04） | 同上 | 同上 |
+| D3 | WebSocket `sensor-set` の `magnetic-flux-density` が `AK0991x` の `RecoverableException` を誘発し **abort** | GUI から磁力計を書けない | `DefaultMagneticFluxDensity{X,Y,Z}` か RESD を使う |
+| D4 | `sysbus.usartX BaudRate` の getter が未設定 UART で `DivideByZeroException` → **abort** | 任意のプロパティ取得が全ノードを落としうる | **Monitor には例外隔離が無い**。ホットループで使うコマンド文字列を allowlist 化する |
+| D5 | Monitor が科学記法を**無言で破壊**（`1e3`→1、`1.5e-2`→1.5、`0b101`→0）。`.5` は構文エラー | センサ値が静かに壊れる | 送信前に必ず固定小数点整形（`f"{v:.6f}"`） |
+| D6 | `-e` 引数は `;` で 1 行に連結され、**最初の失敗で残り全部が中断** | シナリオが黙って部分適用される | 長い `-e` 連鎖を使わない。TCP Monitor に 1 行 1 コマンドで送る |
+| D7 | `machine Pause` は**時間ドメイン全体**を凍結。`RunFor` フローでは無効化される | ノード単体を止められない | `cpu IsHalted true` を使う（§5.3） |
+| D8 | `machine Reset` は `RunFor` 停止状態で**デッドロック** | 復電が固まる | `machine RequestReset` を使う |
+| D9 | `emulation RemoveMachine` 後の `RunFor` が **SIGSEGV**（exit 139、2 回再現） | — | 使わない |
+| D10 | `.repl` の `@ none` 形式は**無言で何も生成しない**（診断なし） | インジェクタが存在しないまま動く | `NullRegistrationPoint` に登録する |
+| D11 | ハブに繋ぐ `ICAN` が未登録オブジェクトだと例外が配送ループ内で発生し、**以後すべてのノードのフレームがハブごと毒される** | バス全体が沈黙 | 必ずマシンのペリフェラルとして登録 |
+| D12 | 不正なハンドシェイクは External Control のリスナーを**恒久破壊** | 制御チャネル喪失 | クライアントを堅牢化。復旧は `CreateExternalControlServer` の再発行 |
+| D13 | Monitor へ行末未完のまま切断を繰り返すと 54 回目でリスナーが**恒久的に詰まる** | 制御チャネル喪失 | 切断前に必ず `\n` を送る。connect タイムアウトを検出して Renode を再起動する監視役を置く |
+| D14 | 失敗コマンドは Renode を対話 Monitor に落とす。stdin が TTY だと**永久に停止** | CI が固まる | CI は必ず `< /dev/null` と実時間タイムアウトを付ける |
+| D15 | `CANTester` / `CANKeywords` が **1.16.1 に存在しない**（型解決が None。`TerminalTester` は解決する） | Robot に CAN キーワードが一切無い | CAN の assert は自作インジェクタ経由か UART 観測で行う |
+| D16 | 未マップ番地への命令フェッチ／アクセスで**フォールトが起きない**（0x10000000 で CFSR=0, HFSR=0） | 野良ポインタ検知の演習が成立しない | そのような演習を作らない |
+| D17 | `MPU_CTRL.PRIVDEFENA=0` が特権アクセスで無視される（実機なら MemManage） | 「領域未定義＝拒否」に依存できない | 明示的に定義した領域のみに依存する |
+| D18 | Renode の CANHub はバス ACK を模擬しない | **CAN エラーフレーム／bus-off の演習は成立しない** | 作らない（§7.5 で明示） |
+| D19 | `machine Reset` は RAM をゼロ化しない。清浄状態は `LoadELF` と Zephyr の `.bss` ゼロ化に由来 | 古いヒープが電源断を生き延びる | 復電手順に `LoadELF` を必ず含める |
 
-**使用不可と実測で判明したもの**（1 版の誤り）:
+いずれも `probe.sh` の否定アサーションとして固定し、将来の Renode が直したら CI が気付く。
 
-| 1 版の記載 | 実測結果 |
+### 3.3 性能（実測）
+
+**測定方法**: 壁時計はプロセス起動と ELF 取得を含むため約 2 倍過小に出る。
+Renode 自身の `emulation GetTimeSourceInfo` が返す `Cumulative load`（仮想 1 秒あたりのホスト秒）を
+使い、実時間比は `1/load` とする。
+
+| 構成 | 結果 |
 | --- | --- |
-| `Sensors.VEML7700`（太陽センサ） | `Error E04: Could not resolve type` — 1.16.1 に存在しない |
-| `Analog.Potentiometer`（電池電圧） | `Error E04: Could not resolve type` — 1.16.1 に存在しない |
-| `Sensors.LSM6DSO_IMU @ i2c1` | `Error E05: Register 'i2c1' ... does not provide an interface` — I2C 登録不可 |
+| 4 ノード、実 Zephyr、ログ抑制あり | 壁時計 0.148× / **エミュレーションのみ 0.173×**（cumulative load 5.778、RSS 448 MB） |
+| 同、別測定（壁時計、軽負荷時） | 0.30× |
+| 同、負荷 18.5/14 コア | 0.079× — **負荷下の値は無意味** |
+| ログ抑制なし | **約 12 倍遅い**（74 s vs 9.95 s）。ログ抑制は性能要件 |
+| 直列実行（決定性のため必須、§9.2） | さらに **20〜35% 遅い** |
+| External Control の `run_for` 固定費 | 約 8〜10 ms → **100 ms ティックが最適**（0.49〜0.62×）。1 ms ティックは 0.095× に崩壊 |
+| External Control 対 Monitor（同一操作） | **中央値で約 44 倍高速**（GPIO 読み 0.162 ms 対 7.112 ms） |
+| Monitor バッチ（`;` 連結） | 未バッチ 437 ms/ステップ（物理 2.3 Hz が上限）→ バッチ 57 ms（17.4 Hz） |
+
+**帰結**: 壁時計追従は不可能。仮想時間をマスタークロックとする（§4.2）。
+CI 時間予算は**直列実行込み**で計算する。
+
+### 3.4 センサ／アクチュエータ（実測で確定）
+
+| CubeSat 機能 | 機構 | 状態 |
+| --- | --- | --- |
+| 温度（サブ度精度） | `Sensors.MAX77818.Temperature` または `LSM9DS1_IMU.Temperature` | **TMP108 は整数度に量子化**され [-128,127] にクランプされるため不可 |
+| 電池電圧・電流 | `Sensors.MAX77818`（`Current` / `CellVoltage`、書き込み可） | PAC1934 は**設定可能プロパティを一切持たない**ため不可 |
+| ジャイロ + 加速度 | `Sensors.LSM9DS1_IMU` | 実測 OK |
+| 磁力計 | `Sensors.AK09916`（`IMagneticSensor` 実装）の `DefaultMagneticFluxDensity{X,Y,Z}` | 12000 を書いて `0x2EE0` を読み戻し確認。**WebSocket 経由の set は D3 で落ちる** |
+| 太陽センサ（粗） | **ADC**: `adc3 SetDefaultValue <mV> <ch>` / `FeedVoltageSampleToChannel <ch> <mV> <n>` / `FeedVoltageSampleToChannel <ch> @<file>` | 3 形式すべて実測 OK。実 CubeSat の粗太陽センサもフォトダイオード + ADC |
+| 太陽電池・母線電圧 | 同上 | 同上 |
+| 決定的な時系列注入 | **RESD**（REnode Sensor Data）。`tools/csv2resd/csv2resd.py` が同梱 | CSV → RESD 変換器を確認。CI リプレイの正規経路 |
+| ロードスイッチ・磁気トルカ | GPIO。マシン間は `emulation CreateGPIOConnector` | EPS の PB0 が COMM の `gpioPortC` IDR bit7 を駆動することを実測 |
+
+**GPIO コネクタの要件**（実測で判明）: `AttachTo` が**必須**（先に呼ばないと "is not connected"）。
+1 コネクタあたり最大 2 ペリフェラル。イベントは `HandleTimeDomainEvent` で遅延配送されるため
+**仮想時間が進んでいないと届かない**。極性はピン依存（`stm32h743.repl` の `gpioPortB` には
+`invertedAFPins` エントリがある）— ロードスイッチには該当しないピンを選ぶか、assert 前に極性を実測する。
 
 ---
 
 ## 4. アーキテクチャ
 
-### 4.1 4 つのプレーン
+### 4.1 5 つのプレーン
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ GROUND PLANE                                    (ホスト / Python)     │
-│   gs-console  … 運用者 TUI（HK 表示・コマンド送信・イベントログ）        │
-│   gs-core     … TC 組立 / TM 復号 / PUS / SDLS / テレメトリ DB(sqlite) │
-│   attack-kit  … 攻撃者ツール（キャプチャ・リプレイ・偽装・ファジング）    │
-└───────────────────────────────┬──────────────────────────────────────┘
-                                │ TCP :5010 (frames)
-┌───────────────────────────────▼──────────────────────────────────────┐
-│ CHANNEL PLANE  「真空」                          (ホスト / Python)     │
-│   pass scheduler … 軌道→可視ウィンドウ (AOS/LOS)                       │
-│   impairments    … 伝搬遅延 / ビット誤り / 断                          │
-│   tap & inject   … 攻撃者の観測点かつ注入点（★ 攻撃の主戦場）           │
-└───────────────────────────────┬──────────────────────────────────────┘
-                                │ TCP :5020 → CreateServerSocketTerminal
-┌───────────────────────────────▼──────────────────────────────────────┐
-│ SPACE PLANE                (Renode 1.16.1 / 4 machines, STM32H753)    │
-│                                                                       │
-│   ┌────────┐  ┌────────┐  ┌────────┐  ┌────────┐                     │
-│   │  COMM  │  │  OBC   │  │  EPS   │  │  ADCS  │   Zephyr            │
-│   └───┬────┘  └───┬────┘  └───┬────┘  └───┬────┘                     │
-│       └───────────┴───────────┴───────────┘                          │
-│                    canHub  (CSP over CAN)                            │
-│                       │                                              │
-│                       ├──► [任意] SocketCANBridge ──► vcan0           │
-│                       │        （Linux + root のときのみ）            │
-│                       └──► [既定] ATTACKER ノード（演習時のみ起動）    │
-└───────────────────────────────┬──────────────────────────────────────┘
-                                │  Renode 仮想時間が全体のマスタークロック
-┌───────────────────────────────▼──────────────────────────────────────┐
-│ PHYSICS PLANE                                   (ホスト / Python)     │
-│   orbit (SGP4) → 可視性・日照 / attitude (剛体+磁気トルク) / power     │
-│   「攻撃の結果」を可視化: スピン・電池枯渇・通信途絶                    │
+│ PRESENTATION PLANE            ブラウザ（WSL2 でも Windows 側から到達）  │
+│   運用コンソール / 衛星状態 / バスタイムライン / 演習の進行             │
+│   Renode の Web ターミナル（/telnet/<id>）も同じ画面に埋め込む          │
+└───────────────┬──────────────────────────────┬───────────────────────┘
+                │ WebSocket (自前 GS backend)   │ WebSocket (Renode --server-mode)
+┌───────────────▼──────────────────────────────┼───────────────────────┐
+│ GROUND PLANE                    (ホスト/Python)                       │
+│   gs-core … TC 組立 / TM 復号 / PUS / SDLS / sqlite                   │
+│   attack-kit … キャプチャ・リプレイ・偽装・注入                        │
+└───────────────┬──────────────────────────────┼───────────────────────┘
+                │ TCP (frames)                  │
+┌───────────────▼──────────────────────────────┼───────────────────────┐
+│ CHANNEL PLANE 「真空」          (ホスト/Python)                        │
+│   パス窓(AOS/LOS) / 伝搬遅延 / ビット誤り / 断 / tap & inject          │
+└───────────────┬──────────────────────────────┼───────────────────────┘
+                │ TCP → usart2 socket terminal  │
+┌───────────────▼──────────────────────────────▼───────────────────────┐
+│ SPACE PLANE              Renode 1.16.1 / STM32H753 / Zephyr           │
+│   ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐   ┌─────────────────────────┐  │
+│   │ COMM │ │ OBC  │ │ EPS  │ │ ADCS │   │ attacker (空のマシン)    │  │
+│   └──┬───┘ └──┬───┘ └──┬───┘ └──┬───┘   │ TcpCanInjector (C#, 90行)│  │
+│      └────────┴────────┴────────┴───────┴─────────┬───────────────┘  │
+│                    canHub (CSP over CAN / libcsp CFP)                 │
+│      EPS.gpioPortB[0] ──GPIOConnector──▶ COMM.gpioPortC[7]  (PGOOD)   │
+└───────────────┬──────────────────────────────────────────────────────┘
+                │ External Control API (binary) + Monitor (batched text)
+┌───────────────▼──────────────────────────────────────────────────────┐
+│ PHYSICS PLANE                   (ホスト/Python)                       │
+│   軌道・日照・可視性 / 姿勢 / 電力。仮想時間で積分                     │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-### 4.2 プレーン境界の設計原則
+### 4.2 ホスト制御ループ（CRITICAL 課題の解決）
 
-各プレーンはプロセス境界と明示的なワイヤフォーマットで分かれる。
+**唯一のコーディネータ**が Renode の生存と時間を排他所有する。他のどのプレーンも
+Renode API を直接叩かない。
 
-- 攻撃者は現実でも「線の上」にしか居ない。プロセス境界＝攻撃面であり、そこが観測点になる。
-- 各プレーンを単体で差し替え・テストできる。
-- Phase 3 で Channel プレーンを GNU Radio に差し替える際、他プレーンを触らずに済む。
-
-### 4.3 ホスト⇄Renode の双方向インタフェース
-
-ホスト側の全プレーンは **1 本の Renode Monitor TCP 接続**（`renode --port`）を制御チャネルとし、
-データ経路のみ別ソケットを使う。
-
-| 用途 | 既定の手段（特権不要） | 実測 |
+| 目的 | 経路 | 根拠 |
 | --- | --- | --- |
-| **宇宙リンク**（データ） | COMM の `usart3` を `CreateServerSocketTerminal` で TCP 露出 | **PASS** |
-| **時刻の取得**（同期） | Monitor: `machine ElapsedVirtualTime` | **PASS** |
-| **時刻の前進**（同期） | Monitor: `emulation RunFor "<dt>"` | **PASS** |
-| **センサ値の注入**（Physics → 衛星） | Monitor: `i2c1.imu ...` / `i2c1.pac1934 ...` 等のプロパティ書き込み | 機構は PASS、スループットは **R2 として未検証** |
-| **アクチュエータの観測**（衛星 → Physics） | Monitor: `gpioPortB.<pin>` の状態および該当ペリフェラルのレジスタを直接読む | 機構は PASS、**R8 として未検証** |
-| **攻撃者の生 CAN 注入** | **ATTACKER ノード**（5 台目の Renode マシン、演習時のみ起動） | 下記参照 |
-| **CI での生 CAN 観測** | Robot: `Create CAN Tester canHub` + `Wait For Frame With Id` | キーワード実在を確認 |
+| 時間の前進・取得、GPIO、`sysbus` 読み書き | **External Control API**（バイナリ、`emulation CreateExternalControlServer`） | Monitor 比 **44 倍高速**。プロトコルを byte-exact に逆解析し、**200 行の純 Python クライアント**を実証 |
+| I2C センサ注入、`cpu IsHalted`、`LoadELF` 等 | **Monitor（TCP、`;` バッチ）** | External Control は run_for/time/machine/adc/gpio/sysbus のみ。両者は**同時利用で無デッドロック**を実測 |
+| 宇宙リンクのバイト | **usart2 の socket terminal** | §5.2 |
+| ブラウザ | **`--server-mode` WebSocket** | §4.4 |
 
-#### アクチュエータ観測をテレメトリ経由にしない理由
+**1 ティックの手順**（順序は固定）:
 
-本節の初稿は「Physics は地上局が受信した PUS ハウスキーピングからアクチュエータ状態を読む」と
-していたが、これは**自己矛盾である**。演習 EX-B01 の眼目は EPS への攻撃で COMM の電源を落とし
-衛星を沈黙させることであり、そのとき TM は止まる。つまり
-**「衛星が死んだことを可視化したい瞬間に、可視化の経路も死ぬ」**。
-Physics は Monitor 経由で衛星の内部状態を直接読む（シミュレータは物理法則の側であって、
-地上局の観測能力に縛られてはならない）。
+1. 非ブロッキングで全 UART ソケットを drain（専用スレッド。**Renode API を絶対に呼ばない**）
+2. GPIO イベント（`timestamp_us` は**仮想時間**）を取り込む
+3. Channel / Physics を t+Δ まで進める
+4. センサ値を**1 バッチ**で注入（Monitor 1 行、固定小数点整形、返却フィールド数を検証）
+5. `run_for(Δ)` を発行
+6. Δ = **100 ms 仮想**（実測の最適点）
 
-#### 生 CAN フレーム注入の現実（実測に基づく）
+**遵守規則**（すべて実測に基づく）:
 
-RAMN では `cansend` で誰でもバスに注入できる。Renode 1.16.1 で同等のことを**特権なしに**行う
-手段は、実測の結果**存在しなかった**:
+- **L1** 制御クライアントは 1 個だけ。External Control も Monitor も listener backlog=1
+- **L2** `start`（自走）を使わない。自走中は `run_for` が失敗し、**GPIO イベントは失われる（バッファされない）**
+- **L3** UART ソケットに対する**ブロッキング recv を制御スレッドで行わない**。実測で仮想時間が 220000 µs に 8 秒間凍結した（唯一のデッドロック。構造的に回避可能）
+- **L4** Monitor バッチは**必ず**返却フィールド数を期待値と突き合わせる。中断は無言で、以後の欄がずれる（D6）
+- **L5** 送信前に浮動小数を固定小数点へ整形（D5）
+- **L6** ホットループのコマンド文字列は allowlist。任意のプロパティ取得は禁止（D4）
+- **L7** 再現性が要る注入は**ティックの合間**に行う。ティック中の書き込みはステップ終了後に実行される（実測）
+- **L8** 切断前に必ず `\n`（D13）
+- **L9** CI は `< /dev/null` と実時間タイムアウト（D14）
+- **L10** ハンドシェイク時、先行するイベントフレームを読み飛ばす（D12）
+- **L11** GPIO 登録はクライアント切断後も**永久に残り発火し続ける**。長時間運用前に負荷試験
 
-| 候補 | 実測結果 |
-| --- | --- |
-| `canHub` オブジェクトに送信メソッド | **無い**。`AttachTo` / `DetachFrom` / `Start` / `Pause` / `Resume` のみ |
-| `sysbus.fdcan1`(MCAN) に送信メソッド | **無い**。レジスタ読み書きのみ |
-| `CAN.CANToUART` を canHub に接続 | **失敗**。`connector Connect` の 3 通りの記法すべてで `Error E21` |
-| Robot Framework キーワード | **ISO-TP / UDS 層のみ**（`SendISOTPMessage`, `SendUDSCommand...`）。生フレーム送信キーワードは無い。CSP over CAN は ISO-TP ではないため PCI バイトが混入して使えない |
-| `SocketCANBridge` → `vcan0` | 動作するが **Linux + root 必須**（`sudo modprobe vcan`） |
+### 4.3 時間モデル
 
-**したがって ATTACKER ノードは「望ましい選択肢」ではなく必須の構成要素である。**
-5 台目の Renode マシンに小さな Zephyr アプリを載せ、UART（TCP ソケット露出）↔ 生 CAN フレームを
-中継させる。ホスト側 Python は単純なフレーミングでこのソケットに書く。
+Renode の仮想時間が唯一のマスタークロック。パス窓・タイムアウト・周期 HK はすべて仮想時間で定義する。
 
-- 利点: 特権不要、OS 非依存、CI と対話利用で経路が同一、
-  そして**「攻撃者は既にどこかのサブシステムを掌握している」という現実的な前提**になる。
-- 費用: Zephyr アプリ 1 本（小規模）と、エミュレート UART を通る分の遅延。5 ノード運用時の
-  速度低下（§3.4）。**この費用は Phase 1 のスコープに明記して計上する。**
-- 将来: 遅延が問題になれば、`ICAN` を実装して TCP を話す Renode プラグイン（C#, 約 150 行）を
-  書けば ATTACKER ノードを不要にできる。Phase 2 の最適化候補。
+**実証済みの決定性**: 2 つの Renode プロセスで、ステップ粒度 143 倍差・実時間 3.3 倍差でも
+**GPIO タイムスタンプがビット一致し、UART が同一 SHA-256**。
+さらに `RunFor "5"` ≡ 5×`RunFor "1"` がビット完全に一致する（量子が割り切れなくても）。
+**したがってホストのティック刻みは自由**で、対話 100 ms / CI 一括のどちらでも同じ結果になる。
 
-`vcan0` が使える環境（Linux + root）では `--with-vcan` で有効化し、`candump` / Wireshark / Scapy
-という RAMN と同じ手触りが**観測側で**得られる。ただし**必須にはしない**。
-
-### 4.4 時間モデル（1 版から全面変更）
-
-実測（§3.4）より、壁時計追従は不可能。**Renode の仮想時間を唯一のマスタークロックとする。**
-
-- Channel / Physics / Ground の各プレーンは、壁時計ではなく **Renode の仮想時刻**を参照して進む。
-  タイムアウト・パス窓・周期 HK はすべて仮想時間で定義する。
-- 実時間の 0.2 倍しか進まないことは、**仮想時間で設計されている限り問題にならない**。
-- 体感を良くするため **時間圧縮**を設ける: 1 パス = 実軌道の 600 秒ではなく、
-  既定で **60 仮想秒**にスケールする（`--pass-duration` で変更可）。
+**時間圧縮**: 1 パス = 実軌道の 600 秒ではなく既定 **60 仮想秒**（`--pass-duration` で変更）。
+圧縮するのはミッション時刻のみ。CAN タイミング・PUS タイムアウト・ウォッチドッグ周期は圧縮しない。
 
 | モード | 用途 | センサ入力 | 時間 |
 | --- | --- | --- | --- |
-| `interactive` | 対話的な攻撃検証・ハンズオン | Physics が仮想時刻に同期して駆動 | Renode 仮想時間（壁時計比 0.2〜0.3×） |
-| `replay` | **CI / 再現検証** | 収録済み `sensor-trace.jsonl` を決定的に注入 | `emulation RunFor` でステップ実行 |
+| `interactive` | 対話的な攻撃検証 | Physics が仮想時刻に同期 | 100 ms ティック |
+| `replay` | **CI** | RESD / ADC トレースファイル | 一括 `run_for` |
 
-CI は必ず `replay` で走る。これにより「テストが時々落ちる」を構造的に排除する。
+### 4.4 プレゼンテーションプレーン（GUI）
+
+**Renode のネイティブ GTK GUI は WSL2 で動かない。** 対照実験で確定した:
+tkinter のウィンドウは `xwininfo -root -tree` に現れるが、Renode を GUI モードで起動しても
+ウィンドウは 0 個で、エラーも出ない（WSLg・GTK3 は導入済み）。
+
+代わりに **`renode --server-mode --server-mode-port <p>`** を使う。実測で得られた面:
+
+| 種別 | 内容 |
+| --- | --- |
+| アクション | `status` / `command` / `exec-renode` / `exec-monitor` / `term-resize` / `spawn` / `kill` |
+| `exec-renode` サブ | `machines` / `uarts` / `buttons` / `leds` / `button-set` / `sensors` / `sensor-get` / `sensor-set` |
+| イベント（push） | `uart-opened` / **`led-state-changed`** / `button-state-changed` / `renode-quitted` |
+| Web ターミナル | `http://<host>:<port>/telnet/<id>`（Monitor と各 UART） |
+| ファイル | `fs/list` / `fs/mkdir` / `fs/stat` / `fs/dwnl` |
+
+封筒: 要求 `{"action","payload","version","id"}`、応答 `{"version","status","id","data","error"}`、
+イベント `{"version","event","data"}`。**`payload` は配列ではなく、C# ハンドラの引数名をキーにしたオブジェクト**
+（`callArgs[arg] = apiRequest.Payload[param.Name]`）。実測で 15/16 呼び出しが成功。
+
+**注意点**: ペリフェラルは**フルネーム**で指す（`sysbus.gpioPortC.UserButton1`）。
+`sensor-set` は `temperature` では動くが `magnetic-flux-density` では **Renode ごと落ちる**（D3）。
+UI は D3 の型を呼ばない。
+
+**GUI の構成**: 単一のブラウザアプリ。X 不要・root 不要・Windows のブラウザから `localhost` で到達。
+
+- 左: 衛星の現況（各ノードの起動/リセット/モード、仮想時刻、パス状態、リンク、CAN カウンタ、電池、姿勢、最後に受理した TC）
+- 中: 運用コンソール（TC 送信、HK、イベントログ）と**バスタイムライン**（仮想時刻・送受信・復号済みフィールド・生バイト・注入マーカ・拒否理由）
+- 右: Renode の Web ターミナル（Monitor と選択した UART）
+- 演習ペイン: シナリオ選択・手順・3 段階ヒント・成否判定
+
+### 4.5 攻撃者の生 CAN 注入（ATTACKER ノードは不要になった）
+
+2 版は「特権なしの生 CAN 注入は不可能だから 5 台目の Zephyr マシンが必須」としたが、**これは誤り**。
+特権不要の経路が 4 つ実証された（いずれも被害ノードの Rx FIFO 0 まで到達を確認）:
+
+| 経路 | 実証 | 速度 |
+| --- | --- | --- |
+| Monitor レジスタ直書き | `fdcan1` の TXBC/TXESC/message-RAM/TXBAR へ 8 回の `sysbus WriteDoubleWord` | 約 7 frames/s。コード 0 行の緊急用 |
+| `CAN.CANToUART` | `NullRegistrationPoint` に登録すればハブに接続できる（先の E21 は登録ミス） | 1 データバイト/フレーム、TX ID 固定 |
+| Monitor の `python` | **IronPython 2.7.12 + 完全な CLR リフレクション**。30 行で `ICAN`+`IPeripheral` | 任意 ID/長 |
+| **`include @file.cs`（Roslyn 同梱）** | **90 行の `TcpCanInjector : ICAN, IPeripheral`** を実行時コンパイル。`machine CreateTcpCanInjector "inj" <port>` | 200 発ロスなし、ホスト側 35k frames/s |
+
+**採用**: 4 番目。プラットフォームも ELF も CPU も持たない**空のマシン**（`mach create "attacker"`）に
+インジェクタを載せる。ハブが `GetName()`/`GetMachine()` を解決できるようにするためだけの器である。
+
+**制約**（実測）: 注入時にエミュレーションが**動作中**でなければならない（停止中は `HandleTimeDomainEvent`
+配送が無言で捨てられる）。D10・D11 も参照。
+
+`vcan0`（SocketCAN）経路は Linux + root がある環境でのみ `--with-vcan` で有効化し、
+`candump` / Wireshark / Scapy を**観測側で**使えるようにする。**必須にはしない。**
 
 ---
 
 ## 5. ノード構成
 
-| ノード | CSP addr | 役割 | 主なペリフェラル | 仕込む弱点 | 攻撃が通ったときの物理的帰結 |
-| --- | --- | --- | --- | --- | --- |
-| **COMM** | 5 | TT&C。TC/TM フレーム処理、SDLS、CAN⇄宇宙リンク中継 | `usart3`(宇宙リンク), `fdcan1`, `rng` | SDLS が既定で無効。有効時も IV 再利用・リプレイ窓なし | なし（入口） |
-| **OBC** | 1 | C&DH。PUS サービス、TC スケジュール、FDIR、HK 集約 | `fdcan1`, flash, `watchdog` | PUS Service 8 のパラメータ長を検証しないスタックオーバーフロー | 任意コード実行 → 全ノード掌握 |
-| **EPS** | 2 | 電力。電池・太陽電池・ロードスイッチ | `fdcan1`, `PAC1934`, `MAX77818`, GPIO | CAN 上のロードスイッチ指令に認証がない | **COMM の電源を落とす → 衛星が沈黙** |
-| **ADCS** | 4 | 姿勢。IMU・磁力計・太陽センサ・磁気トルカ | `fdcan1`, `LSM9DS1_IMU`, `LSM9DS1_Magnetic`, `OB1203`, GPIO | トルク指令に範囲検査がない | **スピンアップ → 発電不能 → 電池枯渇** |
-| **ATTACKER** | 任意 | 演習時のみ起動する 5 台目。侵害済み subsystem を演じる | `fdcan1`, `usart3`(ホスト制御) | — | 特権なしでバス注入を可能にする |
+| ノード | CSP addr | 役割 | 仕込む弱点 | 攻撃が通ったときの物理的帰結 |
+| --- | --- | --- | --- | --- |
+| **COMM** | 5 | TT&C。TC/TM フレーム、SDLS、CAN⇄宇宙リンク中継 | SDLS 既定無効。有効時も IV 再利用・リプレイ窓なし | なし（入口） |
+| **OBC** | 1 | C&DH。PUS、TC スケジュール、FDIR、HK 集約 | PUS Service 8 のパラメータ長を検証しない | 制御フロー乗っ取り（§7.3） |
+| **EPS** | 2 | 電力。電池・太陽電池・ロードスイッチ | CAN 上のロードスイッチ指令に認証がない | **COMM の電源断 → 衛星が沈黙** |
+| **ADCS** | 4 | 姿勢。IMU・磁力計・太陽センサ・磁気トルカ | トルク指令に範囲検査がない | スピンアップ → 発電不能 → 電池枯渇 |
+| **attacker** | — | 空のマシン + `TcpCanInjector`（§4.5） | — | — |
 
-物理的帰結の連鎖（EPS 攻撃 → 通信途絶、ADCS 攻撃 → 電力枯渇）は意図的である。
-RAMN で「車が変な挙動をする」ことが学習効果の核であるのと同じく、
-**攻撃が抽象的なフラグではなく衛星の死につながる**ことが本教材の核。
+### 5.1 UART 割り当て（新規・必須）
+
+`nucleo_h753zi.dts` は `zephyr,console = &usart3` かつ `zephyr,shell-uart = &usart3` を設定する。
+実測: リンクソケットに接続したクライアントは、アプリのバイトより前に
+**9239 バイトの Zephyr コンソール出力**を受け取った。
+
+| UART | 用途 | バックエンド |
+| --- | --- | --- |
+| `usart3` | **Zephyr コンソール専用**（デバッグ） | `CreateFileBackend` |
+| `usart2` | **宇宙リンク**（COMM。バイナリ） | `CreateServerSocketTerminal <port> "spacelink" false` |
+| `uart4` | 予備（将来のペイロード等） | — |
+
+**実証**: 同じ未改変 ELF で console→usart3 ファイル、link→usart2 ソケットにしたところ、
+リンクソケットは 3 仮想秒で**受信 0 バイト**、地上局が最初に見るバイトはアプリが送る
+CCSDS ASM `1a cf fc 1d` だった。
+
+**`CreateServerSocketTerminal` の第 3 引数は必須**: 実シグネチャは
+`(Int32 port, String name, Boolean telnetMode = True, Boolean flushOnConnect = False)` であり、
+**`telnetMode` は既定 true** で 11 バイトの telnet IAC（`ff fd 00 ff fb 01 ff fb 03 ff fc 22`）を前置する。
+省略するとバイナリリンクが壊れる。`flushOnConnect` の意味は直感と逆で、
+`false` だと遅れて接続したクライアントが**バックログを受け取る**。
+
+SoC dtsi では usart3 と lpuart1 以外すべて `status="disabled"` なので、
+`usart2` を使うにはアプリ側の devicetree overlay が要る。
+COMM は `CONFIG_UART_CONSOLE` / `CONFIG_LOG_BACKEND_UART` / `CONFIG_SHELL` / `CONFIG_BOOT_BANNER`
+がリンク UART に出力しないことを保証する。
+
+**CI ガード**: `renode-test` の Robot スイート（3 テスト、**否定対照を含めて全 PASS 実証済み**）が
+「最初の有効フレームまでリンクソケットに 0 バイト」を assert する。
+
+### 5.2 EPS → COMM の電源線
+
+`emulation CreateGPIOConnector "loadSwitchComm"` で EPS の `gpioPortB[0]` を
+COMM の `gpioPortC[7]`（PGOOD）に接続する。実測で LED と IDR bit7 の両方が
+マシン境界を越えて駆動されることを確認済み。COMM のファームはこの線を「power good」として尊重する。
+
+### 5.3 ノードの電源断機構（実測で確定）
+
+**`cpu IsHalted true` が唯一の正解。**
+
+```
+mach set "COMM"
+cpu IsHalted true                       # 電源断
+# → COMM の命令カウンタがビット完全に凍結、CAN も UART も沈黙
+# → OBC/EPS/ADCS と仮想時間は正常に進行
+
+mach set "COMM"                         # 復電（RunFor フロー）
+machine RequestReset                    # machine Reset は D8 でデッドロック
+emulation RunFor "0.001"
+mach set "COMM"
+sysbus LoadELF @fw/comm.elf             # 必須。省くと COMM は永久に死ぬ
+cpu IsHalted false
+```
+
+3 ノードでの実証: OBC の UART が「両ピア生存＝カウンタ二重表示」→「COMM 停止中の 3 秒＝単独表示」
+→「復電後＝相手が 0 から再スタートして交互表示」。COMM の UART は起動バナー → 3 秒の完全な沈黙 →
+**2 回目の起動バナー**。グローバル仮想時間は 9.101 秒まで進み続けた。
+
+**却下した機構**: `machine Pause`（D7）、`machine Reset`（D8）、`emulation RemoveMachine`（D9）、
+`connector Disconnect`（バスだけ切れて実行は続く。再接続が非対称）、別時間ドメイン（**API が存在しない**）。
+
+**注意**: halt 中も `fdcan1` はハブに繋がったままフレームを FIFO に受け続けるため、
+裸の unhalt では古いフレームで異常が出る。上記の `RequestReset` + `LoadELF` 手順がこれを解消する。
 
 ---
 
 ## 6. プロトコルスタック
 
-すべて**実標準のサブセットを自前実装**する。理由:
-(a) 脆弱性を意図的に仕込む必要がある、(b) NOSA / AGPL 依存を避ける、(c) 実装が読める大きさに収まる。
-
-### 6.1 宇宙リンク（COMM ⇄ 地上）
+### 6.1 宇宙リンク
 
 ```
-ASM 0x1ACFFC1D
+CubeRange lab framing:  ASM 0x1ACFFC1D + 固定長
 ┌─────────────────────────────────────────────────────┐
 │ TC / TM Transfer Frame（最小形）                      │
 │  ├ Frame Header (SCID, VCID, Frame Seq)              │
-│  ├ [SDLS Security Header]  ← Phase 2 で有効化可能      │
-│  ├ Space Packet                                      │
-│  │   └ PUS Packet                                    │
-│  ├ [SDLS Security Trailer (MAC)]                     │
-│  └ Frame Error Control (CRC-16-CCITT)                │
+│  ├ [SDLS Security Header]        ← Phase 2           │
+│  ├ Space Packet → PUS Packet                         │
+│  ├ [SDLS Security Trailer (MAC)] ← Phase 2           │
+│  └ Frame Error Control (FECF)                        │
 └─────────────────────────────────────────────────────┘
 ```
 
-参照する標準（Claude と Codex の二経路で `ccsds.org` の実 PDF に当てて確定）:
+**外側の区切りは「CubeRange lab framing」であり CCSDS の CLTU ではない**。
+CLTU は 231.0-B-4 の規定で開始列は `EB90`。我々は Phase 1 でこれを実装しない。
+これを CCSDS チャネル準拠と称してはならない。
 
 | # | 文書番号 | 名称 | 版 | Phase 1 |
 | --- | --- | --- | --- | --- |
-| 1 | **CCSDS 133.0-B-2** | Space Packet Protocol | 2020-06 | **実装** |
-| 2 | **CCSDS 132.0-B-3** | TM Space Data Link Protocol | 2021-10 | **実装（最小形）** |
-| 3 | **CCSDS 232.0-B-4** | TC Space Data Link Protocol | 2021-10 + Cor.1 (2023-10) | **実装（最小形）** |
-| 4 | **CCSDS 355.0-B-2** | Space Data Link Security Protocol | 2022-07 | Phase 2 |
-| 5 | **CCSDS 355.1-B-1** | SDLS — Extended Procedures | 2020-02 | Phase 2（範囲を絞る） |
-| 6 | **CCSDS 232.1-B-2** | Communications Operation Procedure-1 (COP-1) | 2010-09 + Cor.1 (2019-04) | 非実装 |
-| 7 | **CCSDS 231.0-B-4** | TC Synchronization and Channel Coding（**CLTU はここ**） | 2021-07 + TC.1 | 非実装 |
-| 8 | **CCSDS 732.0-B-5** | AOS Space Data Link Protocol | 2025-10（**732.0-B-4 は廃止**） | 非実装 |
+| 1 | **CCSDS 133.0-B-2** | Space Packet Protocol | 2020-06 | 実装 |
+| 2 | **CCSDS 132.0-B-3** | TM Space Data Link Protocol | 2021-10 | 実装（最小形） |
+| 3 | **CCSDS 232.0-B-4** | TC Space Data Link Protocol | 2021-10 + Cor.1 | 実装（最小形） |
+| 4 | **CCSDS 355.0-B-2** | Space Data Link Security | 2022-07 | Phase 2 |
+| 5 | **CCSDS 355.1-B-1** | SDLS Extended Procedures | 2020-02 | Phase 2（範囲限定） |
+| 6 | **CCSDS 232.1-B-2** | COP-1 | 2010-09 + Cor.1 | 非実装 |
+| 7 | **CCSDS 231.0-B-4** | TC Sync & Channel Coding（**CLTU**） | 2021-07 + TC.1 | 非実装 |
+| 8 | **CCSDS 732.0-B-5** | AOS | 2025-10（B-4 は廃止） | 非実装 |
 
-Phase 1 では COP-1、CLTU/BCH 符号化、AOS を実装しない。フレーム同期は ASM + 固定長で行う。
-CLTU は Space Packet Protocol ではなく TC Sync & Channel Coding (231.0-B-4) の規定であり、
-COP-1 の状態機械は TC SDLP (232.0-B-4) とは別書（232.1-B-2）である — 実装時にこの分界を守る。
+### 6.2 FECF の CRC（一次資料で確定）
 
-### 6.2 PUS サービス（Phase 1 の範囲）
+**「CRC-16-CCITT」というラベルは使わない。** その名で呼ばれる CRC-16 は 10 種類以上あり、
+実装が両側で同じ間違いを選ぶと**ラウンドトリップは完全に成功したまま線上で誤る**。
 
-参照標準は **ECSS-E-ST-70-41C**（Telemetry and telecommand packet utilization, 2016-04-15）。
-PUS は CCSDS Space Packet に載るアプリケーション層の約束事であり、
-RF 変調・TM/TC フレーム符号化・COP-1・SDLS は規定しない（分界を守る）。
+CCSDS 132.0-B-3 §4.1.6.2.2 を実 PDF から引用して確定した:
+`G(X) = X^16 + X^12 + X^5 + 1`、`L(X) = Σ(i=0..15) X^i`、
+注記「`X^(n-16)·L(X)` の項はシフトレジスタを全 1 に初期化する効果を持つ」。
 
-| Service | 規格上の名称 | セキュリティ上の意味 |
+| パラメータ | 値 |
+| --- | --- |
+| 幅 / 多項式 | 16 / `0x1021` |
+| 初期値 | `0xFFFF` |
+| 入出力反転 | なし |
+| XorOut | `0x0000` |
+| 通称 | **CRC-16/IBM-3740**（CCITT-FALSE） |
+| 被覆 | 一次ヘッダ先頭〜FECF 直前。**ASM は含まない** |
+| 検算性 | FECF 込みで計算すると `0x0000` |
+
+6 つの独立実装（crcmod / crc / fastcrc / 手書きビットループ / NASA CryptoLib の
+`Crypto_Calc_FECF` を `.so` としてビルドし ctypes 経由 / FSFW の `CRC::crc16ccitt`）が一致。
+Yamcs の公表期待値 `0x75FB` も再現。
+
+**CSP の CRC は別物**: CRC-32C/Castagnoli（poly `0x1EDC6F41`、init `0xFFFFFFFF`、反転あり、
+xorout `0xFFFFFFFF`）を**ビッグエンディアンで**付加。libcsp の `csp_crc32_memory()` を実行して確認。
+
+### 6.3 PUS
+
+**ECSS-E-ST-70-41C**（2016-04-15）。PUS は Space Packet に載るアプリ層の約束事であり、
+RF 変調・フレーム符号化・COP-1・SDLS は規定しない。
+
+| Service | 名称 | セキュリティ上の意味 |
 | --- | --- | --- |
 | 1 | Request verification | 攻撃の成否が攻撃者にも観測できる |
 | 3 | Housekeeping | 偽装 TM の対象 |
 | 5 | Event reporting | 検知演習の情報源 |
-| 8 | Function management | **★ スタックオーバーフローを仕込む場所** |
+| 8 | Function management | **★ 境界検査欠如を仕込む場所** |
 | 9 | Time management | 時刻ずらし → スケジュール攻撃の前段 |
-| 11 | Time-based scheduling | **★ 遅発性の破壊コマンドを仕込める** |
+| 11 | Time-based scheduling | **★ 遅発性の破壊コマンド** |
 | 17 | Test | Phase 0 の疎通対象 |
 
-Service 6（Memory management）は Phase 2 で追加し鍵抽出演習に使う。
-Service 20（Parameter management）は Phase 2 の候補。
+副ヘッダ（2 つの Apache-2.0 実装が bit 単位で一致）:
+**TC = 5 バイト** `[0] pus_version<<4|ack_flags, [1] service, [2] subtype, [3:5] source ID u16 BE`。
+**TM = 7 バイト + 時刻** `[0] version<<4|sc_time_ref, [1] service, [2] subtype,
+[3:5] msg type counter u16 BE, [5:7] dest ID u16 BE`。
 
-### 6.3 内部バス（CSP over CAN）
+**正直な留保**: ECSS-E-ST-70-41C 本文は登録が必要で入手できなかった。
+PUS の根拠は一次資料ではなく、**独立した 2 実装の一致**である。
 
-CubeSat Space Protocol の**バージョン 1**（32 bit ヘッダ）のサブセットを自前実装する。
-`libcsp`(MIT) と**ワイヤ互換**とし、ホスト側テストでは `libcsp` を参照実装として突き合わせる。
-CSP v2 は 48 bit ヘッダで非互換だが、既存 CubeSat の現場・既存ツールは依然 v1 が主流であるため
-Phase 1 は v1 を採る（Phase 2 で v2 対応を検討）。
+### 6.4 内部バス — libcsp を採用
 
-CAN 上に流れるため、`vcan0` が使える環境では `candump` / Wireshark / Scapy から素で観測・注入できる。
+**自前実装しない。** libcsp 2.1（MIT）を Zephyr モジュールとして組み込む。
 
-### 6.4 SDLS（Phase 2）
+CSP v1 ヘッダ（`csp_id.c:29-41` を読み、libcsp を実行して 9 ベクタで確認）:
+`pri` bits31-30、**`SRC` bits29-25**、`DST` bits24-20、`dport` bits19-14、`sport` bits13-8、`flags` bits7-0。
+（ソースの ASCII 図は SOURCE を先に書いており、コードもそれに一致する。）
 
-CCSDS 355.0-B-2 相当のサブセット: SPI、IV、AES-256-GCM による認証暗号、アンチリプレイ窓。
+CFP v1 の 29 bit CAN 識別子（`csp_if_can.h:77-119`、7 ケース・CAN 24 フレームで確認）:
+`SRC` bits28-24、`DST` bits23-19、`TYPE` bit18、`REMAIN` bits17-10、`ID` bits9-0。
+BEGIN フレームのペイロード = CSP ヘッダ 4B + 長さ u16 BE 2B + データ最大 2B。
+MORE フレーム = 生データ最大 8B。BEGIN の `remain = (length+6-1)/8`。
+libcsp v1.6 と master で CFP マクロが同一であることも確認済み。
 
-**ハードウェア crypto は利用可能**。`platforms/boards/nucleo_h753zi.repl` は
-`platforms/cpus/stm32h753.repl`（= `stm32h743.repl` + `crypto: Miscellaneous.Crypto.STM32H7_CRYPTO
-@ 0x48021000`）を取り込んでおり、`peripherals` の実行出力に `crypto (STM32H7_CRYPTO)` と
-`rng (STM32F4_RNG)` が現れることを確認済み。
+CSP v2 は 48 bit ヘッダで非互換。Phase 1 は v1 を採る。
 
-これを利用して SDLS を**二通り**用意する。これ自体が演習になる:
+### 6.5 SDLS（Phase 2）
 
-| 版 | 実装 | 演習上の意味 |
-| --- | --- | --- |
-| `sdls-sw` | Zephyr PSA Crypto（ソフトウェア AES） | 鍵がフラッシュ上に平文で存在 → PUS Service 6 による鍵抽出（EX-F02）が成立 |
-| `sdls-hw` | `crypto` ペリフェラル経由 | 鍵の扱いが変わり、素朴なメモリダンプでは取れなくなる → 対策編 |
+CCSDS 355.0-B-2 のサブセット: SPI、IV、AES-256-GCM、アンチリプレイ窓。
 
-NASA CryptoLib は**テストベクタの突き合わせのみ**に使い、コードは取り込まない（NOSA 回避）。
+**2 版の誤りを撤回する。** 「ハードウェア crypto に置けば鍵が守られる」は**偽**である。
+STM32H7 の CRYP は**アクセラレータであって金庫ではない**（鍵はファーム管理のメモリから来る）。
+さらに Renode の `STM32H7_CRYPTO` は鍵レジスタ `CRYP_K0LR/K0RR`（0x48021020/24）を
+**素の読み書き可能レジスタとして模擬**する（`0xDEADBEEF`/`0xCAFEBABE` を書いて両方そのまま読み戻せた）。
+シミュレータ上でも保護として成立しない。
+
+正直な対策は (M1) Service 6 のアドレス allowlist と (M2) 鍵の寿命最小化と明示的ゼロ化であり、
+**すでにコード実行を得た攻撃者は止められない**ことを README に明記する。
 
 ---
 
 ## 7. 演習カタログ
 
-各演習 (`exercises/EX-xxx/`) は 5 点セットで構成する。**この形式が本プロジェクトの製品価値である。**
+各演習は 5 点セット: `README.md`（シナリオ・SPARTA/SPACE-SHIELD TTP・3 段階ヒント）、
+`scenario.resc`、`solve.py`、`mitigation.md`、`verify.robot`（**攻撃成功と対策時失敗の両方**）。
 
-```
-exercises/EX-B01-eps-killswitch/
-├── README.md          … シナリオ、学習目標、SPARTA TTP、所要時間、ヒント3段階
-├── scenario.resc      … 演習用 Renode 起動スクリプト（脆弱版ファーム、ログ抑制込み）
-├── solve.py           … 模範解答となる攻撃スクリプト
-├── mitigation.md      … 対策の設計と、対策版ファームの config フラグ
-└── verify.robot       … ★ 攻撃成功を assert / 対策適用後は失敗を assert
-```
+### 7.1 脅威モデルの根拠
 
-### 7.1 Phase 1 の演習（4 層に 1 つずつ）
+Willbold, Schloegel, Vögele, Gerhardt, Holz, Abbasi,
+"Space Odyssey: An Experimental Software Security Analysis of Satellites",
+IEEE S&P 2023（Distinguished Paper）。ESTCube-1 / ESA OPS-SAT / Flying Laptop の実ファームを解析し、
+**TC 認証の欠如または回避可能性**、**暗号はあっても認可がない**、**危険な保守プリミティブ（直接メモリ操作）**、
+**パケット申告長への信頼と安全でないパース**、**スタックカナリア等の欠如**を報告している。
+本カタログの弱点はこの実測知見に対応させる。
+
+### 7.2 Phase 1 の演習
 
 | ID | 層 | 内容 | 成功条件 |
 | --- | --- | --- | --- |
-| **EX-L01** | 宇宙リンク | 可視パス中の TC をキャプチャし、次のパスでリプレイ | 認証なしでコマンドが再実行される |
-| **EX-B01** | 内部バス | ATTACKER ノード（または `vcan0`）から偽 CSP フレームを注入し、EPS に COMM の電源を切らせる | 衛星が沈黙し TM が途絶える |
-| **EX-F01** | ファーム | PUS Service 8 のパラメータ長検証欠如を突き、OBC で任意コード実行 | OBC RAM の所定アドレスにマーカーが書かれる |
-| **EX-G01** | 地上系 | 地上局の TC スケジュール DB を汚染し、次パスで破壊的コマンドを送らせる | 運用者が意図しない TC が送信される |
+| **EX-L01** | 宇宙リンク | 可視パス中の TC をキャプチャし次パスでリプレイ | 認証なしでコマンドが再実行される |
+| **EX-B01** | 内部バス | `TcpCanInjector` から偽 CSP フレームを注入し EPS に COMM の電源を切らせる | COMM が沈黙し TM が途絶える（§5.3） |
+| **EX-F01** | ファーム | PUS Service 8 の境界検査欠如で**制御フロー乗っ取り** | §7.3 |
+| **EX-G01** | 地上系 | 悪意ある**スケジュールインポート**で TC スケジュール DB を汚染 | 運用者が意図しない TC が送信される |
 
-### 7.2 Phase 2 の演習
+**EX-G01 の是正**: 2 版は「DB に書ける者が DB を書ける」という同語反復だった。
+侵入機構を明示する（スキーマ検証・署名検証のないインポート経路、初期権限は低権限プラグイン）。
+対策はスキーマ/署名検証・認可・最小権限・監査証跡。
 
-- **EX-L02** TM 偽装 → 運用者コンソールに嘘の HK を表示
-- **EX-B02** CAN バス飽和 → FDIR 誤作動
-- **EX-A01** ADCS トルク範囲検査欠如 → スピンアップ → 電力枯渇
-- **EX-F02** PUS Service 6 のメモリ読み出しで SDLS 鍵をフラッシュから抽出
-- **EX-S01〜** 防御ラボ: SDLS 有効化 / MCUboot セキュアブート / バス IDS / TC 認証
+### 7.3 EX-F01 の誠実性（全面改訂）
 
-### 7.3 SPARTA / SPACE-SHIELD へのマッピング
+**シェルコード注入は不可能であり、そう教えてはならない。** 実 ELF から実測した Zephyr の既定値:
+
+- ON: `ARM_MPU=y`, `HW_STACK_PROTECTION=y`, `MPU_STACK_GUARD=y`, `XIP=y`, `SRAM_REGION_PERMISSIONS=y`
+- OFF: `USERSPACE`, `STACK_CANARIES`, `STACK_SENTINEL`, `STACK_POINTER_RANDOM=0`
+
+**(a) 戻り番地は保護されない。** MPU スタックガードはスタックの**下**に置かれる境界領域
+（`guard_start = stack_info.start - guard_size`、`K_MEM_PARTITION_P_RO_U_NA`）。
+フレーム内 memcpy は**上**へ伸びて保存済み `{r4,r5,lr}` を壊し、ガードに触れない。
+Zephyr 自身の文書も「ガードは検出できるがデータ破壊を防げない」と述べている。
+
+**(b) SRAM は execute-never。** 実 ELF の `mpu_regions[]` を復号すると
+SRAM @0x24000000/512K `RASR=0x110B0024` → **XN=1**、FLASH `RASR=0x07020028` → XN=0/RO。
+**Renode はこれを強制する**: `TranslateAddress 0x24003000 InstructionFetch` は失敗し
+Read/Write は成功、SRAM に PC を置くと命令が 0 個しか実行されない。フラッシュ上の同じ NOP 列は動く。
+MPU ON でシェルコードを実行すると PC は MemManage ハンドラ、`CFSR=0x00000001`（IACCVIOL）。
+
+→ **Renode は実機と一致する。したがってここで通る exploit は実機でも通る。**
+
+**採用する形**: **ret2win（コード再利用）**。保存 LR / 関数ポインタを壊し、
+既にリンクされている関数（セーフモード解除、FDIR インヒビット解除など）へ飛ばす。
+フラッシュは RX かつ非ランダム（XIP、ASLR なし）、カナリアなし、CFI なし、権限分離なし —
+すべて**実測された既定値**である。
+
+- **EX-F01b** ROP チェーン（同じく誠実。ガジェット探索は Phase 2）
+- **EX-F01c** データのみ攻撃（隣接する認可フラグ／コマンド allowlist の破壊。カナリア耐性）
+- **EX-S03** 青チーム版: オーバーフローが MPU に捕まる構成で、MemManage フォールト
+  （`CFSR=0x00000001` / `0x82`、`MMFAR`）を追跡し、不正な PUS TC と相関させ、
+  障害報告テレメトリを生成する
+
+**Kconfig 差分はゼロ。** 脆弱版と対策版は同じ `prj.conf`（既定値を明示的に再宣言して差分を可読にする）
+を共有し、違いは自作シンボル `CONFIG_CUBERANGE_PUS8_LENGTH_CHECK` が守る
+`if (arg_len > sizeof(args)) reject();` の 1 行だけ。
+**CI ゲートが両 ELF の `CONFIG_*` ABS シンボルを diff し、差分が正確に 1 行であることを機械的に証明する。**
+これにより「防御を切って作った脆弱性」という藁人形を構造的に排除する。
+
+### 7.4 EX-F02（鍵抽出）
+
+`static const` 鍵は XIP=y のもとで `.rodata`（フラッシュ、実測 `0x0800ba60`）に置かれ、
+MPU 上は P_RO_U_RO/XN=0 — 任意のコードからも、境界のない PUS(6) ダンプからも読める。
+ソフトウェア AES はさらに同じ SRAM 上に鍵スケジュールを展開する。
+対策は §6.5 の M1/M2 と、その限界の明記。
+
+### 7.5 作れない演習（実測により）
+
+- **CAN エラーフレーム / bus-off の診断**: Renode の CANHub はバス ACK を模擬しない（D18）
+- **野良ポインタによる BusFault の検知**: 未マップ領域でフォールトが起きない（D16）
+- **「MPU 領域未定義だから特権アクセスが拒否される」**: PRIVDEFENA が無視される（D17）
+
+### 7.6 TTP マッピング
 
 SPARTA（Aerospace Corporation）と ESA SPACE-SHIELD はいずれも STIX/JSON を配布している。
-`tools/sparta_map.py` が両者をダウンロードし、各演習 `README.md` のフロントマターに書かれた
-TTP ID の**実在を検証**する（存在しない ID は CI で落とす）。
-**本書では TTP ID を推測で書かない。** 割当は実装時に公式データから機械的に行う。
+`tools/ttp_map.py` が両者を取得し、各演習のフロントマターに書かれた TTP ID の**実在を検証**する
+（存在しない ID は CI で落とす）。**ID は推測で書かない。** 両者は独立に採番されており、
+フレームワーク名とバージョンと native ID を保存し、相互参照は明示的な crosswalk として持つ。
 
 ---
 
@@ -451,35 +570,72 @@ TTP ID の**実在を検証**する（存在しない ID は CI で落とす）�
 
 | 層 | 異常 | 挙動 |
 | --- | --- | --- |
-| Channel | ビット誤り / 断 | フレーム破棄。**生バイトは必ず保存**（鑑識性を最優先） |
-| 宇宙リンク | CRC 不一致 / 長さ不正 | 破棄 + カウンタ + PUS 5 イベント |
+| Channel | ビット誤り / 断 | 破棄。**生バイトは必ず保存**（鑑識性が最優先） |
+| 宇宙リンク | FECF 不一致 / 長さ不正 | 破棄 + カウンタ + PUS 5 |
 | 宇宙リンク | SDLS 認証失敗（Phase 2） | 破棄 + イベント + 連続失敗でパス遮断 |
 | PUS | 未知の service/subtype | PUS 1 の否定応答 |
-| 内部バス | CSP CRC32 不一致 | 破棄 + カウンタ |
-| ノード | ハング | `watchdog`(STM32_IndependentWatchdog) によるリセット |
-| EPS | 電圧低下 | セーフモード遷移（非必須負荷を落とす） |
-| 地上局 | デコード不能 | 例外を握り潰さず、生フレームを DB に保存して継続 |
+| 内部バス | CSP CRC-32C 不一致 | 破棄 + カウンタ |
+| ノード | ハング | `watchdog` によるリセット |
+| EPS | 電圧低下 | セーフモード（非必須負荷を落とす） |
+| 地上局 | デコード不能 | 例外を握り潰さず生フレームを保存して継続 |
+| ホストループ | キュー溢れ / 欄数不一致 / 時刻の後退 | **致命扱い**。警告にしない |
 
 ---
 
 ## 9. 検証戦略
 
+### 9.1 層
+
 | 層 | 手段 | 対象 |
 | --- | --- | --- |
-| **前提** | **`tools/renode-probe/probe.sh`** | **本書の Renode 能力主張すべて。CI の最初のジョブ** |
-| ユニット | `pytest` + `hypothesis` | CCSDS/PUS/CSP/SDLS コーデックのラウンドトリップ、境界値 |
-| 相互運用 | `pytest` | 自前 CSP 実装 ⇄ `libcsp`(MIT) のワイヤ互換 |
-| ノード単体 | `renode-test` (Robot) | 各ノードが起動し HK を出す |
-| 結合 | `renode-test` (Robot) | 地上局 TC → COMM → CAN → OBC → TM 応答の往復 |
-| **演習** | `renode-test` (Robot) | **攻撃成功の assert + 対策適用時の失敗 assert（両方向）** |
-| 性能 | `probe.sh` の MEAS 出力 | 4 ノード速度。0.15× を下回ったら CI 警告 |
-| 供給網 | `pip-audit` / SBOM | 商用利用可否の継続確認 |
+| **前提** | `tools/renode-probe/probe.sh` | 本書の Renode 主張すべて + 欠陥登録簿の否定アサーション |
+| ユニット | `pytest` + `hypothesis` | コーデックのラウンドトリップ、境界値 |
+| **適合** | ゴールデンベクタ（§9.3） | **独立オラクル**との bit 一致 |
+| ノード単体 | `renode-test` | 起動と HK |
+| 結合 | `renode-test` | 地上局 TC → COMM → CAN → OBC → TM の往復 |
+| **演習** | `renode-test` | **攻撃成功 + 対策時失敗 + 対策時に正規動作が成功** |
+| 性能 | `probe.sh` の MEAS | 4 ノード速度。**静穏ホストでのみ assert** |
+| 供給網 | SBOM / ライセンススキャナ | 商用可否の継続確認 |
 
-**テストハーネス自身の健全性**: `probe.sh` は初版で「出力ディレクトリが無いと全項目が PASS になる」
-という欠陥があった（ログ欠損時に `grep` が不一致を返すため）。修正済みで、
-**ログが存在しない probe は必ず FAIL** とする。テストが黙って成功することを許さない。
+### 9.2 決定性の規則（実測。すべて必須）
 
-CI: GitHub Actions。Renode 1.16.1 portable をバージョン固定で取得。特権も GUI も不要。
+| # | 規則 | 実測根拠 |
+| --- | --- | --- |
+| **G1** | 複数マシンのシナリオは**必ず** `emulation SetGlobalSerialExecution true` を出力する | 無しでは 14/14 回すべて内部状態が乖離（`ExecutedInstructions` に約 0.75% のばらつき）。ペリフェラルトレースも観測可能に乖離。有りでは 14/14 一致 |
+| **G2** | `emulation SetSeed <固定値>` を必ず出す | 既定シードはプロセスごとにランダム（3 プロセスで 3 値）。G1 とは独立の要件で、互いに代替しない |
+| **G3** | 量子（quantum）は**正しさのパラメータ**。シナリオに固定し、**ゴールデンの同一性にハッシュとして含める** | 4 つの量子 → 4 つの異なる（それぞれ再現する）状態。性能目的で量子を変えると全ゴールデンが無効化する |
+| **G4** | ホストのティック刻みは自由 | `RunFor "5"` ≡ 5×`RunFor "1"` がビット完全一致（量子が割り切れない場合も） |
+| **G5** | CI がハッシュしてよいのは**ゲスト生成のバックエンド捕捉のみ** | Renode の `logFile` は全行にホスト時刻が付く。スナップショット `.dat` は同一状態でも約 8000 バイト異なる（TimeSource の簿記） |
+| **G6** | `Save`/`Load` を採用する。ただし **Load は UART バックエンドを復元しない** | Save→別プロセスで Load→続行が、通しの実行とビット一致。捕捉は再アタッチして前後を連結する必要がある。両コマンドは Monitor の `help` に出ないため自前で文書化しバージョンを固定する |
+| **G7** | 「トレースが無い/短い」は**再試行可能なインフラ障害**として、「トレース不一致」（本物のテスト失敗）と区別する | 約 79 回に 1 回、出力も エラーも無く終了する事象を観測（再現せず） |
+
+「バイト単位で再現する」と言えるのは、G1〜G3 のもとで**同一 Renode ビルド・同一プラットフォーム**の
+**UART/バックエンド捕捉**についてのみ。スナップショットとログには言えない。
+異なる Renode バージョン・異なるホスト CPU・ホスト側 I/O 併用については**未実証**。
+
+### 9.3 適合オラクル（自己検証の禁止）
+
+自作コーデック同士のラウンドトリップは**証明にならない**。両側が同じ誤りを選べば完全に一致する。
+
+| 層 | 独立オラクル | ライセンス | 入手性 |
+| --- | --- | --- | --- |
+| Space Packet | spacepackets / ccsdspy / gr-satellites / FSFW（4 実装が一致） | Apache-2.0 / BSD-3 / GPL-3 / Apache-2.0 | pip 可 |
+| TM/TC フレーム | **Yamcs のテストベクタ**（1115 バイトの実 TM フレーム） | AGPL（外部プロセス／データとしてのみ） | GitHub |
+| FECF CRC | 6 実装 + **CCSDS 132.0-B-3 の一次資料** | — | 確定（§6.2） |
+| PUS-C | spacepackets + FSFW（bit 一致） | Apache-2.0 | pip / egit |
+| CSP v1 / CFP | **libcsp 本体をビルドして実行** | MIT | 実証済み |
+| **SDLS** | **正直な空白** | — | ベンダリング可能な bit-exact ゴールデンは**存在しない**。CryptoLib を**外部ランタイムオラクル**として使い（ソースは複製しない）、Yamcs の `SecurityAssociationAes256Gcm128` を第 2 オラクルにする |
+
+**捕まえた実例**: TM フレームの First Header Pointer を独自復号すると 0、Yamcs の期待値は 6。
+これは不一致ではなく、Yamcs の `getFirstHeaderPointer()` が `fhp += dataOffset` して
+**絶対オフセット**を返すため。まさに本節が防ごうとしている「規約の食い違い」であり、
+外部オラクルを使ったからこそ表面化した。
+
+### 9.4 CI
+
+GitHub Actions。**ネットワーク有りの成果物準備ジョブ**と**egress 禁止のテストジョブ**を分離する
+（現状の `probe.sh` は ELF を HTTPS で取得するため、egress 禁止の主張と矛盾していた）。
+Renode の URL 規約は `-s_<size>-<sha1>` を含むため URL 自体が完全性ピンになる。
 
 ---
 
@@ -487,88 +643,103 @@ CI: GitHub Actions。Renode 1.16.1 portable をバージョン固定で取得。
 
 ```
 space-cs-sim/
-├── platforms/cubesat/            # .repl : ノード別プラットフォーム記述
-│   ├── node-common.repl          #   nucleo_h753zi + 共通ペリフェラル
-│   ├── OBC.repl  COMM.repl  EPS.repl  ADCS.repl  ATTACKER.repl
-├── scripts/                      # .resc（すべて logLevel 抑制込み）
-│   ├── single-node/cubesat.resc
-│   ├── multi-node/cubesat.resc
-├── firmware/                     # Zephyr アプリ (west workspace)
-│   ├── common/
-│   │   ├── ccsds/  pus/  csp/  sdls/   # 脆弱版/対策版を Kconfig で切替
-│   │   └── fdir/
-│   └── apps/{obc,comm,eps,adcs,attacker}/
-├── src/cuberange/                # Python パッケージ (Apache-2.0)
-│   ├── proto/                    #   ccsds, pus, csp, sdls コーデック
-│   ├── channel/                  #   遅延・誤り・パス窓・tap/inject
-│   ├── physics/                  #   orbit(SGP4), attitude, power, thermal
-│   ├── gs/                       #   地上局コア + TUI コンソール
-│   ├── attack/                   #   攻撃者ツールキット
-│   └── bridge/                   #   Renode Monitor クライアント, 仮想時刻同期
-├── exercises/EX-*/               # 演習 5 点セット
-├── tests/{robot,pytest}/
-├── tools/
-│   ├── renode-probe/probe.sh     # ★ 前提の検証ゲート
-│   └── sparta_map.py
-├── docker/                       # Renode 1.16.1 固定イメージ
-├── docs/
-└── Makefile                      # make probe / make demo / make test / make exercise EX=...
+├── platforms/cubesat/       # .repl : ノード別（UART 割当・GPIO 極性のコメント必須）
+├── scripts/                 # .resc : SetGlobalSerialExecution / SetSeed / logLevel を必ず出力
+├── attacker/TcpCanInjector.cs   # 実行時コンパイルされる ICAN + TCP インジェクタ (~90 行)
+├── firmware/                # Zephyr west workspace（libcsp をモジュールとして取り込む）
+│   ├── common/{ccsds,pus,sdls,fdir}/
+│   └── apps/{obc,comm,eps,adcs}/
+├── src/cuberange/           # Python (Apache-2.0)
+│   ├── proto/               #   spacepackets を土台に、frame/SDLS を自作
+│   ├── renode/              #   external control クライアント / Monitor バッチクライアント
+│   ├── channel/ physics/ gs/ attack/
+│   └── web/                 #   GUI backend (WebSocket) + 静的フロントエンド
+├── exercises/EX-*/          # 5 点セット
+├── tests/{robot,pytest,golden}/
+├── tools/{renode-probe,csv2resd-wrappers,ttp_map.py}/
+├── docker/
+└── docs/{architecture,protocols,threat-model,hardware-path}.md
 ```
-
-**言語方針**: 公開ドキュメントは英語を正とし、`docs/ja/` に日本語版を置く。
-本設計書のみ日本語（意思決定の記録として）。
 
 ---
 
 ## 11. ライセンス方針
 
-| 対象 | 方針 |
+自作コードは **Apache-2.0**。
+依存 OK: Renode(MIT)、Zephyr(Apache-2.0)、**libcsp(MIT)**、spacepackets(Apache-2.0)、sgp4(MIT)。
+**取り込まない**: NASA CryptoLib / NOS3（NOSA 1.3）、Yamcs（AGPL-3.0）、OpenC3（source-available）、
+gr-satellites（GPL-3.0）。これらは**外部プロセスまたはテストデータとしてのみ**使う。
+CI で SBOM を生成しライセンス逸脱を検出する。
+
+---
+
+## 12. 倫理・公開に伴う責務
+
+シミュレータは完全に合成環境であり、実在の衛星・地上局・周波数・鍵を含まない。
+演習は自己完結し、外部ネットワークへ送信しない。各演習には必ず対策編を対にする。
+
+公開前に必要な文書（現状すべて欠落）:
+
+| 文書 | 内容 |
 | --- | --- |
-| 本プロジェクトのコード | **Apache-2.0** |
-| Renode (**MIT**, LICENSE 実物で確認) | 依存 OK |
-| Zephyr (Apache-2.0) | 依存 OK |
-| libcsp (**MIT**, 確認済み) | テスト時のみ依存 OK |
-| **NASA CryptoLib / NOS3 (NOSA 1.3**, LICENSE 実物で確認**)** | **コードを取り込まない。** 仕様・テストベクタの参照のみ |
-| **Yamcs (AGPL-3.0**, 確認済み**) / OpenC3 COSMOS** | **コアに組み込まない。** 別パッケージの任意アダプタとしてのみ |
-| gr-satellites (GPL-3.0) | Phase 3 で任意依存として検討 |
-
-CI で SBOM を生成し、ライセンス逸脱を検出する。
-
----
-
-## 12. 倫理・安全性
-
-- シミュレータは完全に合成環境であり、実在の衛星・地上局・周波数・鍵を一切含まない。
-- 演習は自己完結型で、外部ネットワークへの送信を行わない（CI でも egress を禁止）。
-- 攻撃ツールは本シミュレータのプロトコル実装に対してのみ動作する。
-- 各演習には必ず対策編を対にする。攻撃のみを教えない。
+| `SECURITY.md` | 対象バージョン、非公開連絡先、トリアージ目標、**意図的な演習用欠陥と本物の脆弱性の区別** |
+| `SAFE_USE.md` | 合成標的のみ。実在の識別子・周波数・鍵・エンドポイントを置かない |
+| `CONTRIBUTING.md` | 新しい exploit には合成標的・対策・成否テスト・出自・egress ゼロ試験・2 名レビューを要求。不透明なバイナリと実行時ダウンロードを拒否 |
+| `ASSURANCE.md` | **本製品が支持しない主張**の明示（飛行認定・実時間検証・RF 適合・暗号認証・MCU 完全再現） |
+| `docs/legal/export-control.md` | 責任者と再レビュー契機。**ITAR/EAR の分類は UNVERIFIED**。宇宙をテーマにするだけで ITAR 対象にはならない（22 CFR 120.33/120.34 の公知例外）が、SDLS/AES は別途暗号分類の検討が要る。**専門家の判断が記録されるまで「EAR99」「ITAR 非該当」と書かない** |
+| `intentional-vulnerabilities.yml` | ID・ファイル/関数・対象プロファイル・exploit・対策・責任者。CI が対策版に危険シンボルが無いことを検証 |
+| `firmware-matrix.yml` | 役割 × {脆弱版, 対策版} の成果物を内容アドレスで固定（ソース commit、west manifest、SDK digest、`.config` digest、ELF SHA-256） |
+| `GOVERNANCE.md` / `CODEOWNERS` | exploit・暗号・ワークフロー・リリースの変更には 2 名承認 |
 
 ---
 
-## 13. フェーズ計画
+## 13. フェーズ計画（実測見積りに基づき改訂）
 
-| Phase | 目標 | 完了条件 |
-| --- | --- | --- |
-| **P0 歩く骨格** | 2 ノード (COMM+OBC) で地上局→リンク→CAN→OBC→TM の往復が通る | `make probe` と `make demo` が通り、往復を assert する Robot テストが CI で緑 |
-| **P1 最小有用** | 4 ノード、PUS 1/3/5/8/9/11/17、CSP over CAN、Physics、演習 4 本 | 4 演習すべてが「攻撃成功」を CI で assert |
-| **P2 防御ラボ** | SDLS、MCUboot セキュアブート、FDIR 強化、検知演習、SPARTA マッピング、Yamcs/OpenC3 アダプタ | 各攻撃に対応する「対策適用で失敗する」テストが CI で緑 |
-| **P3 拡張** | GNU Radio ベースバンド、実 SDR、実基板ブリングアップ、L552/ラドハード MCU ノード | 別途スコープ |
+2 版の P0+P1 は **270〜470 人日**と見積もられた。以下は削り込んだ現実的な計画である。
 
-**本書は P0 と P1 を対象とする。**
+| Phase | 内容 | 完了条件 | 見積 |
+| --- | --- | --- | --- |
+| **R0 リスク退治** | バージョン固定（Renode / Zephyr / libcsp 2.1 / spacepackets）。libcsp v1+CFP を 2 ノード間で疎通。固定ステップのスーパーバイザ実装。UART バースト処理と 5 ノード性能の実測 | 反復可能になるまで先へ進まない | 5〜8 日 |
+| **P0 最初のデモ** | Python が実 PUS-17 を最小 TC フレームで送り、COMM が受けて libcsp v1/CFP で転送、OBC が応答、TM が同じ経路で戻る。特権も GUI も不要。30 回連続で欠落もハングも無し | `make probe` と `make demo` が CI で緑 | +18〜26 日 |
+| **P1 セキュリティ縦切り 1 本** | EPS と attacker を追加し **EX-B01 のみ**。脆弱版で TM が意図した理由で止まることを証明。対策版で拒否され、**かつ正規の認証済み EPS コマンドは通る**ことを証明。電力はスカラーモデル | 双方向 CI で緑 | +28〜42 日 |
+| **P2 2 本目 + GUI** | EX-L01（固定パス窓でのリプレイと対策）。ブラウザ GUI（§4.4） | 同上 | +18〜28 日 |
+| **P3 リリース硬化** | 失敗時の成果物、決定的シード、ウォッチドッグ、キャッシュ、文書、SBOM、性能予算 | §12 の文書一式 | +15〜25 日 |
+
+**合計 84〜129 人日（単独開発で 6〜9 か月）。**
+
+**v1 から外すもの**: ADCS ノードと本格 physics、全画面 TUI、PUS 8/9/11（演習が要求するまで）、
+EX-F01/EX-G01（P3 以降）、自前 CSP、自前 Space Packet コーデック、5 ノード常時稼働。
+
+**双方向 CI の約束は P1 から守る。** 2 版は対策編を P2 に先送りしており、
+これは §1.2 の成功条件との自己矛盾だった。
 
 ---
 
-## 14. 残存リスク
+## 14. リスク登録簿
 
 | # | リスク | 状態 |
 | --- | --- | --- |
-| R1 | Zephyr + FDCAN が Renode で動くか | **解消**。4/4 ノードで実測 PASS |
-| R2 | Monitor TCP 経由のセンサ注入が実用速度か | **未検証**。`--port` の存在のみ確認。P0 でスパイク。破綻時は `external-control` API |
-| R3 | SocketCAN 経路 | **条件付き成立**。root + Linux 必須のため任意機能に降格済み |
-| R4 | 4 ノードの実行速度 | **測定済み** 0.19〜0.30×。仮想時間設計により受容 |
-| R5 | 我々が書く Zephyr ファームが `CAN.MCAN` モデルの未実装ビットに当たる | **新規**。実測で `fdcan1: Unhandled write to offset 0x1C (NTSEG1/NTSEG2)` を観測済み。ビットタイミングは無視されるが通信は成立する。CAN-FD や高度な機能を使うと壊れる可能性 |
-| R6 | Zephyr SDK の導入コスト（数 GB） | **未評価**。P0 で Docker 化して評価。代替は FreeRTOS + STM32 HAL |
-| R7 | 演習の脆弱ファームが Zephyr の MPU/スタックガードで exploit 不能になる | **未評価**。脆弱版は保護機構を Kconfig で無効化する前提。P1 で確認 |
+| R1 | Zephyr + FDCAN が Renode で動くか | **解消**。4/4 ノードで実測 |
+| R2 | ホスト制御チャネルの実用性 | **解消**。External Control API（44 倍速）+ Monitor バッチ（17.4 Hz） |
+| R3 | SocketCAN 経路 | **任意機能に降格**（root + Linux 必須） |
+| R4 | 4 ノードの実行速度 | **測定済み** 0.30×（静穏時）。直列実行でさらに 20〜35% 遅い |
+| R5 | `CAN.MCAN` モデルの未実装ビット | **残存**。`fdcan1: Unhandled write to offset 0x1C (NTSEG1/NTSEG2)` を観測。ビットタイミングは無視されるが通信は成立。CAN-FD や高度な機能は未検証 |
+| R6 | Zephyr SDK の導入コスト | **未評価**。R0 で Docker 化して評価。cold-start 時間を計測する |
+| R7 | 脆弱版が保護機構で exploit 不能になる | **解消**。ret2win は既定の保護下で成立（§7.3） |
+| R8 | アクチュエータ観測の実用性 | **解消**。GPIO は External Control のコールバック（仮想時刻付き）で取得 |
+| R9 | 5 ノード性能 | **未評価**。R0 で実測 |
+| R10 | SDLS の bit-exact ゴールデンが存在しない | **残存**（§9.3）。CryptoLib/Yamcs を外部オラクルにする |
+| R11 | ECSS-E-ST-70-41C 本文が入手できない | **残存**。PUS は 2 実装の一致に依拠 |
+| R12 | Renode GUI が WSL2 で動かない | **解消**（回避）。`--server-mode` + ブラウザ |
+| R13 | External Control の運用上の危険（単一クライアント、孤児セッション、GPIO 登録リーク、ハンドシェイク破壊） | **規則で回避**（L1/L4/L10/L11）。長時間運用前に負荷試験 |
+| R14 | 「ティック中の Monitor 書き込みは非決定的な仮想時刻に着弾する」は推論 | **予防的に受容**（L7）。決着策: 特徴的な値をティック中に 2 回注入し、ファームが読んだ仮想時刻を突き合わせる |
+| R15 | 自走中の GPIO イベント喪失の機構が不明 | **受容**。挙動のみ記述。L2 により実害なし |
+| R16 | External Control の ADC 経路が本ボードで使えない（`STM32F0_ADC` は `IADC` 未実装） | **受容**。ADC 注入は Monitor 限定（実測 PASS） |
+| R17 | halt 中も `fdcan1` が FIFO に受信し続ける | **受容**。規定の復電手順で解消（§5.3） |
+| R18 | GPIO 極性がピン依存 | **受容**。`invertedAFPins` を持たないピンを選ぶか実測する。選択を `.repl` にコメントで残す |
+| R19 | 本書の性能値の一部が競合下の測定 | **要再測**。静穏ホストでの通し実行を R0 で行う |
+| R20 | 証拠基盤の衛生（プローブ同士が互いの Renode を kill した） | **要再実行**。`probe.sh` を**単独・静穏ホストで 1 回通す**。`pkill -f renode` は禁止し、記録した PID のみ終了する |
+| R21 | Monitor の `RunFor` と External Control の `run_for` の相互作用が未測定 | **未評価**。L2/L7 により推奨事項には影響しない |
 
 ---
 
@@ -576,41 +747,62 @@ CI で SBOM を生成し、ライセンス逸脱を検出する。
 
 | # | 事項 | 判断時期 |
 | --- | --- | --- |
-| Q1 | プロダクト名 `CubeRange` の商標・既存プロジェクト衝突確認 | 公開前 |
-| Q2 | CCSDS 133.0-B / 232.1-B / 231.0-B の issue 番号確定 | 実装前 |
-| Q3 | ECSS-E-ST-70-41C のサービス名称・番号の規格本文照合 | 実装前 |
-| Q4 | 地上局 TUI に `textual` を使うか `rich` 単体で足りるか | P1 着手時 |
-| Q5 | Physics を別プロセスにするか gs-core 内スレッドにするか | P1 着手時 |
+| Q1 | プロダクト名 `CubeRange` の商標・衝突確認 | 公開前 |
+| Q2 | 対応プラットフォーム行列（**WSL2 を Tier 1** とする案）と `probe.sh` の Python 化 | R0 |
+| Q3 | Physics を別プロセスにするか | P1 着手時 |
+| Q4 | 演習と成果物の互換性ポリシー（`release-manifest.json`） | P0 |
 
 ---
 
-## 16. 法廷記録 — 1 版で是正した誤り
+## 16. 法廷記録
 
-design-court により、1 版の以下が**実行によって**反証された。
+### 16.1 1 版で是正した誤り（Renode を実行して判明）
 
-| # | 1 版の主張 | 反証 | 是正 |
+1. 「検証済み」と称しながら Renode が未導入だった → 導入し全項目を実行、`probe.sh` 化
+2. リリース版に RAMN ボードモデルは存在しない（master 限定）→ 依存しない設計へ
+3. STM32L552 は二重に破綻（1.16.1 に FDCAN 無し、Zephyr が CAN 非対応）→ STM32H753 へ
+4. センサ 3 種が登録不能 → 実測 PASS したモデルへ置換
+5. 「`live` は実時間追従」→ 0.19〜0.30× なので不成立。仮想時間をマスタークロックへ
+6. SocketCAN / Wireshark を中核に据えていた → 任意機能へ降格
+
+### 16.2 2 版で是正した誤り（Codex レビュー + 13 プローブ）
+
+| # | 2 版の主張 | 反証 | 是正 |
 | --- | --- | --- | --- |
-| 1 | 「検証済みの技術前提」 | 環境に Renode が未導入だった（`which renode` → not found）。ソースを読んだだけだった | Renode 1.16.1 を導入し全項目を実行。`probe.sh` として再現可能化 |
-| 2 | Renode に RAMN ボードモデルが同梱され実績がある | **リリース版 1.16.1 に `ramn.repl` / `ramn.resc` は存在しない**（master のみ） | RAMN モデルに依存しない設計へ。参考事例としてのみ言及 |
-| 3 | ノード MCU は STM32L552（FDCAN あり） | **1.16.1 の `stm32l552.repl` に FDCAN が無い**。加えて Zephyr の `nucleo_l552ze_q` は CAN 非対応 | STM32H753 / `nucleo_h753zi` に変更。実 Zephyr ファームで実証 |
-| 4 | センサは VEML7700 / Potentiometer / LSM6DSO_IMU | 3 件とも 1.16.1 で登録失敗（E04 × 2、E05 × 1） | 実測 PASS した 7 モデルに置換 |
-| 5 | `live` モードは実時間追従 | 4 ノードで**実時間の 0.19〜0.30 倍**しか進まない | 仮想時間をマスタークロックとする設計へ全面変更。時間圧縮を導入 |
-| 6 | SocketCAN / Wireshark を中核経路として記載 | `modprobe vcan` に root 必要、`LogCANTraffic` は Wireshark 必須でヘッドレス不可 | 任意機能へ降格。特権不要の ATTACKER ノード経路を既定に |
-
-加えて、**ログ抑制が性能を約 12 倍左右する**という設計要件が実測から新たに判明した（§3.4）。
+| W1 | EX-B01 の電源断機構が未定義 | `machine Pause` は時間ドメイン全体を凍結 | `cpu IsHalted` + `RequestReset` + `LoadELF` を実証（§5.3） |
+| W2 | ホストが `ElapsedVirtualTime` を読めば同期できる | プロトコルも所有権も未定義。Monitor 共有は破綻 | External Control API + 単一コーディネータ + L1〜L11（§4.2） |
+| W3 | ATTACKER ノード（Zephyr アプリ）が必須 | **特権不要の注入経路が 4 つ実在** | 空のマシン + C# インジェクタ 90 行（§4.5） |
+| W4 | Robot の `Create CAN Tester` を CI に使う | **`CANTester`/`CANKeywords` は 1.16.1 に存在しない** | 自作インジェクタと UART 観測で assert |
+| W5 | Physics はテレメトリでアクチュエータを観測 | COMM を殺す演習で観測経路も死ぬ | External Control の GPIO コールバック直読 |
+| W6 | EX-F01 は「任意コード実行」 | SRAM は XN、Renode も強制する | **ret2win** へ。Kconfig 差分ゼロ（§7.3） |
+| W7 | ハードウェア crypto が鍵を守る | CRYP はアクセラレータ。Renode は鍵レジスタを素の RW として模擬 | 撤回。M1/M2 と限界の明記（§6.5） |
+| W8 | `usart3` がコンソール兼宇宙リンク | 起動時に 9239 バイトのコンソール出力 | usart2 へ分離。`telnetMode=false` が必須（§5.1） |
+| W9 | 自前 CSP 実装 | libcsp 2.1 は正式な Zephyr モジュール | libcsp 採用 |
+| W10 | 「CRC-16-CCITT」 | その名の CRC-16 は 10 種類以上 | 一次資料でパラメータを確定（§6.2） |
+| W11 | 自作コーデック同士の検証 | 同じ誤りなら完全に一致してしまう | 独立オラクルとゴールデンベクタ（§9.3） |
+| W12 | 決定性は replay モードで得られる | 直列実行なしでは 14/14 回乖離 | G1〜G7（§9.2） |
+| W13 | Monitor で 1 コマンド 1 往復 | 物理 2.3 Hz が上限 | `;` バッチで 17.4 Hz（§4.2） |
+| W14 | EX-G01 | 同語反復だった | 侵入機構を明示（§7.2） |
+| W15 | P1 は攻撃成功のみ assert | §1.2 との自己矛盾 | 双方向 CI を P1 から |
+| W16 | CI は egress 禁止 | `probe.sh` が ELF を HTTPS 取得 | 成果物準備ジョブを分離（§9.4） |
+| W17 | 「ビジネス水準」を成熟度として主張 | 84〜129 人日の v1 に不相応 | 品質バーとして定義し直し、`ASSURANCE.md` で境界を明示 |
+| W18 | R8 を参照しつつ登録簿は R7 まで | 宙吊り参照 | R1〜R21 に再構成 |
+| W19 | `probe.sh` が確実に失敗しない | 出力ディレクトリ欠損で全項目 PASS | 自己テスト内蔵。33 PASS / 0 FAIL を実測 |
 
 ---
 
 ## 17. 参考
 
 - Renode — https://github.com/renode/renode (MIT)
-- Renode CAN + SocketCAN — https://antmicro.com/blog/2024/11/demonstrating-can-support-in-renode
-- Renode `tests/peripherals/MCAN.robot`（Zephyr CAN 用ビルド済み ELF の入手元）
+- Renode External Control API — `tools/external_control_client/README.md`（同梱）
+- Renode WebSocket API — `src/Renode/WebSockets/`（`--server-mode`）
+- RESD / csv2resd — `tools/csv2resd/`（同梱）
 - RAMN — https://github.com/ToyotaInfoTech/RAMN
-- NASA NOS3 — https://github.com/nasa/nos3 (NOSA 1.3)
-- NASA CryptoLib — https://github.com/nasa/CryptoLib (NOSA 1.3)
-- libcsp — https://github.com/libcsp/libcsp (MIT)
-- Hack-A-Sat QEMU tooling — https://github.com/solar-wine/tools-for-hack-a-sat-2020
-- Hack-A-Sat library — https://github.com/deptofdefense/hack-a-sat-library
-- SPARTA — https://sparta.aerospace.org/ (STIX2 JSON 配布あり)
+- NASA NOS3 / CryptoLib — https://github.com/nasa/nos3 , https://github.com/nasa/CryptoLib (NOSA 1.3)
+- libcsp — https://github.com/libcsp/libcsp (MIT, v2.1 に Zephyr モジュール)
+- spacepackets — https://github.com/us-irs/spacepackets-py (Apache-2.0)
+- Yamcs — https://github.com/yamcs/yamcs (AGPL-3.0, 外部オラクルとしてのみ)
+- Hack-A-Sat — https://github.com/solar-wine/tools-for-hack-a-sat-2020 , https://github.com/deptofdefense/hack-a-sat-library
+- SPARTA — https://sparta.aerospace.org/ / SPACE-SHIELD — https://spaceshield.esa.int/
+- Willbold et al., "Space Odyssey", IEEE S&P 2023 — https://mschloegel.me/paper/willbold2023spaceodyssey.pdf
 - CCSDS Blue Books — https://ccsds.org/
