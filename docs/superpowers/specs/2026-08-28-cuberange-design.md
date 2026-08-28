@@ -135,7 +135,11 @@ Renode によるマルチマシン・エミュレーションで同等の体験�
 | マルチマシン + CAN ハブ | `emulation CreateCANHub "canHub"` / `connector Connect sysbus.fdcan1 canHub` | **PASS** |
 | 宇宙リンク（UART→ホスト TCP） | `emulation CreateServerSocketTerminal 5020 "spacelink" false` + `connector Connect sysbus.usart3 spacelink` | **PASS** |
 | ヘッドレスなコンソール捕捉 | `sysbus.usart3 CreateFileBackend @<path> true` | **PASS** |
-| Monitor を TCP 公開（センサ注入経路） | `renode --port 1234` | **存在確認済み**（`--help`） |
+| Monitor を TCP 公開（ホスト制御経路） | `renode --port 1234` | **存在確認済み**（`--help`） |
+| ホストが仮想時刻を読む | `machine ElapsedVirtualTime` / `emulation GetTimeSourceInfo` | **PASS** — `RunFor "1.5"` 後に `Elapsed Virtual Time: 00:00:01.500000000` を確認。`Elapsed Host Time` と `Current load` も同時に返るため、実時間比を実行時に自己計測できる |
+| ハードウェア AES | `crypto (STM32H7_CRYPTO)` | **PASS** — `nucleo_h753zi` の `peripherals` 出力に存在 |
+| 乱数 | `rng (STM32F4_RNG)` | **PASS** — 同上 |
+| Ethernet + PHY | `ethernet` + `Network.EthernetPhysicalLayer` | 存在確認済み。Phase 3 の高速ペイロード downlink 候補（Phase 1 では未使用） |
 | ホスト SocketCAN 橋渡し | `machine CreateSocketCANBridge "scb" "vcan0"` | **条件付き** — コマンドは 1.16.1 に実在。`vcan0` 作成に **root が必要**（`sudo modprobe vcan` 等）。Linux 限定 |
 | CAN を pcap で観測 | `emulation LogCANTraffic` | **条件付き** — **Wireshark 必須**。未導入だと "Wireshark is not installed" で失敗し、しかも `.resc` 全体が中断する。ヘッドレス CI では使わない |
 | 時間量子 | `emulation SetGlobalQuantum "0.0001"` | **PASS** |
@@ -235,17 +239,54 @@ Renode によるマルチマシン・エミュレーションで同等の体験�
 
 ### 4.3 ホスト⇄Renode の双方向インタフェース
 
-| 方向 | 既定の手段（特権不要） | 代替 |
-| --- | --- | --- |
-| **宇宙リンク** | COMM の `usart3` を `CreateServerSocketTerminal` で TCP 露出。**PASS 済み** | — |
-| **ホスト → Renode**（センサ値注入） | Renode Monitor TCP（`renode --port`）に `i2c1.imu ...` 等を発行 | `external-control` API |
-| **Renode → ホスト**（アクチュエータ観測） | **ATTACKER/TAP ノードは使わず**、EPS/ADCS が自ノードの状態を PUS HK として downlink し、Physics は地上系の TM を購読する | Linux + root があれば `vcan0` を直接購読するほうが素直 |
-| **攻撃者のバス注入** | 演習時に **ATTACKER ノード**（5 台目の Renode マシン）を canHub に接続し、そのUARTソケット経由でホストからフレームを送る | Linux + root があれば `cansend vcan0` |
+ホスト側の全プレーンは **1 本の Renode Monitor TCP 接続**（`renode --port`）を制御チャネルとし、
+データ経路のみ別ソケットを使う。
 
-**設計判断**: `vcan0` 経路は「あれば嬉しい」であって**必須にしない**。
-実測で `modprobe vcan` に root が必要であり、Linux 限定であることが確認されたため。
-既定経路は特権なしで完結する。`vcan0` が使える環境では `--with-vcan` で有効化し、
-`candump` / Wireshark / Scapy という RAMN と同じ手触りが得られる。
+| 用途 | 既定の手段（特権不要） | 実測 |
+| --- | --- | --- |
+| **宇宙リンク**（データ） | COMM の `usart3` を `CreateServerSocketTerminal` で TCP 露出 | **PASS** |
+| **時刻の取得**（同期） | Monitor: `machine ElapsedVirtualTime` | **PASS** |
+| **時刻の前進**（同期） | Monitor: `emulation RunFor "<dt>"` | **PASS** |
+| **センサ値の注入**（Physics → 衛星） | Monitor: `i2c1.imu ...` / `i2c1.pac1934 ...` 等のプロパティ書き込み | 機構は PASS、スループットは **R2 として未検証** |
+| **アクチュエータの観測**（衛星 → Physics） | Monitor: `gpioPortB.<pin>` の状態および該当ペリフェラルのレジスタを直接読む | 機構は PASS、**R8 として未検証** |
+| **攻撃者の生 CAN 注入** | **ATTACKER ノード**（5 台目の Renode マシン、演習時のみ起動） | 下記参照 |
+| **CI での生 CAN 観測** | Robot: `Create CAN Tester canHub` + `Wait For Frame With Id` | キーワード実在を確認 |
+
+#### アクチュエータ観測をテレメトリ経由にしない理由
+
+本節の初稿は「Physics は地上局が受信した PUS ハウスキーピングからアクチュエータ状態を読む」と
+していたが、これは**自己矛盾である**。演習 EX-B01 の眼目は EPS への攻撃で COMM の電源を落とし
+衛星を沈黙させることであり、そのとき TM は止まる。つまり
+**「衛星が死んだことを可視化したい瞬間に、可視化の経路も死ぬ」**。
+Physics は Monitor 経由で衛星の内部状態を直接読む（シミュレータは物理法則の側であって、
+地上局の観測能力に縛られてはならない）。
+
+#### 生 CAN フレーム注入の現実（実測に基づく）
+
+RAMN では `cansend` で誰でもバスに注入できる。Renode 1.16.1 で同等のことを**特権なしに**行う
+手段は、実測の結果**存在しなかった**:
+
+| 候補 | 実測結果 |
+| --- | --- |
+| `canHub` オブジェクトに送信メソッド | **無い**。`AttachTo` / `DetachFrom` / `Start` / `Pause` / `Resume` のみ |
+| `sysbus.fdcan1`(MCAN) に送信メソッド | **無い**。レジスタ読み書きのみ |
+| `CAN.CANToUART` を canHub に接続 | **失敗**。`connector Connect` の 3 通りの記法すべてで `Error E21` |
+| Robot Framework キーワード | **ISO-TP / UDS 層のみ**（`SendISOTPMessage`, `SendUDSCommand...`）。生フレーム送信キーワードは無い。CSP over CAN は ISO-TP ではないため PCI バイトが混入して使えない |
+| `SocketCANBridge` → `vcan0` | 動作するが **Linux + root 必須**（`sudo modprobe vcan`） |
+
+**したがって ATTACKER ノードは「望ましい選択肢」ではなく必須の構成要素である。**
+5 台目の Renode マシンに小さな Zephyr アプリを載せ、UART（TCP ソケット露出）↔ 生 CAN フレームを
+中継させる。ホスト側 Python は単純なフレーミングでこのソケットに書く。
+
+- 利点: 特権不要、OS 非依存、CI と対話利用で経路が同一、
+  そして**「攻撃者は既にどこかのサブシステムを掌握している」という現実的な前提**になる。
+- 費用: Zephyr アプリ 1 本（小規模）と、エミュレート UART を通る分の遅延。5 ノード運用時の
+  速度低下（§3.4）。**この費用は Phase 1 のスコープに明記して計上する。**
+- 将来: 遅延が問題になれば、`ICAN` を実装して TCP を話す Renode プラグイン（C#, 約 150 行）を
+  書けば ATTACKER ノードを不要にできる。Phase 2 の最適化候補。
+
+`vcan0` が使える環境（Linux + root）では `--with-vcan` で有効化し、`candump` / Wireshark / Scapy
+という RAMN と同じ手触りが**観測側で**得られる。ただし**必須にはしない**。
 
 ### 4.4 時間モデル（1 版から全面変更）
 
@@ -302,35 +343,41 @@ ASM 0x1ACFFC1D
 └─────────────────────────────────────────────────────┘
 ```
 
-参照する標準（`ccsds.org` の実 PDF で番号を確認したもの）:
+参照する標準（Claude と Codex の二経路で `ccsds.org` の実 PDF に当てて確定）:
 
-| 対象 | 文書番号 | 確認状況 |
-| --- | --- | --- |
-| TM Space Data Link Protocol | **CCSDS 132.0-B-3**（2021-10） | ccsds.org/Pubs/132x0b3.pdf を確認 |
-| TC Space Data Link Protocol | **CCSDS 232.0-B-4**（2021-10） | 確認 |
-| Space Data Link Security (SDLS) | **CCSDS 355.0-B-2** | ccsds.org/Pubs/355x0b2.pdf を確認 |
-| SDLS — Extended Procedures | **CCSDS 355.1-B-1**（2020-02） | ccsds.org/Pubs/355x1b1.pdf を確認 |
-| Space Packet Protocol | CCSDS 133.0-B（issue 要確認） | **未確定** — 実装前に ccsds.org で issue を確定する |
-| AOS Space Data Link | CCSDS 732.0-B-5（2025-10, 732.0-B-4 は廃止） | 二次情報。実装対象外のため参考 |
-| COP-1 / TC Sync & Channel Coding (CLTU) | CCSDS 232.1-B / 231.0-B（issue 要確認） | **未確定** — Phase 1 では実装しないため保留 |
+| # | 文書番号 | 名称 | 版 | Phase 1 |
+| --- | --- | --- | --- | --- |
+| 1 | **CCSDS 133.0-B-2** | Space Packet Protocol | 2020-06 | **実装** |
+| 2 | **CCSDS 132.0-B-3** | TM Space Data Link Protocol | 2021-10 | **実装（最小形）** |
+| 3 | **CCSDS 232.0-B-4** | TC Space Data Link Protocol | 2021-10 + Cor.1 (2023-10) | **実装（最小形）** |
+| 4 | **CCSDS 355.0-B-2** | Space Data Link Security Protocol | 2022-07 | Phase 2 |
+| 5 | **CCSDS 355.1-B-1** | SDLS — Extended Procedures | 2020-02 | Phase 2（範囲を絞る） |
+| 6 | **CCSDS 232.1-B-2** | Communications Operation Procedure-1 (COP-1) | 2010-09 + Cor.1 (2019-04) | 非実装 |
+| 7 | **CCSDS 231.0-B-4** | TC Synchronization and Channel Coding（**CLTU はここ**） | 2021-07 + TC.1 | 非実装 |
+| 8 | **CCSDS 732.0-B-5** | AOS Space Data Link Protocol | 2025-10（**732.0-B-4 は廃止**） | 非実装 |
 
 Phase 1 では COP-1、CLTU/BCH 符号化、AOS を実装しない。フレーム同期は ASM + 固定長で行う。
+CLTU は Space Packet Protocol ではなく TC Sync & Channel Coding (231.0-B-4) の規定であり、
+COP-1 の状態機械は TC SDLP (232.0-B-4) とは別書（232.1-B-2）である — 実装時にこの分界を守る。
 
 ### 6.2 PUS サービス（Phase 1 の範囲）
 
-参照標準は **ECSS-E-ST-70-41C**（サービス番号と名称は実装前に規格本文で照合する）。
+参照標準は **ECSS-E-ST-70-41C**（Telemetry and telecommand packet utilization, 2016-04-15）。
+PUS は CCSDS Space Packet に載るアプリケーション層の約束事であり、
+RF 変調・TM/TC フレーム符号化・COP-1・SDLS は規定しない（分界を守る）。
 
-| Service | 用途 | セキュリティ上の意味 |
+| Service | 規格上の名称 | セキュリティ上の意味 |
 | --- | --- | --- |
-| 1 | TC 受理/実行の成否報告 | 攻撃の成否が観測できる |
-| 3 | 周期ハウスキーピング TM | 偽装 TM の対象 |
-| 5 | イベント報告 | 検知演習の情報源 |
-| 8 | 関数管理 | **★ スタックオーバーフローを仕込む場所** |
-| 9 | 時刻管理 | 時刻ずらし → スケジュール攻撃の前段 |
-| 11 | 時刻ベースのスケジューリング | **★ 遅発性の破壊コマンドを仕込める** |
-| 17 | 疎通確認 | Phase 0 の疎通対象 |
+| 1 | Request verification | 攻撃の成否が攻撃者にも観測できる |
+| 3 | Housekeeping | 偽装 TM の対象 |
+| 5 | Event reporting | 検知演習の情報源 |
+| 8 | Function management | **★ スタックオーバーフローを仕込む場所** |
+| 9 | Time management | 時刻ずらし → スケジュール攻撃の前段 |
+| 11 | Time-based scheduling | **★ 遅発性の破壊コマンドを仕込める** |
+| 17 | Test | Phase 0 の疎通対象 |
 
-Service 6（メモリ管理）は Phase 2 で追加し、鍵抽出演習に使う。
+Service 6（Memory management）は Phase 2 で追加し鍵抽出演習に使う。
+Service 20（Parameter management）は Phase 2 の候補。
 
 ### 6.3 内部バス（CSP over CAN）
 
@@ -344,9 +391,19 @@ CAN 上に流れるため、`vcan0` が使える環境では `candump` / Wiresha
 ### 6.4 SDLS（Phase 2）
 
 CCSDS 355.0-B-2 相当のサブセット: SPI、IV、AES-256-GCM による認証暗号、アンチリプレイ窓。
-Zephyr PSA Crypto を使用（STM32H753 の crypto アクセラレータは Renode 1.16.1 の
-`stm32h743.repl` には含まれないため**ソフトウェア実装**とする — これは鍵がフラッシュ上に
-存在するという現実的な脆弱性を演習に使えるため好都合）。
+
+**ハードウェア crypto は利用可能**。`platforms/boards/nucleo_h753zi.repl` は
+`platforms/cpus/stm32h753.repl`（= `stm32h743.repl` + `crypto: Miscellaneous.Crypto.STM32H7_CRYPTO
+@ 0x48021000`）を取り込んでおり、`peripherals` の実行出力に `crypto (STM32H7_CRYPTO)` と
+`rng (STM32F4_RNG)` が現れることを確認済み。
+
+これを利用して SDLS を**二通り**用意する。これ自体が演習になる:
+
+| 版 | 実装 | 演習上の意味 |
+| --- | --- | --- |
+| `sdls-sw` | Zephyr PSA Crypto（ソフトウェア AES） | 鍵がフラッシュ上に平文で存在 → PUS Service 6 による鍵抽出（EX-F02）が成立 |
+| `sdls-hw` | `crypto` ペリフェラル経由 | 鍵の扱いが変わり、素朴なメモリダンプでは取れなくなる → 対策編 |
+
 NASA CryptoLib は**テストベクタの突き合わせのみ**に使い、コードは取り込まない（NOSA 回避）。
 
 ---
