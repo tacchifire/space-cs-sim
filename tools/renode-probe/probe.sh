@@ -47,9 +47,15 @@ case "${1:-}" in
   *)            echo "unknown option: $1" >&2; exit 2 ;;
 esac
 
-# Minimum acceptable 4-node speed, as a fraction of real time. Below this the interactive
-# experience stops being usable; see the design's performance section.
-PERF_FLOOR="0.15"
+# Minimum acceptable 4-node speed, as a fraction of real time, in the INTERACTIVE profile
+# (quantum 2 ms + AdvanceImmediately). Measured 2.34x on a quiet 14-core host; the floor is set
+# well below that so it catches a regression, not host-to-host variation.
+#
+# NOTE: the design's earlier 0.19-0.30x figure was an artifact of Renode's defaults - a 100 us
+# global quantum and a real-time throttle that caps the emulation at exactly 1.0x. Both are
+# disabled below. Do not "fix" a slow measurement by lowering this floor; check the tuning first.
+PERF_FLOOR="1.5"
+PERF_QUANTUM="0.002"
 
 PASS_N=0; FAIL_N=0; SKIP_N=0
 RC=0
@@ -265,11 +271,18 @@ RESC="$OUT/four_zephyr.resc"
     echo "sysbus.usart3 CreateFileBackend @$OUT/uart_$N.txt true"
     # Suppressing unhandled-register warnings is a PERFORMANCE requirement, not cosmetics:
     # leaving them on measured ~12x slower (74s vs 9.95s wall for the same workload).
+    # Log suppression is for readable output, NOT performance: the unhandled-register warnings
+    # are boot-only (~56/node) and cost 0-9%. The 12x figure an earlier revision reported came
+    # from routing UART through LoggingUartAnalyzer, not from these warnings.
     echo 'logLevel 3 sysbus'
     echo 'logLevel 3 rcc'
     echo 'logLevel 3 fdcan1'
   done
-  echo 'emulation SetGlobalQuantum "0.0001"'
+  # The two settings that actually matter. Quantum 2 ms is the largest that keeps firmware output
+  # byte-identical to a 100 us reference; above it, timing drifts silently and duration-dependently
+  # (5 ms looks correct at 5 s and 10 s and only breaks at 20 s).
+  echo "emulation SetGlobalQuantum \"$PERF_QUANTUM\""
+  echo 'emulation SetGlobalAdvanceImmediately true'
 } > "$RESC"
 
 CORES=$(nproc)
