@@ -312,7 +312,55 @@ UI は D3 の型を呼ばない。
 - 右: Renode の Web ターミナル（Monitor と選択した UART）
 - 演習ペイン: シナリオ選択・手順・3 段階ヒント・成否判定
 
-### 4.5 攻撃者の生 CAN 注入（ATTACKER ノードは不要になった）
+### 4.5 観測・制御チャネル（4 本。役割を混ぜない）
+
+**Monitor は `emulation RunFor` の実行中ずっとブロックする**（コマンドのエコーが走行終了まで返らないことを実測）。
+したがって**学習者 UI が Monitor から読んではならない**。用途ごとに別チャネルを持つ。
+
+| チャネル | 起動 | 用途 | 再接続 |
+| --- | --- | --- | --- |
+| **External Control** | `emulation CreateExternalControlServer` | 時間の前進・取得、GPIO、`sysbus` 読み書き | 単一クライアント |
+| **Monitor** | `--port <p>` | 制御（センサ注入、`IsHalted`、`LoadELF`）。**バッチ必須** | **1 プロセスに 1 セッション、再接続不可** |
+| **logNetwork** | `logNetwork <p>` | **ライブイベント配信**。UI と物理エンジンが読む | 可 |
+| **Robot XML-RPC** | `--robot-server-port <p>` | **素の XML-RPC。57 キーワード**（`CreateLedTester` / `AssertLedState` / `AssertLedIsBlinking` / `AssertLedDutyCycle` 等）。**言語非依存・再接続可能** | 可 |
+| GDB | `machine StartGdbServer <p> false` | 学習者のデバッグ。ノードごとに 1 ポート、相互干渉なし | 可 |
+
+`--robot-server-port` の発見は「Monitor が 1 セッションしか持てない」制約を実質的に解消する。
+また **`CANTester` が存在しない**（D15）ぶんを、LED アサーションが部分的に埋める。
+
+**Python フックの出力先**: フック内の `print()` は Renode 自身の stdout に出て
+`--port` の Monitor セッションには**届かない**。CubeRange が同梱するフックは必ず
+`cpu.Log(LogLevel.Error, ...)` / `machine.Log(...)` を使い、`logFile` と `logNetwork` に載せる。
+
+#### アクチュエータ観測（EPS のロードスイッチ、磁気トルカ）
+
+- **push が正解**: GPIO ポートごとに `sysbus SetHookBeforePeripheralWrite sysbus.gpioPortX "<python>"` を
+  仕掛け、`(offset, value, machine.ElapsedVirtualTime)` を物理エンジンへ送る。
+  全書き込みを仮想時刻つきで正確に拾い、変化が無いときは無料。
+- **ポート単語で持つ**: 「ピン N を読む」スカラー API は無い。`gpioPortX GetGPIOs`（16 ピン一括、約 11 ms）か
+  `sysbus ReadDoubleWord <base+0x14>`（ODR）。base は gpioPortA 0x58020000 から +0x400 刻み。
+- **BSRR だけをフックしてはならない**: Zephyr の STM32 GPIO ドライバは **ODR（0x14）**でトグルし、
+  BSRR（0x18）は初期化時しか触らない。BSRR にウォッチポイントを置くと**全てのトグルを取りこぼす** —
+  まさに旗艦演習が「無線が死んでいるから見えない」と誤認する失敗モードである。
+- **read-to-clear レジスタをポーリングしてはならない**: Monitor のレジスタ読みは
+  ペリフェラルモデルを通る（`SetHookAfterPeripheralRead` が Monitor の読みで発火することを実測）。
+  UART の status、CAN の IR、タイマの SR を物理エンジンが読むと**ファームの状態を壊す**。
+  ポーリングは GPIO ODR / `LED.State` / `GetGPIOs` に限る。
+- **逐次の Monitor コマンドは原子的スナップショットではない**（`GreenLED=False` を読んだ 6 ms 後に
+  ODR が既に 1 だった実例）。一貫した多レール断面が要るなら 1 フック内で取るか、ポート単語を 1 回で読む。
+
+#### 学習者に出す道具（すべて実測で動作確認済み）
+
+| 機構 | コマンド | 用途 |
+| --- | --- | --- |
+| **ウォッチポイントフック** | `sysbus AddWatchpointHook <addr> <width> <Read\|Write\|ReadAndWrite> "<python>"` | **最も価値の高い採点プリミティブ**。EX-F01 は戻り番地スロットへの Write、EX-F02 は鍵バッファへの **Read**（発火時の PC まで取れる）。*Read フックでは `value` が 0 になる*ので `cpu.PC.RawValue` と `cpu.Bus.ReadDoubleWord(addr)` を使う |
+| PC/シンボルフック | `cpu AddHook <addr> "<py>"` / `cpu AddSymbolHook "<sym>" "<py>"` | 到達判定 |
+| ペリフェラルアクセスログ | `sysbus LogPeripheralAccess sysbus.i2c1 true` | レジスタ**名**と**アクセス元 PC** まで出る。バス攻撃の学習者向けキャプチャ |
+| 実行トレース | `cpu CreateExecutionTracing "<n>" @<file> Disassembly` | 「何が動いたのか」 |
+| フレームグラフ | `cpu EnableProfilerCollapsedStack @<file> true` / `cpu LogFunctionNames true` | Zephyr の実関数名つき |
+| GDB | `machine StartGdbServer <p> false` | **ReverseStep+/ReverseContinue+ を広告**。生の GDB remote を話すのでブラウザ側フロントエンドから直接扱え、`arm-none-eabi-gdb` は不要 |
+
+### 4.6 攻撃者の生 CAN 注入（ATTACKER ノードは不要になった）
 
 2 版は「特権なしの生 CAN 注入は不可能だから 5 台目の Zephyr マシンが必須」としたが、**これは誤り**。
 特権不要の経路が 4 つ実証された（いずれも被害ノードの Rx FIFO 0 まで到達を確認）:
@@ -343,7 +391,7 @@ UI は D3 の型を呼ばない。
 | **OBC** | 1 | C&DH。PUS、TC スケジュール、FDIR、HK 集約 | PUS Service 8 のパラメータ長を検証しない | 制御フロー乗っ取り（§7.3） |
 | **EPS** | 2 | 電力。電池・太陽電池・ロードスイッチ | CAN 上のロードスイッチ指令に認証がない | **COMM の電源断 → 衛星が沈黙** |
 | **ADCS** | 4 | 姿勢。IMU・磁力計・太陽センサ・磁気トルカ | トルク指令に範囲検査がない | スピンアップ → 発電不能 → 電池枯渇 |
-| **attacker** | — | 空のマシン + `TcpCanInjector`（§4.5） | — | — |
+| **attacker** | — | 空のマシン + `TcpCanInjector`（§4.6） | — | — |
 
 ### 5.1 UART 割り当て（新規・必須）
 
@@ -818,7 +866,7 @@ EX-F01/EX-G01（P3 以降）、自前 CSP、自前 Space Packet コーデック�
 | --- | --- | --- | --- |
 | W1 | EX-B01 の電源断機構が未定義 | `machine Pause` は時間ドメイン全体を凍結 | `cpu IsHalted` + `RequestReset` + `LoadELF` を実証（§5.3） |
 | W2 | ホストが `ElapsedVirtualTime` を読めば同期できる | プロトコルも所有権も未定義。Monitor 共有は破綻 | External Control API + 単一コーディネータ + L1〜L11（§4.2） |
-| W3 | ATTACKER ノード（Zephyr アプリ）が必須 | **特権不要の注入経路が 4 つ実在** | 空のマシン + C# インジェクタ 90 行（§4.5） |
+| W3 | ATTACKER ノード（Zephyr アプリ）が必須 | **特権不要の注入経路が 4 つ実在** | 空のマシン + C# インジェクタ 90 行（§4.6） |
 | W4 | Robot の `Create CAN Tester` を CI に使う | **`CANTester`/`CANKeywords` は 1.16.1 に存在しない** | 自作インジェクタと UART 観測で assert |
 | W5 | Physics はテレメトリでアクチュエータを観測 | COMM を殺す演習で観測経路も死ぬ | External Control の GPIO コールバック直読 |
 | W6 | EX-F01 は「任意コード実行」 | SRAM は XN、Renode も強制する | **ret2win** へ。Kconfig 差分ゼロ（§7.3） |
