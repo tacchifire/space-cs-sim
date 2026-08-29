@@ -69,12 +69,19 @@ head1() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
 mkdir -p "$OUT" || { echo "cannot create output dir $OUT"; exit 2; }
 
 # ---------------------------------------------------------------------------
-# renode_run <name> <-e args...>
+# renode_run [-t seconds] <name> <-e args...>
 # Captures stdout+stderr AND the exit status. Both are consulted by had_error.
+#
+# The per-probe timeout is not decoration. `emulation LogCANTraffic` blocks indefinitely when it
+# cannot reach Wireshark, and with a single generous timeout it held the whole evidence gate for
+# fifteen minutes - an optional feature stalling the thing that decides whether anything works.
+# Probes that should answer in seconds are given seconds.
 # ---------------------------------------------------------------------------
 renode_run() {
+  local secs=900
+  if [ "$1" = "-t" ]; then secs="$2"; shift 2; fi
   local name="$1"; shift
-  ( cd "$RENODE_DIR" && timeout 900 ./renode --disable-xwt --console --plain \
+  ( cd "$RENODE_DIR" && timeout "$secs" ./renode --disable-xwt --console --plain \
       --hide-analyzers --hide-log "$@" -e 'quit' ) >"$OUT/$name.log" 2>&1
   echo $? > "$OUT/$name.rc"
 }
@@ -247,8 +254,10 @@ else
   pass "SocketCAN bridge attached to vcan0"
 fi
 
-renode_run logcan -e 'emulation CreateCANHub "canHub"' -e 'emulation LogCANTraffic'
-if grep -qi 'Wireshark is not installed' "$OUT/logcan.log" 2>/dev/null; then
+renode_run -t 60 logcan -e 'emulation CreateCANHub "canHub"' -e 'emulation LogCANTraffic'
+if [ "$(cat "$OUT/logcan.rc" 2>/dev/null)" = "124" ]; then
+  skip "LogCANTraffic (Wireshark pcap)" "blocked for 60s with no Wireshark present - unusable headless, and a reason this probe carries its own timeout"
+elif grep -qi 'Wireshark is not installed' "$OUT/logcan.log" 2>/dev/null; then
   skip "LogCANTraffic (Wireshark pcap)" "Wireshark absent; unusable headless - use SocketCAN or the Robot CAN tester"
 elif had_error logcan; then
   fail "LogCANTraffic" "$(err_of logcan)"
