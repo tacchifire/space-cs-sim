@@ -79,11 +79,19 @@ demo-p0: firmware-p0
 	    python3 -m pytest tests/e2e/test_p0_roundtrip.py -v
 
 # Everything that can be checked without a human looking at it.
+#
+# The final banner exists because a failing sub-target once hid inside 8500 lines of build output:
+# make returned non-zero correctly, but a human skimming for "passed" saw only the parts that had.
+# If you do not see CHECK PASSED on the last line, it did not pass.
 check: probe
 	PYTHONPATH=src python3 -m pytest tests/pytest -q
 	$(MAKE) -C tests/native test
 	$(MAKE) demo-p0
 	$(MAKE) verify-all
+	@echo
+	@echo "================================================================"
+	@echo "  CHECK PASSED - probe, codecs, native, round trip, exercises"
+	@echo "================================================================"
 
 # P0's last acceptance condition: thirty round trips in a row. Slow (~10 min) and excluded from
 # `make check`, because a soak belongs on a schedule rather than in the edit loop.
@@ -105,12 +113,12 @@ firmware-p1: firmware-p0
 verify:
 	@test -n "$(EX)" || { echo "usage: make verify EX=<exercise-dir>"; exit 1; }
 	PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
-	    python3 -m pytest exercises/$(EX)/verify_test.py -v
+	    python3 -m pytest exercises/$(EX)/verify_*.py -v
 
 # Every exercise, both directions. This is the claim the product makes.
 verify-all: firmware-exl01
 	PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
-	    python3 -m pytest exercises/*/verify_test.py -v
+	    python3 -m pytest exercises/*/verify_*.py -v
 
 # EX-L01 adds a replay-hardened COMM alongside the P1 images.
 firmware-exl01: firmware-p1
