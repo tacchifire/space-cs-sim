@@ -9,7 +9,10 @@ $obcuart?=@/tmp/cuberange/obc.uart
 $epsuart?=@/tmp/cuberange/eps.uart
 $linkport?=3777
 $injport?=3779
-$repo?=@/home/ubuntu/workspace/space-cs-sim
+# Renode's Monitor cannot concatenate a variable with a literal, so the injector's path is its
+# own variable rather than being built from a repo root. The test harness overrides it; the
+# default here only serves someone running the scenario by hand from a clone in $HOME.
+$injector?=@~/space-cs-sim/attacker/TcpCanInjector.cs
 
 emulation CreateCANHub "canHub"
 
@@ -46,7 +49,7 @@ logLevel 3 fdcan1
 # can resolve GetName()/GetMachine() on the injector - an ICAN attached to a hub must be a
 # registered machine peripheral, or the exception poisons the hub for every node on it.
 mach create "attacker"
-include @/home/ubuntu/workspace/space-cs-sim/attacker/TcpCanInjector.cs
+include $injector
 machine CreateTcpCanInjector "inj" $injport
 connector Connect inj canHub
 

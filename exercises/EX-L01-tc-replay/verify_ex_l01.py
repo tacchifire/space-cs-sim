@@ -33,6 +33,7 @@ RENODE_DIR = Path(os.environ.get(
     "RENODE_DIR", Path.home() / "tools" / "renode_1.16.1-dotnet_portable"))
 OUT = Path(os.environ.get("OUT", "/tmp/cuberange"))
 SCENARIO = Path(__file__).resolve().parent / "scenario.resc"
+INJECTOR = REPO / "attacker" / "TcpCanInjector.cs"
 
 SAT_LINK_PORT = 3777      # Renode's socket terminal on COMM.usart2
 GS_LINK_PORT = 3877       # what the ground station connects to, via the channel
@@ -56,6 +57,7 @@ class Range:
         argv = ["./renode", "--disable-xwt", "--plain", "--hide-analyzers",
                 "--port", str(MONITOR_PORT),
                 "-e", f"$comm=@{self.comm_elf}",
+                "-e", f"$injector=@{INJECTOR}",
                 "-e", f"include @{SCENARIO}",
                 "-e", "start"]
         self._ctx = self.sup.launch(argv, OUT / "exl01-renode.log")

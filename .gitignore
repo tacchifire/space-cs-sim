@@ -6,3 +6,5 @@ build/
 *.bin
 *.hex
 .venv/
+tests/native/test_proto
+tests/native/test_proto_asan

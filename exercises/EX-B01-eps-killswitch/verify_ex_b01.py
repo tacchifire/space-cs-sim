@@ -31,6 +31,7 @@ RENODE_DIR = Path(os.environ.get(
     "RENODE_DIR", Path.home() / "tools" / "renode_1.16.1-dotnet_portable"))
 OUT = Path(os.environ.get("OUT", "/tmp/cuberange"))
 SCENARIO = Path(__file__).resolve().parent / "scenario.resc"
+INJECTOR = REPO / "attacker" / "TcpCanInjector.cs"
 
 LINK_PORT, MONITOR_PORT, INJ_PORT = 3777, 3778, 3779
 BOOT_SETTLE_S = 4.0
@@ -70,6 +71,7 @@ class Range:
         argv = ["./renode", "--disable-xwt", "--plain", "--hide-analyzers",
                 "--port", str(MONITOR_PORT),
                 "-e", f"$eps=@{self.eps_elf}",
+                "-e", f"$injector=@{INJECTOR}",
                 "-e", f"include @{SCENARIO}",
                 "-e", "start"]
         self._ctx = self.sup.launch(argv, OUT / "exb01-renode.log")
