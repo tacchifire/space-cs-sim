@@ -1,0 +1,44 @@
+:name: CubeRange CSP ping
+:description: Two CubeRange nodes exchanging CSP (libcsp v2.1) over a shared CAN hub
+
+# Build the two images first:
+#   make firmware
+# then run:
+#   $RENODE_DIR/renode --console -e "include @scripts/multi-node/csp_ping.resc"
+
+$n1?=@/tmp/zcsp1/zephyr/zephyr.elf
+$n2?=@/tmp/zcsp2/zephyr/zephyr.elf
+# Renode's Monitor cannot concatenate a variable with a literal, so each backend path
+# is its own variable. `$out/n1.uart` fails with "Could not tokenize here".
+$n1uart?=@/tmp/cuberange/n1.uart
+$n2uart?=@/tmp/cuberange/n2.uart
+
+emulation CreateCANHub "canHub"
+
+mach create "N1"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $n1
+# usart3 is Zephyr's console on this board. The space link must NOT share it - see the design's
+# UART assignment section; a client connected to a console-sharing link socket receives 9239 bytes
+# of boot banner before any application byte.
+sysbus.usart3 CreateFileBackend $n1uart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "N2"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $n2
+sysbus.usart3 CreateFileBackend $n2uart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+# Renode's defaults cost roughly 8x: a 100 us quantum plus a real-time throttle that caps the
+# emulation at exactly 1.0x. Measured on four nodes: 0.301x default, 1.000x with the quantum
+# alone, 2.34x with both. 2 ms is the largest quantum that keeps firmware output byte-identical
+# to a 100 us reference - above it, timing drifts silently and only shows up in longer runs.
+emulation SetGlobalQuantum "0.002"
+emulation SetGlobalAdvanceImmediately true

@@ -791,7 +791,7 @@ CI で SBOM を生成しライセンス逸脱を検出する。
 
 | Phase | 内容 | 完了条件 | 見積 |
 | --- | --- | --- | --- |
-| **R0 リスク退治** | バージョン固定（Renode / Zephyr / libcsp 2.1 / spacepackets）。libcsp v1+CFP を 2 ノード間で疎通。固定ステップのスーパーバイザ実装。UART バースト処理と 5 ノード性能の実測 | 反復可能になるまで先へ進まない | 5〜8 日 |
+| **R0 リスク退治** | **完了**。Renode 1.16.1 / Zephyr v4.1.0 / SDK v1.0.1 / libcsp v2.1 を固定。自前ビルドの 2 ノードが CSP over CAN で ping 往復（1〜2 ms）。ホストからの生 CAN 注入と External Control による仮想時間制御・メモリ読みも実証 | `make toolchain` → `make firmware` → `make demo` が PASS。`make probe` 34 PASS / 0 FAIL | 実績 1 日 |
 | **P0 最初のデモ** | Python が実 PUS-17 を最小 TC フレームで送り、COMM が受けて libcsp v1/CFP で転送、OBC が応答、TM が同じ経路で戻る。特権も GUI も不要。30 回連続で欠落もハングも無し | `make probe` と `make demo` が CI で緑 | +18〜26 日 |
 | **P1 セキュリティ縦切り 1 本** | EPS と attacker を追加し **EX-B01 のみ**。脆弱版で TM が意図した理由で止まることを証明。対策版で拒否され、**かつ正規の認証済み EPS コマンドは通る**ことを証明。電力はスカラーモデル | 双方向 CI で緑 | +28〜42 日 |
 | **P2 2 本目 + GUI** | EX-L01（固定パス窓でのリプレイと対策）。ブラウザ GUI（§4.4） | 同上 | +18〜28 日 |
