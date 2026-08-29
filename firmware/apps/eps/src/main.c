@@ -26,6 +26,13 @@
 
 #define ROUTER_STACK 1024
 #define APP_STACK    2048
+#define FDIR_STACK   1024
+
+/* If the radio stays unpowered this long, bring it back. Real spacecraft carry exactly this kind
+ * of interlock so that one bad command cannot permanently sever the only way to send a better one.
+ * It bounds the damage from EX-B01 to an outage rather than a loss, and it is what makes EX-L01
+ * observable: the satellite recovers, and then the attacker replays the command that killed it. */
+#define FDIR_RESTORE_MS 30000
 
 /* Power command, 7 octets on the wire:
  *   [0] opcode      1 = set rail
@@ -47,6 +54,7 @@ static const uint8_t POWER_TOKEN[4] = {0x5A, 0xC3, 0x11, 0xE7};
 
 static const struct gpio_dt_spec comm_rail = GPIO_DT_SPEC_GET(DT_ALIAS(commrail), gpios);
 static csp_iface_t *can_iface;
+static int64_t comm_off_since;      /* uptime ms when the rail went off, 0 when powered */
 
 static void set_rail(uint8_t rail, uint8_t state, const char *why)
 {
@@ -55,6 +63,7 @@ static void set_rail(uint8_t rail, uint8_t state, const char *why)
 		return;
 	}
 	gpio_pin_set_dt(&comm_rail, state ? 1 : 0);
+	comm_off_since = state ? 0 : k_uptime_get();
 	printk("EPS: COMM rail %s (%s)\n", state ? "ON" : "OFF", why);
 }
 
@@ -81,6 +90,19 @@ static void handle_power_command(const uint8_t *data, size_t len, uint16_t src)
 #endif
 
 	set_rail(data[1], data[2], "commanded");
+}
+
+static void fdir_task(void *a, void *b, void *c)
+{
+	ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
+
+	while (1) {
+		k_sleep(K_MSEC(500));
+		if (comm_off_since != 0 &&
+		    (k_uptime_get() - comm_off_since) >= FDIR_RESTORE_MS) {
+			set_rail(RAIL_COMM, 1, "FDIR restore");
+		}
+	}
 }
 
 static void router_task(void *a, void *b, void *c)
@@ -125,6 +147,7 @@ static void app_task(void *a, void *b, void *c)
 
 K_THREAD_DEFINE(router_id, ROUTER_STACK, router_task, NULL, NULL, NULL, 0, 0, K_TICKS_FOREVER);
 K_THREAD_DEFINE(app_id, APP_STACK, app_task, NULL, NULL, NULL, 1, 0, K_TICKS_FOREVER);
+K_THREAD_DEFINE(fdir_id, FDIR_STACK, fdir_task, NULL, NULL, NULL, 2, 0, K_TICKS_FOREVER);
 
 int main(void)
 {
@@ -164,6 +187,8 @@ int main(void)
 	can_iface->is_default = 1;
 
 	k_thread_start(app_id);
-	printk("CUBERANGE: EPS ready\n");
+	k_thread_start(fdir_id);
+	printk("CUBERANGE: EPS ready (FDIR restores the COMM rail after %d ms)\n",
+	       FDIR_RESTORE_MS);
 	return 0;
 }

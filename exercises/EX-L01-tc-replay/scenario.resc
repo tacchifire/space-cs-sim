@@ -1,0 +1,54 @@
+:name: EX-L01 - telecommand replay
+:description: COMM, OBC and EPS with a hardened EPS; the attacker sits on the space link, not the bus
+
+$comm?=@/tmp/cuberange/build-comm/zephyr/zephyr.elf
+$obc?=@/tmp/cuberange/build-obc/zephyr/zephyr.elf
+$eps?=@/tmp/cuberange/build-eps-hard/zephyr/zephyr.elf
+$commuart?=@/tmp/cuberange/comm.uart
+$obcuart?=@/tmp/cuberange/obc.uart
+$epsuart?=@/tmp/cuberange/eps.uart
+$linkport?=3777
+$injport?=3779
+$repo?=@/home/ubuntu/workspace/space-cs-sim
+
+emulation CreateCANHub "canHub"
+
+mach create "COMM"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $comm
+sysbus.usart3 CreateFileBackend $commuart true
+emulation CreateServerSocketTerminal $linkport "spacelink" false
+connector Connect sysbus.usart2 spacelink
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "OBC"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $obc
+sysbus.usart3 CreateFileBackend $obcuart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "EPS"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $eps
+sysbus.usart3 CreateFileBackend $epsuart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+# The attacker: a bare machine with no platform, no ELF and no CPU. It exists only so the CAN hub
+# can resolve GetName()/GetMachine() on the injector - an ICAN attached to a hub must be a
+# registered machine peripheral, or the exception poisons the hub for every node on it.
+mach create "attacker"
+include @/home/ubuntu/workspace/space-cs-sim/attacker/TcpCanInjector.cs
+machine CreateTcpCanInjector "inj" $injport
+connector Connect inj canHub
+
+emulation SetGlobalQuantum "0.002"
+emulation SetGlobalAdvanceImmediately true

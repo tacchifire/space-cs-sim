@@ -13,6 +13,10 @@ GROUND_SOURCE_ID = 0x0042
 OBC_APID = 0x0A9
 PUS_TM_TIME_LEN = 4
 
+SERVICE_FUNCTION = 8
+SUBTYPE_PERFORM = 1
+FUNC_SET_COMM_RAIL = 1
+
 
 class GroundStation:
     def __init__(self, link: SpaceLink):
@@ -28,6 +32,22 @@ class GroundStation:
     def send_connection_test(self) -> int:
         tc = PusTc(service=SERVICE_TEST, subtype=SUBTYPE_CONNECTION_TEST,
                    source_id=GROUND_SOURCE_ID)
+        seq = self._next_seq()
+        packet = SpacePacket(apid=OBC_APID, ptype=PacketType.TC, sec_hdr=True,
+                             seq_count=seq, data=tc.encode())
+        self.link.send_frame(encode_tc_frame(packet.encode(), seq & 0xFF))
+        return seq
+
+    def set_comm_rail(self, on: bool) -> int:
+        """PUS 8,1: ask the OBC to switch the COMM power rail.
+
+        The OBC holds the EPS power token, so this is the legitimate operator path to a rail that
+        an attacker on the internal bus can only reach by forging (EX-B01). The frame this puts on
+        the link is the one EX-L01 replays.
+        """
+        app_data = FUNC_SET_COMM_RAIL.to_bytes(2, "big") + bytes([1 if on else 0])
+        tc = PusTc(service=SERVICE_FUNCTION, subtype=SUBTYPE_PERFORM,
+                   source_id=GROUND_SOURCE_ID, app_data=app_data)
         seq = self._next_seq()
         packet = SpacePacket(apid=OBC_APID, ptype=PacketType.TC, sec_hdr=True,
                              seq_count=seq, data=tc.encode())

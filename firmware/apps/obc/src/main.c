@@ -34,6 +34,18 @@
 #define SERVICE_TEST      17
 #define SUBTYPE_TEST      1
 #define SUBTYPE_TEST_REP  2
+#define SERVICE_FUNCTION  8
+#define SUBTYPE_PERFORM   1
+
+/* Function management. Function 1 switches the COMM power rail, which the OBC executes by sending
+ * an authenticated command to the EPS - the OBC is one of the nodes that legitimately holds the
+ * power token. This is the command EX-L01 replays. */
+#define FUNC_SET_COMM_RAIL 1
+#define CSP_PORT_POWER     11
+#define ADDR_EPS           2
+#define PWR_OP_SET_RAIL    1
+#define RAIL_COMM          0
+static const uint8_t POWER_TOKEN[4] = {0x5A, 0xC3, 0x11, 0xE7};
 #define OBC_APID          0x0A9
 #define TIME_LEN          4
 
@@ -92,6 +104,49 @@ static void send_test_report(uint16_t source_id)
 	printk("OBC: PUS 17,2 report sent to COMM (counter %u)\n", counter);
 }
 
+/* Ask the EPS to switch the COMM rail, with the token the mitigated EPS requires. */
+static void command_comm_rail(uint8_t state)
+{
+	uint8_t body[7] = {PWR_OP_SET_RAIL, RAIL_COMM, state, 0, 0, 0, 0};
+
+	memcpy(&body[3], POWER_TOKEN, sizeof(POWER_TOKEN));
+
+	csp_packet_t *packet = csp_buffer_get(sizeof(body));
+
+	if (packet == NULL) {
+		printk("OBC: no CSP buffer for a rail command\n");
+		return;
+	}
+	memcpy(packet->data, body, sizeof(body));
+	packet->length = (uint16_t)sizeof(body);
+
+	csp_conn_t *conn = csp_connect(CSP_PRIO_NORM, ADDR_EPS, CSP_PORT_POWER, 1000, CSP_O_NONE);
+
+	if (conn == NULL) {
+		printk("OBC: no CSP connection to EPS\n");
+		csp_buffer_free(packet);
+		return;
+	}
+	csp_send(conn, packet);
+	csp_close(conn);
+	printk("OBC: PUS 8 executed - COMM rail %s\n", state ? "ON" : "OFF");
+}
+
+static void handle_function(const uint8_t *app_data, size_t len)
+{
+	if (len < 3) {
+		printk("OBC: PUS 8 argument block too short (%u octets)\n", (unsigned int)len);
+		return;
+	}
+	uint16_t function_id = (uint16_t)((app_data[0] << 8) | app_data[1]);
+
+	if (function_id == FUNC_SET_COMM_RAIL) {
+		command_comm_rail(app_data[2]);
+	} else {
+		printk("OBC: unknown function %u\n", function_id);
+	}
+}
+
 static void handle_space_packet(const uint8_t *raw, size_t len)
 {
 	if (len < SP_HEADER_LEN + PUS_TC_SEC_LEN) {
@@ -116,6 +171,8 @@ static void handle_space_packet(const uint8_t *raw, size_t len)
 
 	if (service == SERVICE_TEST && subtype == SUBTYPE_TEST) {
 		send_test_report(source_id);
+	} else if (service == SERVICE_FUNCTION && subtype == SUBTYPE_PERFORM) {
+		handle_function(sec + PUS_TC_SEC_LEN, len - SP_HEADER_LEN - PUS_TC_SEC_LEN);
 	} else {
 		printk("OBC: service %u,%u is not implemented in P0\n", service, subtype);
 	}

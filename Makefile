@@ -108,6 +108,12 @@ verify:
 	    python3 -m pytest exercises/$(EX)/verify_test.py -v
 
 # Every exercise, both directions. This is the claim the product makes.
-verify-all: firmware-p1
+verify-all: firmware-exl01
 	PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest exercises/*/verify_test.py -v
+
+# EX-L01 adds a replay-hardened COMM alongside the P1 images.
+firmware-exl01: firmware-p1
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-comm-hard firmware/apps/comm -- -DCUBERANGE_COMM_ANTIREPLAY=1
+	@ls -l $(OUT)/build-comm-hard/zephyr/zephyr.elf

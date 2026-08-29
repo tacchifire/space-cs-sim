@@ -31,6 +31,18 @@
 #define CSP_PORT_PUS  10
 #define CAN_BITRATE   1000000
 
+/* Anti-replay on the space link. The TC transfer frame carries an 8-bit sequence number; the
+ * mitigated build accepts a frame only if its sequence is strictly ahead of the last accepted one,
+ * compared as a signed difference so the counter can wrap. The vulnerable build accepts anything,
+ * which is what makes a captured frame reusable forever.
+ *
+ * This is deliberately the weakest useful control: it stops a straight replay and nothing else. It
+ * does not authenticate the sender, and an attacker who can suppress the real uplink can still run
+ * ahead of the counter. EX-L01's mitigation notes say so. */
+#ifndef CUBERANGE_COMM_ANTIREPLAY
+#define CUBERANGE_COMM_ANTIREPLAY 0
+#endif
+
 #define RX_RING_SIZE  512
 #define ROUTER_STACK  1024
 #define LINK_STACK    2048
@@ -80,6 +92,23 @@ static void on_tc_frame(const uint8_t *frame, size_t len, void *ctx)
 		printk("COMM: dropping a TC frame that failed its FECF or length check\n");
 		return;
 	}
+#if CUBERANGE_COMM_ANTIREPLAY
+	static int have_last;
+	static uint8_t last_seq;
+
+	if (have_last) {
+		int8_t ahead = (int8_t)(seq - last_seq);
+
+		if (ahead <= 0) {
+			printk("COMM: REJECTED replayed frame seq=%u (last accepted %u)\n",
+			       seq, last_seq);
+			return;
+		}
+	}
+	have_last = 1;
+	last_seq = seq;
+#endif
+
 	printk("COMM: uplink frame seq=%u carrying %u octets -> OBC\n",
 	       seq, (unsigned int)packet_len);
 
