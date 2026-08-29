@@ -7,11 +7,11 @@ attacks you can actually land, and mitigations proven to stop them.
 It is the space analogue of Toyota's [RAMN](https://github.com/ToyotaInfoTech/RAMN) board, which
 made automotive security learnable by putting four MCUs and a CAN bus on one PCB.
 
-**Status: P0.** A ground station sends a real ECSS PUS 17,1 and gets a real 17,2 back, through
-CCSDS framing, an emulated UART link, and CSP over CAN between two emulated STM32H753 nodes. No
-exercises yet — see [the design](docs/superpowers/specs/2026-08-28-cuberange-design.md) for where
-this is going and [the plan](docs/superpowers/plans/2026-08-29-cuberange-p0.md) for how P0 was
-built.
+**Status: P0 done, first exercise landed.** A ground station sends a real ECSS PUS 17,1 and gets a
+real 17,2 back through CCSDS framing, an emulated UART link, and CSP over CAN between emulated
+STM32H753 nodes. **EX-B01** is playable: an attacker with nothing but bus access silences the
+satellite, and the mitigation is proven to stop it without breaking the feature. See
+[the design](docs/superpowers/specs/2026-08-28-cuberange-design.md) for where this is going.
 
 ```
 $ make demo-p0
@@ -58,6 +58,8 @@ make demo-p0
 | `make demo-p0` | Runs the PUS round trip and asserts it |
 | `make demo` | The R0 smoke test: two nodes exchanging CSP pings over CAN |
 | `make spike` | Injects raw CAN frames from Python with no privileges, and drives virtual time over Renode's External Control API |
+| `make verify EX=EX-B01-eps-killswitch` | The first exercise: attack lands, mitigation blocks, feature survives |
+| `make soak-p0` | Thirty consecutive round trips under a watchdog |
 | `make check` | All of the above plus the codec suites |
 
 ## How it fits together

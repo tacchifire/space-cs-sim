@@ -106,6 +106,8 @@ TrustZone を失うため、セキュアブートは TF-M ではなく MCUboot �
 | D17 | `MPU_CTRL.PRIVDEFENA=0` が特権アクセスで無視される（実機なら MemManage） | 「領域未定義＝拒否」に依存できない | 明示的に定義した領域のみに依存する |
 | D18 | Renode の CANHub はバス ACK を模擬しない | **CAN エラーフレーム／bus-off の演習は成立しない** | 作らない（§7.5 で明示） |
 | D19 | `machine Reset` は RAM をゼロ化しない。清浄状態は `LoadELF` と Zephyr の `.bss` ゼロ化に由来 | 古いヒープが電源断を生き延びる | 復電手順に `LoadELF` を必ず含める |
+| D20 | `CANMessageFrame(id, data)` の 2 引数版は**標準 11 bit フレーム**を作る | 拡張 ID でフィルタしている受信側が黙って落とす。フレームの中身は完全に正しいまま届かない | `extendedFormat: true` を明示する |
+| D21 | libcsp は `csp_conf.version` の既定が **2** で、ヘッダと CFP の配置を**実行時**に選ぶ | 「CSP v1 を使う」は firmware で設定しない限り真にならない。全ノードが v2 同士なら健全に見え、v1 のツールだけが無言で無視される | `csp_init()` の前に `csp_conf.version = 1` を明示 |
 
 いずれも `probe.sh` の否定アサーションとして固定し、将来の Renode が直したら CI が気付く。
 
@@ -793,7 +795,7 @@ CI で SBOM を生成しライセンス逸脱を検出する。
 | --- | --- | --- | --- |
 | **R0 リスク退治** | **完了**。Renode 1.16.1 / Zephyr v4.1.0 / SDK v1.0.1 / libcsp v2.1 を固定。自前ビルドの 2 ノードが CSP over CAN で ping 往復（1〜2 ms）。ホストからの生 CAN 注入と External Control による仮想時間制御・メモリ読みも実証 | `make toolchain` → `make firmware` → `make demo` が PASS。`make probe` 34 PASS / 0 FAIL | 実績 1 日 |
 | **P0 最初のデモ** | **完了**。`make demo-p0` が実 PUS 17,1 → COMM → libcsp/CAN → OBC → 17,2 → 地上局 の往復を assert。`make soak-p0` が **30/30 連続成功、インフラ再試行 0、失敗 0**（3分24秒）。特権も GUI も不要 | `make check` 緑 + ソーク 30/30 | 実績 1 日 |
-| **P1 セキュリティ縦切り 1 本** | EPS と attacker を追加し **EX-B01 のみ**。脆弱版で TM が意図した理由で止まることを証明。対策版で拒否され、**かつ正規の認証済み EPS コマンドは通る**ことを証明。電力はスカラーモデル | 双方向 CI で緑 | +28〜42 日 |
+| **P1 セキュリティ縦切り 1 本** | **EX-B01 完了**。攻撃者が偽造 CSP フレームで EPS に COMM の電源を切らせ、衛星が沈黙することを実証。対策版は拒否し、かつ**正規の認証済みコマンドは通る**。両 EPS ビルドの Zephyr `.config` は diff で同一 | `make verify EX=EX-B01-eps-killswitch` が 3/3 | 実績 1 日 |
 | **P2 2 本目 + GUI** | EX-L01（固定パス窓でのリプレイと対策）。ブラウザ GUI（§4.4） | 同上 | +18〜28 日 |
 | **P3 リリース硬化** | 失敗時の成果物、決定的シード、ウォッチドッグ、キャッシュ、文書、SBOM、性能予算 | §12 の文書一式 | +15〜25 日 |
 
