@@ -83,3 +83,9 @@ check: probe
 	PYTHONPATH=src python3 -m pytest tests/pytest -q
 	$(MAKE) -C tests/native test
 	$(MAKE) demo-p0
+
+# P0's last acceptance condition: thirty round trips in a row. Slow (~10 min) and excluded from
+# `make check`, because a soak belongs on a schedule rather than in the edit loop.
+soak-p0: firmware-p0
+	PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
+	    python3 -m pytest tests/e2e/test_p0_soak.py -v -s
