@@ -1,0 +1,26 @@
+/*
+ * CubeRange EPS: one load switch per power rail, exposed as named GPIOs.
+ *
+ * Port D is chosen deliberately. stm32h743.repl gives gpioPortB
+ *   invertedAFPins: [[0, 1, 3], [1, 1, 3], [6, 1], [7, 1], [13, 1], [14, 1, 3], [15, 1, 3]]
+ * so PB0 - the board's GreenLED, and the obvious first pick - reads inverted relative to ODR once
+ * an alternate function is configured. gpioPortD carries no invertedAFPins entry, so a host
+ * process reading its ODR sees exactly what the firmware wrote. Do not move a rail onto port B
+ * without measuring the polarity first.
+ *
+ * The gpio-leds binding is a convenience: it gives each rail a devicetree alias and makes the pin
+ * observable from Renode as a named LED as well as through the port's ODR.
+ */
+/ {
+	cuberange_rails {
+		compatible = "gpio-leds";
+		comm_rail: comm_rail {
+			gpios = <&gpiod 5 GPIO_ACTIVE_HIGH>;
+			label = "COMM power rail";
+		};
+	};
+
+	aliases {
+		commrail = &comm_rail;
+	};
+};

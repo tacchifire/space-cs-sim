@@ -89,3 +89,12 @@ check: probe
 soak-p0: firmware-p0
 	PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest tests/e2e/test_p0_soak.py -v -s
+
+# EX-B01 images: EPS in both profiles plus the P0 pair. The two EPS builds differ by exactly one
+# CMake cache variable, and a CI gate diffs their CONFIG_* symbol dumps to prove nothing else moved.
+firmware-p1: firmware-p0
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-eps-vuln firmware/apps/eps -- -DCUBERANGE_EPS_REQUIRE_AUTH=0
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-eps-hard firmware/apps/eps -- -DCUBERANGE_EPS_REQUIRE_AUTH=1
+	@ls -l $(OUT)/build-eps-vuln/zephyr/zephyr.elf $(OUT)/build-eps-hard/zephyr/zephyr.elf
