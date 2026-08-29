@@ -27,6 +27,21 @@ from pathlib import Path
 from typing import Iterator, Optional, Sequence
 
 
+# Defaults, overridable from the environment so a smaller host is retuned in one place instead of
+# at every call site. The ceiling has to sit well above the working set - 503 MB peak was measured
+# for 4 nodes, ~107 MB more per additional node - and well below the point where the host starts
+# swapping, because a leaking Renode reaches 3.7 GB in 100 s and detection plus the kill sequence
+# can overshoot the ceiling by ~220 MB. On a 4 GB board use CUBERANGE_RSS_CEILING_MB=1024 and
+# CUBERANGE_SUPERVISOR_POLL_S=0.25; below 4 GB there is no ceiling that both fits and avoids false
+# positives, so do not run the 4-node scenarios there.
+#
+# The timeout is wall clock, and Renode's speed is bounded by one host thread. A slower board needs
+# a longer budget or a legitimately slow run gets classified as the hang and retried.
+DEFAULT_TIMEOUT_S = float(os.environ.get("CUBERANGE_SUPERVISOR_TIMEOUT_S", "180"))
+DEFAULT_RSS_CEILING_MB = float(os.environ.get("CUBERANGE_RSS_CEILING_MB", "2048"))
+DEFAULT_POLL_S = float(os.environ.get("CUBERANGE_SUPERVISOR_POLL_S", "0.5"))
+
+
 class Outcome(str, Enum):
     OK = "ok"                       # exited on its own, or was stopped by us after the work finished
     TIMEOUT = "timeout"             # exceeded the wall-clock budget - retryable
@@ -80,8 +95,9 @@ def _rss_mb(pid: int) -> float:
 
 
 class RenodeSupervisor:
-    def __init__(self, cwd: Path, timeout_s: float = 180.0,
-                 rss_ceiling_mb: float = 2048.0, poll_s: float = 0.5):
+    def __init__(self, cwd: Path, timeout_s: float = DEFAULT_TIMEOUT_S,
+                 rss_ceiling_mb: float = DEFAULT_RSS_CEILING_MB,
+                 poll_s: float = DEFAULT_POLL_S):
         self.cwd = Path(cwd)
         self.timeout_s = timeout_s
         self.rss_ceiling_mb = rss_ceiling_mb

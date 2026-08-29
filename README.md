@@ -37,10 +37,27 @@ than scripted.
 
 Needs Linux (WSL2 is fine), Python ≥ 3.10, ~8 GB of disk. No root, no Docker.
 
+On a minimal image, install these first. `bc` is not optional — the probe's arithmetic is six
+calls to it. `libicu` and OpenSSL 3 are dlopened by Renode's bundled .NET at startup, and a C
+compiler is needed because `make check` compiles the shared codec and because `crcmod` ships no
+wheels for any architecture.
+
+```bash
+sudo apt install -y bc build-essential python3-dev libicu-dev libssl3
+pip install -r requirements.txt
+```
+
+GTK is *not* needed: every invocation here passes `--disable-xwt`, so Renode never builds a UI.
+
 ```bash
 # 1. Renode 1.16.1 portable, extracted to ~/tools/renode_1.16.1-dotnet_portable
+#    Both architectures unpack to that same directory name.
+case "$(uname -m)" in
+  x86_64)  RENODE_ASSET=renode-1.16.1.linux-portable-dotnet.tar.gz ;;
+  aarch64) RENODE_ASSET=renode-1.16.1.linux-arm64-portable-dotnet.tar.gz ;;
+esac
 curl -L -o /tmp/renode.tar.gz \
-  https://github.com/renode/renode/releases/download/v1.16.1/renode-1.16.1.linux-portable-dotnet.tar.gz
+  "https://github.com/renode/renode/releases/download/v1.16.1/$RENODE_ASSET"
 mkdir -p ~/tools && tar xzf /tmp/renode.tar.gz -C ~/tools
 
 # 2. Zephyr v4.1.0 + SDK (see tools/setup-toolchain.sh for why these exact versions)

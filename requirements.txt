@@ -1,0 +1,13 @@
+# Host-side Python for the ground station, the codecs and the test suite.
+#
+# spacepackets and crcmod are the independent oracles. The codec tests check our CCSDS and CRC
+# implementations against them precisely so that two of our own implementations agreeing does not
+# count as evidence. They are guarded by pytest.importorskip, so if they are missing the
+# conformance layer vanishes silently and the run still reports success - `make check` asserts
+# they are importable for that reason.
+#
+# Unpinned deliberately: an oracle is only an oracle if it moves independently of us. Pinning it
+# would freeze the thing we are checking against.
+pytest
+spacepackets
+crcmod

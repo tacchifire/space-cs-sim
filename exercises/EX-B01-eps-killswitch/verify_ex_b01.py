@@ -34,7 +34,9 @@ SCENARIO = Path(__file__).resolve().parent / "scenario.resc"
 INJECTOR = REPO / "attacker" / "TcpCanInjector.cs"
 
 LINK_PORT, MONITOR_PORT, INJ_PORT = 3777, 3778, 3779
-BOOT_SETTLE_S = 4.0
+# Upper bound on how long the nodes may take to come up, not a fixed wait - the code waits for
+# EPS's own readiness line and only uses this to give up. Raise it on a slow host.
+BOOT_TIMEOUT_S = float(os.environ.get("CUBERANGE_BOOT_TIMEOUT_S", "30"))
 POWER_TOKEN = bytes([0x5A, 0xC3, 0x11, 0xE7])
 CSP_PORT_POWER = 11
 
@@ -82,7 +84,18 @@ class Range:
         self.station = GroundStation(self.link)
         self.mon = Monitor(port=MONITOR_PORT).connect()
         self.power = PowerDomain(self.mon, comm_elf=str(OUT / "build-comm/zephyr/zephyr.elf"))
-        time.sleep(BOOT_SETTLE_S)
+        # Wait for EPS to announce itself instead of sleeping a fixed interval. The power commands
+        # this exercise sends - legitimate and forged alike - go to EPS and are transmitted once
+        # with no retry, so one sent before EPS's CAN interface is up is silently dropped and the
+        # rail simply never moves. A fixed sleep gets worse on a slower host, not better.
+        #
+        # Tear down explicitly on failure: __exit__ is not called when __enter__ raises, so a bare
+        # assert here would leave a supervised Renode running and holding its ports.
+        if not self.wait_console("eps.uart", "EPS listening", seconds=BOOT_TIMEOUT_S):
+            console = self.console("eps.uart")
+            self.__exit__(None, None, None)
+            raise AssertionError(
+                f"EPS never reported ready within {BOOT_TIMEOUT_S}s:\n{console}")
         self.power.poll()          # latch the initial rail state
         return self
 
@@ -91,6 +104,15 @@ class Range:
             if closer is not None:
                 closer.close()
         self._ctx.__exit__(*exc)
+
+    def wait_console(self, name: str, needle: str, seconds: float) -> bool:
+        """Poll a node's console until it prints `needle`."""
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if needle in self.console(name):
+                return True
+            time.sleep(0.2)
+        return False
 
     def alive(self, timeout: float = 8.0) -> bool:
         return self.station.ping(timeout=timeout) is not None

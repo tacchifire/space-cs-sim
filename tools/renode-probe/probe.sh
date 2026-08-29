@@ -28,8 +28,20 @@ RENODE="$RENODE_DIR/renode"
 OUT="${OUT:-${TMPDIR:-/tmp}/cuberange-probe.$$}"
 
 # Pinned Renode. The design fixes a released version for reproducibility; master is not supported.
+#
+# The build string is <commit>-<build timestamp>, and Antmicro builds the two architectures as
+# separate jobs in one release run, ten minutes apart: both artifacts of v1.16.1 come from commit
+# d66b0c2a, but x86-64 is stamped 09:23 and arm64 09:33. So the pin has to be per-architecture.
+# Do NOT relax this to match only the commit prefix - the timestamp is the only thing that
+# distinguishes the two artifacts, and it is what proves the right one is installed.
 EXPECT_RENODE_VERSION="1.16.1"
-EXPECT_RENODE_BUILD="d66b0c2a-202602160923"
+case "$(uname -m)" in
+  # aarch64 value read from the released asset's embedded version resource, not yet confirmed by
+  # running `renode --version` on an arm64 host. If it is wrong this probe fails loudly, which is
+  # the correct outcome - correct it against the observed string and say so in the commit.
+  aarch64) EXPECT_RENODE_BUILD="d66b0c2a-202602160933" ;;
+  *)       EXPECT_RENODE_BUILD="d66b0c2a-202602160923" ;;
+esac
 
 BOARD="@platforms/boards/nucleo_h753zi.repl"
 
@@ -54,7 +66,13 @@ esac
 # NOTE: the design's earlier 0.19-0.30x figure was an artifact of Renode's defaults - a 100 us
 # global quantum and a real-time throttle that caps the emulation at exactly 1.0x. Both are
 # disabled below. Do not "fix" a slow measurement by lowering this floor; check the tuning first.
-PERF_FLOOR="1.5"
+#
+# The floor is host-dependent and the default is an x86-64 workstation number. Renode pins one
+# thread per machine, so a slower single core moves this directly: on a Raspberry Pi expect it to
+# fail for host reasons rather than regression. Override with PERF_FLOOR=<n> to get a run through,
+# then set the default from an actual measurement and record the host it came from. The rule stands
+# either way - do not lower the floor to make a slow number pass without measuring first.
+PERF_FLOOR="${PERF_FLOOR:-1.5}"
 PERF_QUANTUM="0.002"
 
 PASS_N=0; FAIL_N=0; SKIP_N=0
@@ -122,6 +140,24 @@ else
   fail "Renode build pin" "expected build $EXPECT_RENODE_BUILD"
 fi
 echo "      output dir: $OUT"
+
+if [ "$MODE" = offline ]; then
+  # Renode caches downloaded artifacts and reuses them without going to the network, so an offline
+  # run works as long as the cache is warm. Be precise about what this does: it does NOT isolate
+  # the network or verify that nothing is fetched. All it does is refuse to start when the cache
+  # is empty, which is exactly the case where the five ELF-loading probes would otherwise try to
+  # download and fail late with a confusing error.
+  #
+  # It previously did nothing at all - the option was parsed and the value never read again, so
+  # --offline ran the full online probe and reported success.
+  CACHE="${XDG_CONFIG_HOME:-$HOME/.config}/renode/cached_binaries"
+  if [ -z "$(ls -A "$CACHE" 2>/dev/null)" ]; then
+    echo "offline mode: Renode's artifact cache at $CACHE is empty." >&2
+    echo "Run '$0 --fetch-only' once while online, then retry." >&2
+    exit 2
+  fi
+  echo "      offline mode: reusing Renode's artifact cache at $CACHE"
+fi
 
 if [ "$MODE" = fetch ]; then
   head1 "Fetch stage only"

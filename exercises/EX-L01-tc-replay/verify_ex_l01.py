@@ -38,10 +38,17 @@ INJECTOR = REPO / "attacker" / "TcpCanInjector.cs"
 SAT_LINK_PORT = 3777      # Renode's socket terminal on COMM.usart2
 GS_LINK_PORT = 3877       # what the ground station connects to, via the channel
 MONITOR_PORT = 3778
-BOOT_SETTLE_S = 4.0
+# Upper bound on how long the nodes may take to come up, not a fixed wait - the code waits for
+# EPS's own readiness line and only uses this to give up. Raise it on a slow host.
+BOOT_TIMEOUT_S = float(os.environ.get("CUBERANGE_BOOT_TIMEOUT_S", "30"))
 
-# The EPS restores the rail 30 s after it goes off; allow for emulation running at ~2.3x.
-FDIR_WAIT_S = 45.0
+# The EPS restores the rail 30 virtual seconds after it goes off. This budget is WALL CLOCK,
+# so it has to cover 30 virtual seconds at whatever speed the host actually emulates:
+#   x86-64 at 2.34x -> ~13 s (45 s is generous)
+#   Pi 5   at ~0.75x -> ~40 s (45 s is uncomfortably close)
+#   Pi 4   at ~0.30x -> ~100 s (45 s FAILS)
+# Measure the ratio with `make probe` and set this to roughly 30/ratio, plus margin.
+FDIR_WAIT_S = float(os.environ.get("CUBERANGE_FDIR_WAIT_S", "45"))
 
 
 class Range:
@@ -69,7 +76,22 @@ class Range:
         self.station = GroundStation(self.link)
         self.mon = Monitor(port=MONITOR_PORT).connect()
         self.power = PowerDomain(self.mon, comm_elf=str(self.comm_elf))
-        time.sleep(BOOT_SETTLE_S)
+        # Wait for EPS to say it is listening, rather than sleeping a fixed interval and hoping.
+        #
+        # The commands this exercise sends go to EPS on CSP port 11 and are transmitted once, with
+        # no retry. One sent before EPS's CAN interface is up is simply dropped, and wait_rail then
+        # polls a rail that is never going to change - which is how this showed up: an intermittent
+        # failure of the FIRST assertion, with an eps.uart log that ends at "EPS listening" and a
+        # rail that never moved. alive() does not cover it, because it pings OBC through COMM and
+        # says nothing about EPS. A fixed sleep also gets worse on a slower host, not better.
+        #
+        # Tear down explicitly if this fails: __exit__ is not called when __enter__ raises, so a
+        # bare assert here would leave a supervised Renode running and its ports held.
+        if not self.wait_console("eps.uart", "EPS listening", seconds=BOOT_TIMEOUT_S):
+            console = self.console("eps.uart")
+            self.__exit__(None, None, None)
+            raise AssertionError(
+                f"EPS never reported ready within {BOOT_TIMEOUT_S}s:\n{console}")
         self.power.poll()
         return self
 
@@ -82,6 +104,15 @@ class Range:
 
     def alive(self, timeout: float = 8.0) -> bool:
         return self.station.ping(timeout=timeout) is not None
+
+    def wait_console(self, name: str, needle: str, seconds: float) -> bool:
+        """Poll a node's console until it prints `needle`."""
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if needle in self.console(name):
+                return True
+            time.sleep(0.2)
+        return False
 
     def wait_rail(self, want: bool, seconds: float):
         """Poll until the rail reaches `want`, applying power changes as they happen."""

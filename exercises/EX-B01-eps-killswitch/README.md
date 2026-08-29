@@ -5,8 +5,9 @@ layer: internal bus
 difficulty: introductory
 duration: 30-45 min
 ttp:
-  # Filled from the official STIX exports by tools/ttp_map.py, which fails CI on an ID that does
-  # not exist. Deliberately empty rather than guessed.
+  # Deliberately empty. Mapping these to SPARTA and SPACE-SHIELD means checking each ID against
+  # the official STIX exports, and there is no tool here that does it - so a filled-in list would
+  # be a guess wearing a citation. Leave them empty until something verifies them.
   sparta: []
   space_shield: []
 ---

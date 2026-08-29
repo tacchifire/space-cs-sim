@@ -5,7 +5,6 @@ independent process talking over TCP and the exchange is millisecond-scale. Exer
 determinism use the CI profile instead - see the design's execution-profile section.
 """
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -18,13 +17,16 @@ sys.path.insert(0, str(REPO / "src"))
 from cuberange.gs.link import SpaceLink          # noqa: E402
 from cuberange.gs.station import GroundStation   # noqa: E402
 from cuberange.proto.pus import SERVICE_TEST, SUBTYPE_CONNECTION_TEST_REPORT  # noqa: E402
+from cuberange.renode.supervisor import Outcome, RenodeSupervisor  # noqa: E402
 
 RENODE_DIR = Path(os.environ.get(
     "RENODE_DIR", Path.home() / "tools" / "renode_1.16.1-dotnet_portable"))
 OUT = Path(os.environ.get("OUT", "/tmp/cuberange"))
 LINK_PORT = 3777
 MONITOR_PORT = 3778
-BOOT_SETTLE_S = 3.0
+# Upper bound on how long the two nodes may take to come up, not a fixed wait - the code waits
+# for their own readiness lines and only uses this to give up. Raise it on a slow host.
+BOOT_TIMEOUT_S = float(os.environ.get("CUBERANGE_BOOT_TIMEOUT_S", "30"))
 
 
 def _dump_consoles():
@@ -38,6 +40,30 @@ def _dump_consoles():
             print("(missing)")
 
 
+def _wait_ready(timeout: float = BOOT_TIMEOUT_S) -> None:
+    """Block until COMM and OBC have both announced themselves on their consoles.
+
+    This replaced a fixed sleep. GroundStation.ping sends its request once and then only listens,
+    so a request issued before both CAN interfaces are up is dropped and the whole timeout is spent
+    waiting for an answer to a question nobody heard. Waiting on the nodes' own readiness lines is
+    both faster on a quick host and correct on a slow one.
+    """
+    deadline = time.time() + timeout
+    want = {"comm.uart": "COMM ready", "obc.uart": "OBC ready"}
+    while time.time() < deadline:
+        seen = {}
+        for name, needle in want.items():
+            path = OUT / name
+            seen[name] = path.exists() and needle in path.read_text(errors="replace")
+        if all(seen.values()):
+            return
+        time.sleep(0.2)
+    missing = [n for n, needle in want.items()
+               if not ((OUT / n).exists() and needle in (OUT / n).read_text(errors="replace"))]
+    _dump_consoles()
+    raise AssertionError(f"nodes never reported ready within {timeout}s: {missing}")
+
+
 @pytest.fixture
 def renode():
     OUT.mkdir(parents=True, exist_ok=True)
@@ -48,26 +74,32 @@ def renode():
     for name in ("comm.uart", "obc.uart"):
         (OUT / name).unlink(missing_ok=True)
 
-    proc = subprocess.Popen(
+    # Supervised, like every other launch. This is the first thing most people run, and for a
+    # while it was the one path with no watchdog and no memory ceiling - which is backwards, since
+    # a hung Renode here leaks 3.7 GB in 100 s and on a small board that is an OOM kill rather
+    # than a slow test.
+    sup = RenodeSupervisor(cwd=RENODE_DIR)
+    with sup.launch(
         ["./renode", "--disable-xwt", "--plain", "--hide-analyzers", "--hide-log",
          "--port", str(MONITOR_PORT),
          "-e", f"include @{REPO}/scripts/multi-node/p0.resc",
          "-e", "start"],
-        cwd=RENODE_DIR, stdout=open(OUT / "p0-renode.log", "w"),
-        stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
-    yield proc
-    try:
-        os.killpg(os.getpgid(proc.pid), 15)
-    except OSError:
-        pass
-    proc.wait(timeout=10)
+        OUT / "p0-renode.log",
+    ) as run:
+        yield run
+        result = run.result()
+
+    if result.outcome in (Outcome.TIMEOUT, Outcome.RSS_EXCEEDED):
+        pytest.skip(f"Renode {result.outcome.value} after {result.wall_s:.0f}s "
+                    f"(peak RSS {result.peak_rss_mb:.0f} MB) - retryable infrastructure failure, "
+                    f"see {result.log_path}")
 
 
 def test_pus17_round_trip(renode):
     link = SpaceLink(port=LINK_PORT)
     link.connect()
     try:
-        time.sleep(BOOT_SETTLE_S)      # both nodes must have their CAN interfaces up
+        _wait_ready()
         station = GroundStation(link)
         report = station.ping(timeout=20)
         if report is None:
@@ -89,7 +121,7 @@ def test_link_carries_no_console_output(renode):
     link = SpaceLink(port=LINK_PORT)
     link.connect()
     try:
-        time.sleep(BOOT_SETTLE_S)
+        _wait_ready()
         link.poll()      # drain whatever the firmware volunteered
         assert b"Booting Zephyr" not in bytes(link.raw_rx), (
             f"console output leaked onto the link: {bytes(link.raw_rx)[:120]!r}")

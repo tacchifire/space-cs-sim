@@ -84,6 +84,12 @@ demo-p0: firmware-p0
 # make returned non-zero correctly, but a human skimming for "passed" saw only the parts that had.
 # If you do not see CHECK PASSED on the last line, it did not pass.
 check: probe
+	@# The oracle tests are guarded by pytest.importorskip, so a missing spacepackets or crcmod
+	@# removes the entire conformance layer and the run still ends in CHECK PASSED. A gate that
+	@# silently drops its own evidence is not a gate - so require them here.
+	@python3 -c "import spacepackets, crcmod" 2>/dev/null || { \
+	    echo "the independent oracles are missing - pip install -r requirements.txt"; \
+	    echo "(without them the CCSDS and CRC conformance tests skip silently)"; exit 1; }
 	PYTHONPATH=src python3 -m pytest tests/pytest -q
 	$(MAKE) -C tests/native test
 	$(MAKE) demo-p0
