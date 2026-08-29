@@ -15,6 +15,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/sys/printk.h>
+#include <zephyr/drivers/uart.h>
 
 #include <csp/csp.h>
 #include <csp/drivers/can_zephyr.h>
@@ -114,6 +115,25 @@ int main(void)
 	       CUBERANGE_NODE_ADDR, can_dev->name);
 
 	k_thread_start(server_id);
+
+	/* The space link lives on its own UART (see boards/nucleo_h753zi.overlay). Writing a marker
+	 * here proves the console and the link are genuinely separate streams - the marker must
+	 * appear on the link and NOWHERE on the console. */
+#if DT_NODE_HAS_STATUS(DT_ALIAS(spacelink), okay)
+	const struct device *link = DEVICE_DT_GET(DT_ALIAS(spacelink));
+	if (device_is_ready(link)) {
+		const char *marker = "CUBERANGE-LINK\r\n";
+		for (const char *p = marker; *p; p++) {
+			uart_poll_out(link, *p);
+		}
+		printk("CUBERANGE: node %d space link up on %s\n",
+		       CUBERANGE_NODE_ADDR, link->name);
+	} else {
+		printk("CUBERANGE: space link device not ready\n");
+	}
+#else
+	printk("CUBERANGE: no spacelink alias in devicetree\n");
+#endif
 
 	if (CUBERANGE_NODE_ADDR != CUBERANGE_CLIENT_ADDR) {
 		/* Server-only node: nothing else to do on this thread. */

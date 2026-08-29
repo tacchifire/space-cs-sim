@@ -1,0 +1,22 @@
+/*
+ * CubeRange: put the space link on usart2, leaving usart3 as Zephyr's console.
+ *
+ * The board's own devicetree sets zephyr,console = &usart3 and zephyr,shell-uart = &usart3.
+ * Sharing that UART with the space link means a ground station connecting to the link socket
+ * receives 9239 bytes of Zephyr boot banner before the first application byte. usart2 is present
+ * on the SoC but `status = "disabled"` in stm32h7.dtsi, so it has to be enabled here.
+ *
+ * Pins are the Nucleo-144 defaults for USART2 on this package: PA2 (TX) / PA3 (RX).
+ */
+&usart2 {
+	pinctrl-0 = <&usart2_tx_pa2 &usart2_rx_pa3>;
+	pinctrl-names = "default";
+	current-speed = <115200>;
+	status = "okay";
+};
+
+/ {
+	aliases {
+		spacelink = &usart2;
+	};
+};
