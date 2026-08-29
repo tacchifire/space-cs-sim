@@ -93,8 +93,21 @@ silently changing behaviour. Two of them cost a day each: a CAN frame that was s
 and invisible because it was sent as a standard rather than an extended ID, and a protocol version
 that libcsp picks at runtime, so "we use CSP v1" was true in the design and false in the firmware.
 
+## Before you use it
+
+This repository contains working attacks against spacecraft protocols. The target is synthetic and
+must stay that way.
+
+| Document | What it settles |
+| --- | --- |
+| [SAFE_USE.md](SAFE_USE.md) | Everything attacked here is emulated. Do not point it at anything real, and do not add real identifiers |
+| [SECURITY.md](SECURITY.md) | Which weaknesses are deliberate, which are worth reporting, and how |
+| [ASSURANCE.md](ASSURANCE.md) | What a result here does and does not support as a claim — read this before citing one |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | The evidence rule, and what an exercise must prove |
+| [docs/legal/export-control.md](docs/legal/export-control.md) | What is known, what is not, and that nothing is claimed |
+
 ## Licence
 
-Apache-2.0. Dependencies are kept permissive on purpose: Renode (MIT), Zephyr (Apache-2.0),
-libcsp (MIT). NASA CryptoLib and NOS3 (NOSA 1.3), Yamcs (AGPL-3.0) and OpenC3 are used — where
-used at all — as external oracles or optional adapters, never vendored.
+Apache-2.0, see [LICENSE](LICENSE). Dependencies are kept permissive on purpose: Renode (MIT),
+Zephyr (Apache-2.0), libcsp (MIT). NASA CryptoLib and NOS3 (NOSA 1.3), Yamcs (AGPL-3.0) and OpenC3
+are used — where used at all — as external oracles or optional adapters, never vendored.
