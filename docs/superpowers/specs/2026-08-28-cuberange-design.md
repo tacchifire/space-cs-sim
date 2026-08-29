@@ -816,7 +816,7 @@ EX-F01/EX-G01（P3 以降）、自前 CSP、自前 Space Packet コーデック�
 | R3 | SocketCAN 経路 | **任意機能に降格**（root + Linux 必須） |
 | R4 | 4 ノードの実行速度 | **解消**。既定値の産物だった。量子 2 ms + AdvanceImmediately で **2.34×**（§3.3） |
 | R5 | `CAN.MCAN` モデルの未実装ビット | **残存**。`fdcan1: Unhandled write to offset 0x1C (NTSEG1/NTSEG2)` を観測。ビットタイミングは無視されるが通信は成立。CAN-FD や高度な機能は未検証 |
-| R6 | Zephyr SDK の導入コスト | **未評価**。R0 で Docker 化して評価。cold-start 時間を計測する |
+| R6 | Zephyr ツールチェーンの導入コスト | **解消**。`tools/setup-toolchain.sh` に固定。**Zephyr v4.1.0**（main は Python 3.12 要求。このホストは 3.10 なので cmake 段階で失敗する。`cmake/modules/python.cmake` の実測: main→3.12 / v4.1.0→3.10 / v3.7.0→3.8）、**SDK v1.0.1 の分割アセット 164 MB**（`west sdk install` は Zephyr の cmake を経由するため同じ Python 制約に当たる。公式 Docker イメージ約 10 GB は不要）。ディスク: workspace 6.8 GB + SDK 829 MB。**自前ビルドが Renode で起動することを実測**（`Hello World! nucleo_h753zi/stm32h753xx`） |
 | R7 | 脆弱版が保護機構で exploit 不能になる | **解消**。ret2win は既定の保護下で成立（§7.3） |
 | R8 | アクチュエータ観測の実用性 | **解消**。GPIO は External Control のコールバック（仮想時刻付き）で取得 |
 | R9 | 5 ノード性能 | **解消**。5 台目は壁時計 +12〜26%、RSS +107 MB。6 ノードでも約 2.5× |
