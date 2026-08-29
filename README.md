@@ -86,8 +86,11 @@ survive contact with Renode — including the MCU choice — and its central per
 out to be wrong by a factor of eight, an artifact of two Renode defaults rather than the workload.
 Section 16 of the design document is the record of every such correction.
 
-Nineteen Renode defects found along the way are pinned as negative assertions, so a future release
-that fixes one makes CI fail rather than silently changing behaviour.
+Twenty-one Renode and library defects found along the way are recorded, and the ones that can be
+asserted are pinned as negative tests, so a future release that fixes one makes CI fail rather than
+silently changing behaviour. Two of them cost a day each: a CAN frame that was structurally perfect
+and invisible because it was sent as a standard rather than an extended ID, and a protocol version
+that libcsp picks at runtime, so "we use CSP v1" was true in the design and false in the firmware.
 
 ## Licence
 
