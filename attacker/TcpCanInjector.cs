@@ -57,8 +57,8 @@ namespace Antmicro.Renode.Peripherals.CAN
                 this.Log(LogLevel.Error, "INJECTOR-TX-DROPPED id=0x{0:X} data={1} (no FrameSent subscriber: is the injector connected to a CAN hub?)", id, hexData);
                 return;
             }
-            this.Log(LogLevel.Info, "INJECTOR-TX id=0x{0:X} data={1}", id, hexData);
-            fs(new CANMessageFrame(id, bytes));
+            this.Log(LogLevel.Info, "INJECTOR-TX id=0x{0:X} data={1} extended=true", id, hexData);
+            fs(new CANMessageFrame(id, bytes, extendedFormat: true));
         }
 
         private void Loop()

@@ -138,6 +138,13 @@ int main(void)
 	gpio_pin_configure_dt(&comm_rail, GPIO_OUTPUT_ACTIVE);
 	printk("EPS: COMM rail ON (initial)\n");
 
+	/* Pin CSP v1. libcsp defaults csp_conf.version to 2 (src/csp_init.c:18) and selects the
+	 * header and CFP layouts from it at RUNTIME, so "we use CSP v1" is not true unless it is set
+	 * here. Both versions interoperate with themselves, which is why a v2 satellite talking to a
+	 * v2 satellite looks perfectly healthy right up until a v1 tool tries to join the bus - the
+	 * frames are simply ignored, with no error anywhere. The ground tooling and the golden vectors
+	 * in tests/golden/csp.json are v1; the 48-bit v2 header is not wire-compatible. */
+	csp_conf.version = 1;
 	csp_init();
 	k_thread_start(router_id);
 

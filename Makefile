@@ -83,6 +83,7 @@ check: probe
 	PYTHONPATH=src python3 -m pytest tests/pytest -q
 	$(MAKE) -C tests/native test
 	$(MAKE) demo-p0
+	$(MAKE) verify-all
 
 # P0's last acceptance condition: thirty round trips in a row. Slow (~10 min) and excluded from
 # `make check`, because a soak belongs on a schedule rather than in the edit loop.
@@ -98,3 +99,15 @@ firmware-p1: firmware-p0
 	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
 	    -d $(OUT)/build-eps-hard firmware/apps/eps -- -DCUBERANGE_EPS_REQUIRE_AUTH=1
 	@ls -l $(OUT)/build-eps-vuln/zephyr/zephyr.elf $(OUT)/build-eps-hard/zephyr/zephyr.elf
+
+# Run one exercise's verification, in both directions.
+#   make verify EX=EX-B01-eps-killswitch
+verify:
+	@test -n "$(EX)" || { echo "usage: make verify EX=<exercise-dir>"; exit 1; }
+	PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
+	    python3 -m pytest exercises/$(EX)/verify_test.py -v
+
+# Every exercise, both directions. This is the claim the product makes.
+verify-all: firmware-p1
+	PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
+	    python3 -m pytest exercises/*/verify_test.py -v
