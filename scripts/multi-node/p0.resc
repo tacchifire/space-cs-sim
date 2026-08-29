@@ -1,0 +1,38 @@
+:name: CubeRange P0
+:description: Ground station -> space link -> COMM -> CSP/CAN -> OBC -> PUS 17,2 -> back
+
+$comm?=@/tmp/cuberange/build-comm/zephyr/zephyr.elf
+$obc?=@/tmp/cuberange/build-obc/zephyr/zephyr.elf
+$commuart?=@/tmp/cuberange/comm.uart
+$obcuart?=@/tmp/cuberange/obc.uart
+$linkport?=3777
+
+emulation CreateCANHub "canHub"
+
+mach create "COMM"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $comm
+sysbus.usart3 CreateFileBackend $commuart true
+# The third argument disables telnet mode. Leave it out and Renode prepends 11 IAC bytes
+# (ff fd 00 ff fb 01 ff fb 03 ff fc 22), which makes the first frame unparseable.
+emulation CreateServerSocketTerminal $linkport "spacelink" false
+connector Connect sysbus.usart2 spacelink
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "OBC"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $obc
+sysbus.usart3 CreateFileBackend $obcuart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+# 2 ms is the largest quantum that keeps firmware output byte-identical to a 100 us reference.
+# AdvanceImmediately removes Renode's 1.0x real-time throttle; without both, four nodes run at
+# 0.301x instead of 2.34x. CI uses a different profile - see the design's execution profiles.
+emulation SetGlobalQuantum "0.002"
+emulation SetGlobalAdvanceImmediately true

@@ -64,3 +64,22 @@ spike:
 
 clean:
 	rm -rf $(OUT)
+
+# P0 node images. One source tree per role; the shared codec is compiled into each.
+firmware-p0:
+	@test -f $(ENV) || { echo "missing $(ENV) - run 'make toolchain' first"; exit 1; }
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-comm firmware/apps/comm
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-obc firmware/apps/obc
+	@ls -l $(OUT)/build-comm/zephyr/zephyr.elf $(OUT)/build-obc/zephyr/zephyr.elf
+
+demo-p0: firmware-p0
+	PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
+	    python3 -m pytest tests/e2e/test_p0_roundtrip.py -v
+
+# Everything that can be checked without a human looking at it.
+check: probe
+	PYTHONPATH=src python3 -m pytest tests/pytest -q
+	$(MAKE) -C tests/native test
+	$(MAKE) demo-p0
