@@ -46,7 +46,7 @@ EX-B01 と違い、`diff` を自分で走らせる必要はない。
 `tools/config_diff_gate.py` が宣言済みの全ペアについて実行し、`make check` の一部になっている。
 
 ```bash
-OUT=/tmp/cuberange python3 tools/config_diff_gate.py
+python3 tools/config_diff_gate.py
 # EX-A01: 836 Kconfig symbols identical
 # EX-A01: only CUBERANGE_ADCS_TORQUE_LIMIT differs (0 -> 1)
 # EX-A01: ELFs differ

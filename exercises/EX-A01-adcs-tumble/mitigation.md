@@ -42,7 +42,7 @@ you do not have to run the `diff` yourself — `tools/config_diff_gate.py` does 
 pair and is part of `make check`:
 
 ```bash
-OUT=/tmp/cuberange python3 tools/config_diff_gate.py
+python3 tools/config_diff_gate.py
 # EX-A01: 836 Kconfig symbols identical
 # EX-A01: only CUBERANGE_ADCS_TORQUE_LIMIT differs (0 -> 1)
 # EX-A01: ELFs differ

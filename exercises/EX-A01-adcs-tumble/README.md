@@ -75,7 +75,7 @@ of an extended 29-bit one, and injecting while the emulation is paused.
 <details><summary>Hint 3 — what to watch</summary>
 
 Not the telemetry. The satellite answers throughout, and that is the point. Watch
-`/tmp/cuberange/adcs.uart`, or read the indicator pin the way the verification does:
+`$(make -s out)/adcs.uart`, or read the indicator pin the way the verification does:
 `gpioPortD` ODR at `0x58020C14`, bit 6, on the ADCS machine.
 </details>
 

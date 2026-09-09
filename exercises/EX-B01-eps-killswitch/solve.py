@@ -6,7 +6,10 @@ compromised subsystem, a malicious payload, or anyone with physical access to th
 be in - and that is enough, because the EPS does not check who is asking before switching a rail.
 
 Usage:
-    python3 exercises/EX-B01-eps-killswitch/solve.py [--port 3779] [--on]
+    python3 exercises/EX-B01-eps-killswitch/solve.py [--port N] [--on]
+
+    --port defaults to the injector port cuberange.ports assigns satellite 0; the numbers
+    live in src/cuberange/ports.py and are not repeated here.
 """
 import argparse
 import socket
@@ -15,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
+from cuberange import ports  # noqa: E402
 from cuberange.proto.csp import ADDR_EPS, encode_packet  # noqa: E402
 
 CSP_PORT_POWER = 11
@@ -45,7 +49,8 @@ def inject(port: int, frames) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--port", type=int, default=3779, help="TcpCanInjector port")
+    ap.add_argument("--port", type=int, default=ports.injector(0),
+                    help="TcpCanInjector port")
     ap.add_argument("--on", action="store_true", help="turn the rail back on instead of off")
     ap.add_argument("--token", default="", help="hex auth token; empty means unauthenticated")
     args = ap.parse_args()

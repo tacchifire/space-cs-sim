@@ -25,12 +25,28 @@ include $profile
 # then run:
 #   $RENODE_DIR/renode --console -e "include @scripts/multi-node/csp_ping.resc"
 
-$n1?=@/tmp/zcsp1/zephyr/zephyr.elf
-$n2?=@/tmp/zcsp2/zephyr/zephyr.elf
+# /tmp/zcsp1 and /tmp/zcsp2 were the defaults here, and nothing has built into those directories
+# for a long time - `make demo` passes the real paths, so the stale values never surfaced. Derived
+# from $out now, like every other scenario.
+$n1?=$out/build-n1/zephyr/zephyr.elf
+$n2?=$out/build-n2/zephyr/zephyr.elf
 # Renode's Monitor cannot concatenate a variable with a literal, so each backend path
 # is its own variable. `$out/n1.uart` fails with "Could not tokenize here".
-$n1uart?=@/tmp/cuberange/n1.uart
-$n2uart?=@/tmp/cuberange/n2.uart
+# Every path below hangs off $out, and $out has NO default on purpose.
+#
+# These lines used to read @/tmp/cuberange/build-comm/zephyr/zephyr.elf and so on - one absolute
+# path shared by every checkout of this repository. A second working copy on the same machine
+# built into it, and this scenario then loaded THAT checkout's firmware without a word. The
+# exercises made it worse by overriding only the one image under test, so the node being attacked
+# came from here and the nodes around it came from somebody else.
+#
+# Unset, $out resolves to nothing and LoadELF fails where you can see it. That is the intended
+# behaviour: refusing to start beats starting with the wrong firmware. The harness always passes
+# it; for a manual run, so must you:
+#
+#   renode -e '$out=@'"$(make -s out)" -e 'include @<this file>' -e start
+$n1uart?=$out/n1.uart
+$n2uart?=$out/n2.uart
 
 emulation CreateCANHub "canHub"
 

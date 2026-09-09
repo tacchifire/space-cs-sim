@@ -14,6 +14,8 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
+from cuberange import ports  # noqa: E402
+from cuberange.paths import out_dir                             # noqa: E402
 from cuberange.gs.link import SpaceLink          # noqa: E402
 from cuberange.gs.station import GroundStation   # noqa: E402
 from cuberange.proto.pus import SERVICE_TEST, SUBTYPE_CONNECTION_TEST_REPORT  # noqa: E402
@@ -22,9 +24,9 @@ from cuberange.renode.supervisor import Outcome, RenodeSupervisor  # noqa: E402
 
 RENODE_DIR = Path(os.environ.get(
     "RENODE_DIR", Path.home() / "tools" / "renode_1.16.1-dotnet_portable"))
-OUT = Path(os.environ.get("OUT", "/tmp/cuberange"))
-LINK_PORT = 3777
-MONITOR_PORT = 3778
+OUT = out_dir()
+LINK_PORT = ports.link(0)
+MONITOR_PORT = ports.monitor()
 # Upper bound on how long the two nodes may take to come up, not a fixed wait - the code waits
 # for their own readiness lines and only uses this to give up. Raise it on a slow host.
 BOOT_TIMEOUT_S = float(os.environ.get("CUBERANGE_BOOT_TIMEOUT_S", "30"))
@@ -84,6 +86,7 @@ def renode():
         ["./renode", "--disable-xwt", "--plain", "--hide-analyzers", "--hide-log",
          "--port", str(MONITOR_PORT),
          *profile_args(),
+         "-e", f"$out=@{OUT}",
          "-e", f"include @{REPO}/scripts/multi-node/p0.resc",
          "-e", "start"],
         OUT / "p0-renode.log",

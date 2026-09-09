@@ -28,6 +28,8 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
+from cuberange import ports  # noqa: E402
+from cuberange.paths import out_dir                             # noqa: E402
 from cuberange.gs.link import SpaceLink                       # noqa: E402
 from cuberange.gs.station import GroundStation                # noqa: E402
 from cuberange.proto.frame import encode_tc_frame             # noqa: E402
@@ -61,10 +63,10 @@ build_payload, read_symbol = _solve.build_payload, _solve.read_symbol
 
 RENODE_DIR = Path(os.environ.get(
     "RENODE_DIR", Path.home() / "tools" / "renode_1.16.1-dotnet_portable"))
-OUT = Path(os.environ.get("OUT", "/tmp/cuberange"))
+OUT = out_dir()
 SCENARIO = Path(__file__).resolve().parent / "scenario.resc"
 
-LINK_PORT, MONITOR_PORT = 3777, 3778
+LINK_PORT, MONITOR_PORT = ports.link(0), ports.monitor()
 BOOT_TIMEOUT_S = float(os.environ.get("CUBERANGE_BOOT_TIMEOUT_S", "45"))
 
 OBC_APID = 0x0A9
@@ -103,6 +105,7 @@ class Range:
                 "--port", str(MONITOR_PORT),
                 "-e", f"$obc=@{self.obc_elf}",
                 *profile_args(),
+                "-e", f"$out=@{OUT}",
                 "-e", f"include @{SCENARIO}",
                 "-e", "start"]
         self._ctx = self.sup.launch(argv, OUT / "exf01-renode.log")

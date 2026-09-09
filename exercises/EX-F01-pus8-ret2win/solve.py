@@ -27,6 +27,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
+from cuberange import ports  # noqa: E402
+from cuberange.paths import out_dir                          # noqa: E402
 from cuberange.gs.link import SpaceLink                       # noqa: E402
 from cuberange.proto.frame import encode_tc_frame             # noqa: E402
 from cuberange.proto.pus import PusTc                         # noqa: E402
@@ -113,9 +115,9 @@ def build_payload(win_addr: int, rail_state: int = 1) -> bytes:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--port", type=int, default=3777, help="space link port")
+    ap.add_argument("--port", type=int, default=ports.link(0), help="space link port")
     ap.add_argument("--elf", type=Path,
-                    default=Path("/tmp/cuberange/build-obc/zephyr/zephyr.elf"),
+                    default=out_dir() / "build-obc" / "zephyr" / "zephyr.elf",
                     help="the OBC image, read to resolve the target address")
     ap.add_argument("--show", action="store_true", help="print the payload and exit")
     args = ap.parse_args()

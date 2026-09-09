@@ -87,7 +87,7 @@ You need the offset from the start of the buffer to the saved return address, an
 the function's prologue rather than by trial:
 
 ```bash
-arm-zephyr-eabi-objdump -d /tmp/cuberange/build-obc/zephyr/zephyr.elf \
+arm-zephyr-eabi-objdump -d "$(make -s out)"/build-obc/zephyr/zephyr.elf \
   | sed -n '/<handle_function>:/,+8p'
 ```
 
@@ -98,7 +98,7 @@ where `memcpy`'s destination is.
 <details><summary>Hint 3 — the address, and one bit of it</summary>
 
 ```bash
-arm-zephyr-eabi-nm /tmp/cuberange/build-obc/zephyr/zephyr.elf | grep maintenance
+arm-zephyr-eabi-nm "$(make -s out)"/build-obc/zephyr/zephyr.elf | grep maintenance
 ```
 
 Set bit 0. On Cortex-M a branch to an even address is a request to execute ARM instructions on a

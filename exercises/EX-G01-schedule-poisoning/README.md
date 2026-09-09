@@ -49,7 +49,7 @@ PUS 8 copy from EX-F01. All three work perfectly while this happens.
 
 ```bash
 make firmware-g01
-python3 exercises/EX-G01-schedule-poisoning/solve.py --dir /tmp/cuberange/gs-plugins
+python3 exercises/EX-G01-schedule-poisoning/solve.py --dir "$(make -s out)"/gs-plugins
 make verify EX=EX-G01-schedule-poisoning
 ```
 

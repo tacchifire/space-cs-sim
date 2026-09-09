@@ -35,7 +35,7 @@ Usage:
     python3 tools/config_diff_gate.py [--out DIR] [--matrix FILE]
     python3 tools/config_diff_gate.py --self-test
 
-    OUT=/tmp/cuberange python3 tools/config_diff_gate.py
+    python3 tools/config_diff_gate.py            # this checkout's build directory
 
 Exit code 0 only if every declared pair passed every check, or -- under --self-test -- if every
 deliberately broken case was detected.
@@ -55,6 +55,9 @@ from pathlib import Path
 import yaml
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "src"))
+
+from cuberange.paths import out_dir  # noqa: E402
 
 GREEN, RED, YELLOW, BOLD, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[1m", "\033[0m"
 
@@ -85,6 +88,27 @@ def read_kconfig(build: Path) -> dict[str, str]:
     if not out:
         raise GateError(f"{path} contains no CONFIG_ symbols - refusing to call that a match")
     return out
+
+
+def read_source_dir(build: Path) -> str:
+    """Which source tree produced this build directory.
+
+    CMakeCache.txt records CMAKE_HOME_DIRECTORY, and checking it is not paranoia: $OUT defaults to
+    /tmp/cuberange for every checkout of this repository, so two working copies on one machine
+    build into the SAME directory and silently overwrite each other's images. That happened here -
+    a second checkout was building into /tmp/cuberange while this gate ran, and the failure it
+    produced looked like "the pair differs by four cache variables" rather than "these artifacts
+    are somebody else's".
+
+    Set OUT to something per-checkout, and let this check tell you when you have not.
+    """
+    path = build / "CMakeCache.txt"
+    if not path.is_file():
+        raise GateError(f"no CMakeCache.txt at {path} - build the pair first")
+    for line in path.read_text(errors="replace").splitlines():
+        if m := re.fullmatch(r"CMAKE_HOME_DIRECTORY:INTERNAL=(.*)", line.strip()):
+            return m.group(1)
+    raise GateError(f"{path} does not record CMAKE_HOME_DIRECTORY")
 
 
 def read_cache_vars(build: Path, prefix: str = "CUBERANGE_") -> dict[str, str]:
@@ -139,6 +163,19 @@ def check_pair(pair: dict, out_dir: Path) -> list[str]:
     vuln = out_dir / pair["vuln"]["build"]
     hard = out_dir / pair["hard"]["build"]
     evidence: list[str] = []
+
+    # 0. Provenance. Both halves must have been built from THIS source tree, or nothing below is
+    #    about this repository. Checked first because every later message is misleading otherwise.
+    app = (REPO / pair["app"]).resolve()
+    for label, build in (("vulnerable", vuln), ("mitigated", hard)):
+        home = Path(read_source_dir(build)).resolve()
+        if home != app:
+            raise GateError(
+                f"{pid}: the {label} build in {build.name} was produced from {home}, not from "
+                f"{app}. $OUT is {out_dir} and it defaults to the same path for every checkout of "
+                f"this repository, so two working copies overwrite each other's images. Set OUT "
+                f"per-checkout and rebuild.")
+    evidence.append("both halves built from this source tree")
 
     # 1. Kconfig identical.
     kv, kh = read_kconfig(vuln), read_kconfig(hard)
@@ -239,14 +276,14 @@ def run(matrix_path: Path, out_dir: Path) -> int:
 # --------------------------------------------------------------------------- self-test
 
 def _fake_build(root: Path, name: str, kconfig: dict[str, str], cache: dict[str, str],
-                elf: bytes, cflags: str = "") -> Path:
+                elf: bytes, cflags: str = "", home: str = "/somewhere/else") -> Path:
     build = root / name
     (build / "zephyr").mkdir(parents=True, exist_ok=True)
     (build / "zephyr" / ".config").write_text(
         "\n".join(f"{k}={v}" if v != "<not set>" else f"# {k} is not set"
                   for k, v in kconfig.items()) + "\n")
     (build / "CMakeCache.txt").write_text(
-        "CMAKE_HOME_DIRECTORY:INTERNAL=/somewhere/else\n"
+        f"CMAKE_HOME_DIRECTORY:INTERNAL={home}\n"
         + "\n".join(f"{k}:STRING={v}" for k, v in cache.items()) + "\n")
     (build / "zephyr" / "zephyr.elf").write_bytes(elf)
     flagval = cache.get("CUBERANGE_TEST_FLAG", "0")
@@ -273,76 +310,113 @@ def self_test() -> int:
         app.mkdir()
         (app / "main.c").write_text("#if CUBERANGE_TEST_FLAG\nint hardened;\n#endif\n")
 
+        def mk(root: Path, name: str, kconfig: dict, cache: dict, elf: bytes,
+               cflags: str = "", home: Path | None = None) -> Path:
+            """_fake_build with the source tree defaulting to the app the case declares.
+
+            Without this every case below would be rejected by check 0 (provenance) instead of by
+            the check it was written to exercise, and the self-test would report six passes while
+            testing one thing. That is the precise shape of vacuous success this file exists to
+            refuse, and adding check 0 introduced it - the cases are ordered before the check they
+            test, so a new first check silently captures all of them.
+            """
+            return _fake_build(root, name, kconfig, cache, elf, cflags,
+                               home=str(home if home is not None else app))
+
         def pair(build_v: str, build_h: str) -> dict:
             return {"id": "SELFTEST", "app": str(app), "flag": "CUBERANGE_TEST_FLAG",
                     "vuln": {"value": "0", "build": build_v},
                     "hard": {"value": "1", "build": build_h}}
 
-        cases: list[tuple[str, dict, Path]] = []
+        # Each case carries the substring its rejection must contain. Rejection alone is not
+        # enough: adding the provenance check made every case below rejectable by check 0, and a
+        # self-test that only asks "was it refused?" would have reported six passes while
+        # exercising one check. The reason is the assertion.
+        cases: list[tuple[str, dict, Path, str]] = []
 
         # (a) Kconfig differs: a protection was turned off to make the exercise work.
         root = tmp / "a"
-        _fake_build(root, "v", base_kconfig, {"CUBERANGE_TEST_FLAG": "0"}, b"\x01vuln")
-        _fake_build(root, "h", {**base_kconfig, "CONFIG_ARM_MPU": "<not set>"},
+        mk(root, "v", base_kconfig, {"CUBERANGE_TEST_FLAG": "0"}, b"\x01vuln")
+        mk(root, "h", {**base_kconfig, "CONFIG_ARM_MPU": "<not set>"},
                     {"CUBERANGE_TEST_FLAG": "1"}, b"\x02hard")
-        cases.append(("Kconfig differs between the pair", pair("v", "h"), root))
+        cases.append(("Kconfig differs between the pair", pair("v", "h"), root,
+                      "different Kconfig symbols"))
 
         # (b) A second project flag moved as well: "one flag" is not true.
         root = tmp / "b"
-        _fake_build(root, "v", base_kconfig,
+        mk(root, "v", base_kconfig,
                     {"CUBERANGE_TEST_FLAG": "0", "CUBERANGE_OTHER": "0"}, b"\x01vuln")
-        _fake_build(root, "h", base_kconfig,
+        mk(root, "h", base_kconfig,
                     {"CUBERANGE_TEST_FLAG": "1", "CUBERANGE_OTHER": "1"}, b"\x02hard")
-        cases.append(("a second CUBERANGE_ flag also differs", pair("v", "h"), root))
+        cases.append(("a second CUBERANGE_ flag also differs", pair("v", "h"), root,
+                      "expected exactly"))
 
         # (c) Identical ELFs: the flag reached CMake but changed no code.
         root = tmp / "c"
-        _fake_build(root, "v", base_kconfig, {"CUBERANGE_TEST_FLAG": "0"}, b"same")
-        _fake_build(root, "h", base_kconfig, {"CUBERANGE_TEST_FLAG": "1"}, b"same")
-        cases.append(("the two builds produced identical ELFs", pair("v", "h"), root))
+        mk(root, "v", base_kconfig, {"CUBERANGE_TEST_FLAG": "0"}, b"same")
+        mk(root, "h", base_kconfig, {"CUBERANGE_TEST_FLAG": "1"}, b"same")
+        cases.append(("the two builds produced identical ELFs", pair("v", "h"), root,
+                      "same ELF"))
 
         # (d) No source mentions the flag: it is defined and never read.
         root = tmp / "d"
         empty_app = tmp / "empty_app"
         empty_app.mkdir()
         (empty_app / "main.c").write_text("int main(void) { return 0; }\n")
-        _fake_build(root, "v", base_kconfig, {"CUBERANGE_TEST_FLAG": "0"}, b"\x01vuln")
-        _fake_build(root, "h", base_kconfig, {"CUBERANGE_TEST_FLAG": "1"}, b"\x02hard")
+        mk(root, "v", base_kconfig, {"CUBERANGE_TEST_FLAG": "0"}, b"\x01vuln", home=empty_app)
+        mk(root, "h", base_kconfig, {"CUBERANGE_TEST_FLAG": "1"}, b"\x02hard", home=empty_app)
         p = pair("v", "h")
         p["app"] = str(empty_app)
-        cases.append(("no source references the flag", p, root))
+        cases.append(("no source references the flag", p, root, "no source under"))
 
         # (e2) The vulnerability manufactured through compiler options rather than the flag.
         #      Kconfig matches, one cache variable moves, the ELFs differ, the flag is referenced -
         #      checks 1 to 4 all pass, and the "vulnerable" build simply had a protection removed.
         root = tmp / "e2"
-        _fake_build(root, "v", base_kconfig, {"CUBERANGE_TEST_FLAG": "0"}, b"\x01vuln",
+        mk(root, "v", base_kconfig, {"CUBERANGE_TEST_FLAG": "0"}, b"\x01vuln",
                     cflags=" -fno-stack-protector")
-        _fake_build(root, "h", base_kconfig, {"CUBERANGE_TEST_FLAG": "1"}, b"\x02hard")
-        cases.append(("a protection was removed via compiler options", pair("v", "h"), root))
+        mk(root, "h", base_kconfig, {"CUBERANGE_TEST_FLAG": "1"}, b"\x02hard")
+        cases.append(("a protection was removed via compiler options", pair("v", "h"), root,
+                      "compiled differently beyond"))
 
         # (e) A missing build directory must be a failure, not an absence of evidence. This is the
         #     exact shape of the bug that made an earlier probe.sh report PASS for everything.
         root = tmp / "e"
-        _fake_build(root, "v", base_kconfig, {"CUBERANGE_TEST_FLAG": "0"}, b"\x01vuln")
-        cases.append(("the mitigated build directory is missing", pair("v", "absent"), root))
+        mk(root, "v", base_kconfig, {"CUBERANGE_TEST_FLAG": "0"}, b"\x01vuln")
+        cases.append(("the mitigated build directory is missing", pair("v", "absent"), root,
+                      "build the pair first"))
 
-        print(f"{BOLD}== self-test: these must all be REJECTED =={RESET}")
-        for label, p, root in cases:
+        # (g) Somebody else's artifacts. Two checkouts of this repository on one machine used to
+        #     share /tmp/cuberange, so this is not hypothetical - it happened, and what the gate
+        #     reported was four unexplained cache variables rather than the truth.
+        root = tmp / "g"
+        mk(root, "v", base_kconfig, {"CUBERANGE_TEST_FLAG": "0"}, b"\x01vuln",
+           home=Path("/home/someone/another-checkout/firmware/apps/x"))
+        mk(root, "h", base_kconfig, {"CUBERANGE_TEST_FLAG": "1"}, b"\x02hard")
+        cases.append(("the artifacts came from a different checkout", pair("v", "h"), root,
+                      "was produced from"))
+
+        print(f"{BOLD}== self-test: these must all be REJECTED, each for its own reason =={RESET}")
+        for label, p, root, expect in cases:
             try:
                 check_pair(p, root)
             except GateError as exc:
                 first = str(exc).splitlines()[0]
-                print(f"  {GREEN}PASS{RESET}  rejected: {label}")
-                print(f"        {YELLOW}{first[:150]}{RESET}")
+                if expect in str(exc):
+                    print(f"  {GREEN}PASS{RESET}  rejected: {label}")
+                    print(f"        {YELLOW}{first[:150]}{RESET}")
+                else:
+                    ok = False
+                    print(f"  {RED}FAIL{RESET}  rejected for the WRONG reason: {label}")
+                    print(f"        expected a message containing {expect!r}, got: {first[:120]}")
             else:
                 ok = False
                 print(f"  {RED}FAIL{RESET}  ACCEPTED a bad pair: {label}")
 
         # (f) And the honest case must still pass, or the gate is merely a rejector.
         root = tmp / "f"
-        _fake_build(root, "v", base_kconfig, {"CUBERANGE_TEST_FLAG": "0"}, b"\x01vuln")
-        _fake_build(root, "h", base_kconfig, {"CUBERANGE_TEST_FLAG": "1"}, b"\x02hard")
+        mk(root, "v", base_kconfig, {"CUBERANGE_TEST_FLAG": "0"}, b"\x01vuln")
+        mk(root, "h", base_kconfig, {"CUBERANGE_TEST_FLAG": "1"}, b"\x02hard")
         try:
             check_pair(pair("v", "h"), root)
             print(f"  {GREEN}PASS{RESET}  accepted: a correctly built pair")
@@ -365,8 +439,9 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--matrix", type=Path, default=REPO / "firmware-matrix.yml")
     ap.add_argument("--out", type=Path,
-                    default=Path(os.environ.get("OUT", "/tmp/cuberange")),
-                    help="directory holding the west build trees (default: $OUT or /tmp/cuberange)")
+                    default=out_dir(),
+                    help="directory holding the west build trees (default: $OUT, else this "
+                         "checkout's own directory under /tmp - see src/cuberange/paths.py)")
     ap.add_argument("--self-test", action="store_true",
                     help="feed the gate known-bad pairs and require it to reject them")
     args = ap.parse_args()

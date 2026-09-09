@@ -52,7 +52,7 @@ OBC は EX-F01 の長さ検査で PUS 8 のコピーを縛る。
 
 ```bash
 make firmware-g01
-python3 exercises/EX-G01-schedule-poisoning/solve.py --dir /tmp/cuberange/gs-plugins
+python3 exercises/EX-G01-schedule-poisoning/solve.py --dir "$(make -s out)"/gs-plugins
 make verify EX=EX-G01-schedule-poisoning
 ```
 

@@ -10,7 +10,13 @@ RENODE_DIR ?= $(HOME)/tools/renode_1.16.1-dotnet_portable
 ZEPHYR_WS  ?= $(HOME)/zephyrproject
 LIBCSP     ?= $(HOME)/libcsp
 ENV        ?= $(HOME)/cuberange-env.sh
-OUT        ?= /tmp/cuberange
+# Unique to this checkout. It used to be a bare /tmp/cuberange, which every clone of this
+# repository shared: two working copies on one machine then wrote the same build-obc/ and the pair
+# gate compared one checkout's image against the other's. src/cuberange/paths.py explains the
+# incident and derives the identical string in Python; tests/pytest/test_paths.py parses this line
+# and fails if the two ever disagree.
+CUBERANGE_REPO := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
+OUT        ?= /tmp/cuberange-$(notdir $(CUBERANGE_REPO))-$(shell printf '%s' '$(CUBERANGE_REPO)' | md5sum | cut -c1-8)
 BOARD      ?= nucleo_h753zi
 
 APP_CSP_PING := firmware/apps/csp_ping
@@ -25,14 +31,21 @@ APP_CSP_PING := firmware/apps/csp_ping
 # them once. Running any target directly still rebuilds, which is the safe default.
 FWDEP = $(if $(NOFW),,$(1))
 
-.PHONY: help probe firmware demo spike clean toolchain
+.PHONY: help out probe firmware demo spike clean toolchain
 
 help:
+	@echo "make out        - print this checkout's build directory ($(OUT))"
 	@echo "make toolchain  - install Zephyr v4.1.0 + SDK (no root, ~7.6 GB on disk)"
 	@echo "make probe      - verify every Renode capability the design depends on"
 	@echo "make firmware   - build the two CSP nodes"
 	@echo "make demo       - run the two nodes over a CAN hub and show the CSP pings"
 	@echo "make spike      - host-side proof: raw CAN injection + External Control"
+
+# Where this checkout builds. Print it rather than asking anybody to recompute the digest by hand:
+# the exercises' objdump and nm lines use $(shell make -s out) so they stay correct in a clone at
+# any path.
+out:
+	@echo $(OUT)
 
 toolchain:
 	./tools/setup-toolchain.sh $(ZEPHYR_WS) $(HOME)/zephyr-sdk
@@ -57,6 +70,7 @@ demo:
 	@mkdir -p $(OUT)
 	@rm -f $(OUT)/n1.uart $(OUT)/n2.uart
 	cd $(RENODE_DIR) && ./renode --disable-xwt --console --plain --hide-analyzers --hide-log \
+	  -e '$$out=@$(OUT)' \
 	  -e '$$n1=@$(OUT)/build-n1/zephyr/zephyr.elf' \
 	  -e '$$n2=@$(OUT)/build-n2/zephyr/zephyr.elf' \
 	  -e '$$n1uart=@$(OUT)/n1.uart' \

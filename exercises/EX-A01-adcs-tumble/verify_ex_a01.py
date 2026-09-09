@@ -23,6 +23,8 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
+from cuberange import ports  # noqa: E402
+from cuberange.paths import out_dir                             # noqa: E402
 from cuberange.gs.link import SpaceLink                            # noqa: E402
 from cuberange.gs.station import GroundStation                     # noqa: E402
 from cuberange.proto.csp import ADDR_ADCS, encode_packet           # noqa: E402
@@ -32,11 +34,11 @@ from cuberange.renode.supervisor import RenodeSupervisor           # noqa: E402
 
 RENODE_DIR = Path(os.environ.get(
     "RENODE_DIR", Path.home() / "tools" / "renode_1.16.1-dotnet_portable"))
-OUT = Path(os.environ.get("OUT", "/tmp/cuberange"))
+OUT = out_dir()
 SCENARIO = Path(__file__).resolve().parent / "scenario.resc"
 INJECTOR = REPO / "attacker" / "TcpCanInjector.cs"
 
-LINK_PORT, MONITOR_PORT, INJ_PORT = 3777, 3778, 3779
+LINK_PORT, MONITOR_PORT, INJ_PORT = ports.link(0), ports.monitor(), ports.injector(0)
 BOOT_TIMEOUT_S = float(os.environ.get("CUBERANGE_BOOT_TIMEOUT_S", "45"))
 
 CSP_PORT_ATT = 12
@@ -87,6 +89,7 @@ class Range:
                 "-e", f"$adcs=@{self.adcs_elf}",
                 "-e", f"$injector=@{INJECTOR}",
                 *profile_args(),
+                "-e", f"$out=@{OUT}",
                 "-e", f"include @{SCENARIO}",
                 "-e", "start"]
         self._ctx = self.sup.launch(argv, OUT / "exa01-renode.log")

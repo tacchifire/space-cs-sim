@@ -9,26 +9,39 @@ include $profile
 
 # ---------------------------------------------------------------------------- satellite 0
 # CSP addresses OBC 1, EPS 2, ADCS 4, COMM 5. SCID 0x0A9. Space link on 3777.
-$comm0?=@/tmp/cuberange/build-comm/zephyr/zephyr.elf
-$obc0?=@/tmp/cuberange/build-obc/zephyr/zephyr.elf
-$eps0?=@/tmp/cuberange/build-eps-vuln/zephyr/zephyr.elf
-$adcs0?=@/tmp/cuberange/build-adcs-vuln/zephyr/zephyr.elf
-$comm0uart?=@/tmp/cuberange/sat0-comm.uart
-$obc0uart?=@/tmp/cuberange/sat0-obc.uart
-$eps0uart?=@/tmp/cuberange/sat0-eps.uart
-$adcs0uart?=@/tmp/cuberange/sat0-adcs.uart
+# Every path below hangs off $out, and $out has NO default on purpose.
+#
+# These lines used to read @/tmp/cuberange/build-comm/zephyr/zephyr.elf and so on - one absolute
+# path shared by every checkout of this repository. A second working copy on the same machine
+# built into it, and this scenario then loaded THAT checkout's firmware without a word. The
+# exercises made it worse by overriding only the one image under test, so the node being attacked
+# came from here and the nodes around it came from somebody else.
+#
+# Unset, $out resolves to nothing and LoadELF fails where you can see it. That is the intended
+# behaviour: refusing to start beats starting with the wrong firmware. The harness always passes
+# it; for a manual run, so must you:
+#
+#   renode -e '$out=@'"$(make -s out)" -e 'include @<this file>' -e start
+$comm0?=$out/build-comm/zephyr/zephyr.elf
+$obc0?=$out/build-obc/zephyr/zephyr.elf
+$eps0?=$out/build-eps-vuln/zephyr/zephyr.elf
+$adcs0?=$out/build-adcs-vuln/zephyr/zephyr.elf
+$comm0uart?=$out/sat0-comm.uart
+$obc0uart?=$out/sat0-obc.uart
+$eps0uart?=$out/sat0-eps.uart
+$adcs0uart?=$out/sat0-adcs.uart
 $link0?=3777
 
 # ---------------------------------------------------------------------------- satellite 1
 # CSP addresses OBC 9, EPS 10, ADCS 12, COMM 13. SCID 0x0AA. Space link on 3787.
-$comm1?=@/tmp/cuberange/build-comm-sat1/zephyr/zephyr.elf
-$obc1?=@/tmp/cuberange/build-obc-sat1/zephyr/zephyr.elf
-$eps1?=@/tmp/cuberange/build-eps-sat1/zephyr/zephyr.elf
-$adcs1?=@/tmp/cuberange/build-adcs-sat1/zephyr/zephyr.elf
-$comm1uart?=@/tmp/cuberange/sat1-comm.uart
-$obc1uart?=@/tmp/cuberange/sat1-obc.uart
-$eps1uart?=@/tmp/cuberange/sat1-eps.uart
-$adcs1uart?=@/tmp/cuberange/sat1-adcs.uart
+$comm1?=$out/build-comm-sat1/zephyr/zephyr.elf
+$obc1?=$out/build-obc-sat1/zephyr/zephyr.elf
+$eps1?=$out/build-eps-sat1/zephyr/zephyr.elf
+$adcs1?=$out/build-adcs-sat1/zephyr/zephyr.elf
+$comm1uart?=$out/sat1-comm.uart
+$obc1uart?=$out/sat1-obc.uart
+$eps1uart?=$out/sat1-eps.uart
+$adcs1uart?=$out/sat1-adcs.uart
 $link1?=3787
 
 # TWO hubs, and the names are what keeps them apart. Hub names are emulation-scope, so a scenario

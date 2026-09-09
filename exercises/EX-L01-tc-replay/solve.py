@@ -11,12 +11,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
+from cuberange import ports  # noqa: E402
 from cuberange.channel.link_channel import LinkChannel  # noqa: E402
 from cuberange.gs.link import SpaceLink                 # noqa: E402
 from cuberange.gs.station import GroundStation          # noqa: E402
 
-SAT_LINK_PORT = 3777
-GS_LINK_PORT = 3877
+SAT_LINK_PORT = ports.link(0)
+GS_LINK_PORT = ports.channel(0)
 
 
 def main() -> int:

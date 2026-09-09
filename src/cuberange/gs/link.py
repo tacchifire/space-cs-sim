@@ -11,10 +11,12 @@ import time
 from typing import Optional
 
 from ..proto.frame import Deframer, wrap
+from .. import ports
 
 
 class SpaceLink:
-    def __init__(self, host: str = "127.0.0.1", port: int = 3777, timeout: float = 0.2):
+    def __init__(self, host: str = "127.0.0.1", port: int = ports.link(0),
+                 timeout: float = 0.2):
         self._addr = (host, port)
         self._timeout = timeout
         self._sock: Optional[socket.socket] = None

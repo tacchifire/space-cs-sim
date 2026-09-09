@@ -105,6 +105,7 @@ make demo-p0
 | `make firmware-f01` | Every satellite-0 image: COMM, OBC (both), both EPS profiles, both ADCS profiles |
 | `make firmware-g01` | The hardened OBC and EPS EX-G01 needs — the exercise is about every spacecraft-side control working |
 | `make firmware-sat1` | The same four roles built as spacecraft 1: different CSP addresses, different SCID |
+| `tools/ci.sh` | The gate as one command: environment check, then `make check`. What CI runs |
 | `make constellation` | Eight nodes, two spacecraft, one emulation — and the bus isolation between them |
 | `make demo-p0` | Runs the PUS round trip and asserts it |
 | `make demo` | The R0 smoke test: two nodes exchanging CSP pings over CAN |
@@ -152,10 +153,19 @@ and false in the firmware. The twenty-second was found on 2026-09-09 and is the 
 `cpu TranslateAddress` caches by address and not by access type, so asking about a read before
 asking about an instruction fetch reports that SRAM is executable when it is not.
 
-**There is no CI.** `make check` is the gate and a human runs it. Several documents here used to
-describe these gates as CI-enforced; there has never been a `.github` directory. Saying so is
-cheaper than the alternative: an earlier revision of the design claimed a TTP-verification tool, an
-offline mode and an oracle requirement, and none of the three existed either.
+**About CI, precisely.** For most of this project's life there was none, while several documents
+described these gates as CI-enforced. There is now `.github/workflows/check.yml`, and it is worth
+being exact about what that does and does not mean.
+
+What has been run, on a real host: `tools/ci.sh` — an environment check, its own self-test, and
+`make check` end to end. What has NOT been run: the workflow. Nobody has watched GitHub Actions
+execute it. It is a thin caller of a verified command, so the untested part is the plumbing rather
+than the gate, but until a run has been observed the honest description is that **the gate is still
+a command a human types**, and this paragraph will say so until that changes.
+
+That distinction is the whole discipline. An earlier revision of the design claimed a
+TTP-verification tool, an offline mode and an oracle requirement; none of the three existed, and
+each read exactly as convincing as a YAML file does.
 
 ## Before you use it
 

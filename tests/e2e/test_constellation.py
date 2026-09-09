@@ -29,6 +29,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
 from cuberange import ports                                        # noqa: E402
+from cuberange.paths import out_dir                             # noqa: E402
 from cuberange.gs.link import SpaceLink                            # noqa: E402
 from cuberange.gs.station import GroundStation                     # noqa: E402
 from cuberange.proto.csp import encode_packet                      # noqa: E402
@@ -38,7 +39,7 @@ from cuberange.renode.supervisor import Outcome, RenodeSupervisor  # noqa: E402
 
 RENODE_DIR = Path(os.environ.get(
     "RENODE_DIR", Path.home() / "tools" / "renode_1.16.1-dotnet_portable"))
-OUT = Path(os.environ.get("OUT", "/tmp/cuberange"))
+OUT = out_dir()
 SCENARIO = REPO / "scripts" / "multi-node" / "constellation.resc"
 INJECTOR = REPO / "attacker" / "TcpCanInjector.cs"
 
@@ -73,6 +74,7 @@ class Constellation:
         argv = ["./renode", "--disable-xwt", "--plain", "--hide-analyzers",
                 "--port", str(ports.monitor()),
                 "-e", f"$profile=@{REPO}/scripts/profiles/interactive.resc",
+                "-e", f"$out=@{OUT}",
                 "-e", f"include @{SCENARIO}",
                 # The injector is added here rather than in the scenario: the constellation exists
                 # to show two spacecraft coexisting, and putting a raw CAN entry point on both

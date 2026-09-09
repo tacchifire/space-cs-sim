@@ -52,7 +52,7 @@ exercises/EX-XXX-short-name/
 今は `tools/config_diff_gate.py` が `firmware-matrix.yml` に宣言された全ペアについて機械的に証明し、`make check` の一部になっている。
 
 ```bash
-OUT=/tmp/cuberange python3 tools/config_diff_gate.py
+python3 tools/config_diff_gate.py
 ```
 
 5つを検査する。

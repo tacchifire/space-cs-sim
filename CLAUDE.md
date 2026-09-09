@@ -13,10 +13,14 @@ Two spacecraft, four nodes each, and they can run in one emulation. Identity is 
 so one source tree still produces every node of every spacecraft. Satellite 0 keeps the numbers
 every existing scenario and write-up names — do not renumber it.
 
-**There is no CI.** `make check` is the gate, and a human has to type it. Nine places in this
-repository used to describe gates as CI-enforced; there has never been a `.github` directory. The
-verification is real and the automation around it is not, and those are different claims — see
-section 16 of the design for why this project is careful about the difference.
+**CI exists as a mechanism and has not been observed running.** `.github/workflows/check.yml` calls
+`tools/ci.sh`, which has been run here: environment check, self-test, and `make check` end to end.
+Nobody has watched GitHub Actions execute the workflow itself.
+
+So the gate is still a command a human types, and the documents say that. Promote the sentence when
+a run has been observed and not before — nine places in this repository described gates as
+CI-enforced while there was no `.github` directory at all, and adding CI is a poor moment to repeat
+the mistake in a new form.
 
 Five exercises work today, one per attack origin: EX-B01 (internal bus), EX-L01 (space link),
 EX-A01 (ADCS command envelope), EX-F01 (the OBC's own PUS 8 parser) and EX-G01 (the ground segment
@@ -54,12 +58,15 @@ Concretely:
 ## Commands
 
 ```bash
+make out          # this checkout's build directory; every path below lives under it
 make probe        # 40 Renode capability checks incl. 5 deliberate-failure self-tests   ~6 min
 make firmware-f01 # every satellite-0 image: COMM, OBC (both), EPS (both), ADCS (both)
 make firmware-sat1 # the same four roles as spacecraft 1
 make firmware-g01 # the hardened OBC and EPS that EX-G01 runs against
 make constellation # eight nodes, two spacecraft, and the bus isolation between them
 make golden       # rebuild the independent oracles and regenerate tests/golden (needs network)
+tools/ci.sh       # what CI runs: environment check, then make check
+tools/ci.sh --self-test   # prove the environment check can fail
 make demo-p0      # PUS 17 round trip, ground station to OBC and back
 make determinism  # rules G1/G2: three CI-profile runs, byte-identical UART capture     ~30 s
 make pair-gate    # every vulnerable/mitigated pair differs by exactly one build flag
@@ -142,6 +149,23 @@ This domain is full of them. These have all been hit here:
   nothing and concludes nothing went wrong. This is why scenarios include their execution profile
   as their FIRST command: a bad path takes the machines down with it instead of running every node
   with no quantum set.
+- **`$OUT` used to default to `/tmp/cuberange` in every checkout, so two working copies on one
+  machine built into the same directory.** `west build -p always` in each, and whichever finished
+  last owned `build-obc/`. Nothing reports it. The pair gate then compared one checkout's
+  vulnerable image against the other's mitigated image and said `expected exactly
+  CUBERANGE_OBC_PUS8_LENGTH_CHECK to differ, but the differing cache variables are
+  ['CUBERANGE_APID', ...]` — naming flags that exist in no file of this repository. The default is
+  now per-checkout (`src/cuberange/paths.py`, mirrored in the Makefile and compared by
+  `test_paths.py`), and the gate reads `CMAKE_HOME_DIRECTORY` first so the message says whose
+  artifacts these are. `make out` prints the directory.
+- **The scenarios had the same path hardcoded, and the exercises pinned only the image under
+  test.** So EX-F01 loaded ITS OBC from this checkout and the COMM and EPS around it from
+  whatever was in the shared directory. Every `.resc` now derives every firmware and capture
+  path from `$out`, and `$out` has **no default**: unset, Renode stops at `No such variable:
+  $out` rather than booting somebody else's build. Renode 1.16.1 does concatenate
+  (`$comm?=$out/build-comm/zephyr/zephyr.elf` resolves) — measured, not assumed. Launchers
+  pass `-e "$out=@<OUT>"`; `test_paths.py` fails if a scenario hardcodes a path or a launcher
+  forgets to pass it.
 - **Renode wedges on ~13% of launches in some conditions** and leaks RSS to 17 GB in 10 minutes.
   Always launch through `src/cuberange/renode/supervisor.py`. It did not reproduce once in 30
   supervised runs on a quiet host, so contention is the likely cause, but the cause is not known.
@@ -157,9 +181,12 @@ mitigation that simply broke the feature would pass.
 Every vulnerable/mitigated firmware pair differs by exactly one build flag. That used to be
 proved by a `diff` a contributor was asked to remember to type; `tools/config_diff_gate.py` now
 proves it for every pair declared in `firmware-matrix.yml`, and it is part of `make check`. It
-checks five things, and the last three exist because the first two can pass while the flag does
-nothing at all:
+checks six things. The first establishes that the artifacts are ours at all, and the last three
+exist because checks 2 and 3 can pass while the flag does nothing:
 
+0. both halves were built from THIS source tree, read from `CMAKE_HOME_DIRECTORY` in
+   `CMakeCache.txt`. Checked first because every later message is misleading otherwise — see the
+   shared-`$OUT` entry in the failure modes above;
 1. the two Kconfig outputs are identical (836 symbols, measured);
 2. no other `CUBERANGE_*` cache variable differs;
 3. the two ELFs are not byte-identical — a misspelled flag compiles the same image twice and
@@ -169,8 +196,11 @@ nothing at all:
    which is what stops a vulnerability being manufactured through compiler options. Kconfig says
    nothing about those.
 
-The gate carries `--self-test`, which feeds it six known-bad pairs and requires each to be
-rejected. A gate that cannot fail is not evidence.
+The gate carries `--self-test`, which feeds it seven known-bad pairs and requires each to be
+rejected **for its own stated reason**. Rejection alone is not enough: adding check 0 made every
+existing case rejectable by provenance, and a self-test that asked only "was it refused?" would
+have reported seven passes while exercising one check. A gate that cannot fail is not evidence, and
+neither is one that fails for the wrong reason.
 
 Every `mitigation.md` states what the fix does *not* solve, and the next exercise generally attacks
 one of those limits — EX-B01's token is defeated by EX-L01's replay, exactly as EX-B01 predicted.
@@ -195,6 +225,7 @@ src/cuberange/gs/               ground station
 src/cuberange/channel/          the link proxy an attacker taps and replays through
 attacker/TcpCanInjector.cs      90 lines of C# Renode compiles at runtime; raw CAN from a socket
 src/cuberange/ports.py          the port map; one place, with a collision test
+src/cuberange/paths.py          the build directory, unique per checkout; make out prints it
 src/cuberange/identity.py       who is who, mirroring identity.cmake; a test asserts they agree
 src/cuberange/gs/schedule.py    the TC plan and the importer EX-G01 attacks
 src/cuberange/gs/import_policy.py  the two policies that are EX-G01's whole difference

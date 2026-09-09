@@ -1,0 +1,162 @@
+# The gate, run by a machine.
+#
+# READ THIS BEFORE CITING IT. At the time this file was committed nobody had watched GitHub Actions
+# execute it. What HAS been run, on a real host, is `tools/ci.sh` - the environment check, its
+# self-test, and `make check` end to end in about sixteen minutes. This workflow is a thin caller,
+# so the untested part is the plumbing around a verified command, not the gate itself.
+#
+# Until a run of this file has been observed, the README and CLAUDE.md keep saying that the gate is
+# a command a human types. Do not promote that sentence because a YAML file exists; that is the
+# failure this project keeps recording, and adding CI is a poor moment to repeat it.
+#
+# The two jobs are the split design section 9.4 asks for: fetching is allowed to reach the network,
+# and the stage that decides pass or fail is not. `probe.sh` downloads prebuilt Zephyr ELFs over
+# HTTPS, which is why the design wanted them separated in the first place.
+
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# CI pins the build directory instead of taking the per-checkout default. The default exists
+# because two working copies on one machine used to share /tmp/cuberange and overwrite each
+# other's firmware (src/cuberange/paths.py); a runner has exactly one checkout, so a fixed path
+# costs nothing and lets the artifact globs below name it through this one variable rather than
+# spelling it out four more times.
+env:
+  OUT: /tmp/cuberange-ci
+
+jobs:
+  artifacts:
+    name: fetch and build (network allowed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: apt prerequisites
+        run: |
+          sudo apt-get update
+          # bc is not optional: probe.sh's arithmetic is six calls to it. libicu and OpenSSL 3 are
+          # dlopened by the .NET runtime Renode ships with, and a C compiler is needed because the
+          # codec suite is built natively.
+          sudo apt-get install -y bc build-essential python3-dev libicu-dev libssl3
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'   # Zephyr v4.1.0's floor is 3.10; 3.12 is tested here
+
+      - name: python dependencies
+        run: pip install -r requirements.txt cmake ninja
+
+      # Renode's URL convention embeds the artifact size and SHA1, so the URL is itself the
+      # integrity pin - Renode refuses a download whose size or hash does not match.
+      - name: cache Renode
+        id: renode-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/tools
+          key: renode-1.16.1-dotnet-portable
+
+      - name: fetch Renode 1.16.1
+        if: steps.renode-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o /tmp/renode.tar.gz \
+            https://github.com/renode/renode/releases/download/v1.16.1/renode-1.16.1.linux-portable-dotnet.tar.gz
+          mkdir -p ~/tools && tar xzf /tmp/renode.tar.gz -C ~/tools
+
+      # About 6.5 GB between the workspace and the SDK, so caching it is the difference between a
+      # workflow people run and one they turn off.
+      - name: cache the Zephyr toolchain
+        id: zephyr-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/zephyrproject
+            ~/zephyr-sdk
+            ~/libcsp
+            ~/cuberange-env.sh
+          key: zephyr-v4.1.0-sdk-v1.0.1-libcsp-v2.1
+
+      - name: install the Zephyr toolchain
+        if: steps.zephyr-cache.outputs.cache-hit != 'true'
+        run: |
+          ./tools/setup-toolchain.sh
+          git clone --depth 1 --branch v2.1 https://github.com/libcsp/libcsp ~/libcsp
+
+      - name: build every node image
+        run: |
+          export PATH="$HOME/zephyr-sdk/sysroots/x86_64-pokysdk-linux/usr/bin:$PATH"
+          make firmware-all firmware-sat1
+
+      - name: upload the images
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: ${{ env.OUT }}/build-*/zephyr/zephyr.elf
+          retention-days: 3
+          # An empty firmware artifact means the build step produced nothing, which
+          # is a failure and not a detail. The default here only warns.
+          if-no-files-found: error
+
+  gate:
+    name: make check (no egress)
+    needs: artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: apt prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc build-essential python3-dev libicu-dev libssl3
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install -r requirements.txt cmake ninja
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/tools
+          key: renode-1.16.1-dotnet-portable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/zephyrproject
+            ~/zephyr-sdk
+            ~/libcsp
+            ~/cuberange-env.sh
+          key: zephyr-v4.1.0-sdk-v1.0.1-libcsp-v2.1
+
+      # probe.sh --offline refuses to start on a cold artifact cache rather than fetching and
+      # reporting success, which is what it used to do (design section 16, W24). That refusal is
+      # the thing making this job's "no egress" claim mean something.
+      - name: prime Renode's artifact cache
+        run: ./tools/renode-probe/probe.sh --fetch-only
+
+      - name: the gate
+        run: |
+          export PATH="$HOME/zephyr-sdk/sysroots/x86_64-pokysdk-linux/usr/bin:$PATH"
+          ./tools/ci.sh
+
+      - name: keep the evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: |
+            ${{ env.OUT }}/*.uart
+            ${{ env.OUT }}/*renode.log
+            /tmp/cuberange-probe*/
+          retention-days: 7
+          if-no-files-found: ignore

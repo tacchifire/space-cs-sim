@@ -25,6 +25,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
 from cuberange import ports                                        # noqa: E402
+from cuberange.paths import out_dir                             # noqa: E402
 from cuberange.gs.import_policy import (AcceptAnything,            # noqa: E402
                                         SignedAndBounded, signed_plan)
 from cuberange.gs.link import SpaceLink                            # noqa: E402
@@ -58,7 +59,7 @@ PLUGIN_FILE, poison = _solve.PLUGIN_FILE, _solve.poison
 
 RENODE_DIR = Path(os.environ.get(
     "RENODE_DIR", Path.home() / "tools" / "renode_1.16.1-dotnet_portable"))
-OUT = Path(os.environ.get("OUT", "/tmp/cuberange"))
+OUT = out_dir()
 SCENARIO = Path(__file__).resolve().parent / "scenario.resc"
 
 BOOT_TIMEOUT_S = float(os.environ.get("CUBERANGE_BOOT_TIMEOUT_S", "45"))
@@ -79,6 +80,7 @@ class Range:
         argv = ["./renode", "--disable-xwt", "--plain", "--hide-analyzers",
                 "--port", str(ports.monitor()),
                 *profile_args(),
+                "-e", f"$out=@{OUT}",
                 "-e", f"include @{SCENARIO}",
                 "-e", "start"]
         self._ctx = self.sup.launch(argv, OUT / "exg01-renode.log")

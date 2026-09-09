@@ -17,6 +17,8 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
+from cuberange import ports  # noqa: E402
+from cuberange.paths import out_dir                             # noqa: E402
 from cuberange.gs.link import SpaceLink                      # noqa: E402
 from cuberange.gs.station import GroundStation               # noqa: E402
 from cuberange.renode.profile import profile_args
@@ -24,12 +26,12 @@ from cuberange.renode.supervisor import Outcome, RenodeSupervisor  # noqa: E402
 
 RENODE_DIR = Path(os.environ.get(
     "RENODE_DIR", Path.home() / "tools" / "renode_1.16.1-dotnet_portable"))
-OUT = Path(os.environ.get("OUT", "/tmp/cuberange"))
+OUT = out_dir()
 ITERATIONS = int(os.environ.get("SOAK_ITERATIONS", "30"))
 MAX_RETRIES_PER_ITERATION = 3
 BOOT_SETTLE_S = 3.0
-LINK_PORT = 3777
-MONITOR_PORT = 3778
+LINK_PORT = ports.link(0)
+MONITOR_PORT = ports.monitor()
 
 # Four tuned nodes peak around 503 MB; two nodes need far less. A wedged Renode passes 3.7 GB
 # within 100 s, so this ceiling separates the two cases with room to spare.
@@ -45,6 +47,7 @@ def _attempt(sup: RenodeSupervisor, run_dir: Path, index: int, attempt: int):
     argv = ["./renode", "--disable-xwt", "--plain", "--hide-analyzers", "--hide-log",
             "--port", str(MONITOR_PORT),
             *profile_args(),
+            "-e", f"$out=@{OUT}",
             "-e", f"include @{REPO}/scripts/multi-node/p0.resc",
             "-e", "start"]
 

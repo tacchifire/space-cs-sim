@@ -14,7 +14,7 @@ Nothing on the spacecraft is broken. The EPS demands its token and gets it, the 
 job while this happens, because none of them was ever about who decided what to send.
 
 Usage:
-    python3 exercises/EX-G01-schedule-poisoning/solve.py --dir /tmp/cuberange/gs-plugins
+    python3 exercises/EX-G01-schedule-poisoning/solve.py --dir "$OUT"/gs-plugins
     python3 exercises/EX-G01-schedule-poisoning/solve.py --dir ... --signed   # try the mitigation
 """
 import argparse
@@ -26,6 +26,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
+from cuberange.paths import out_dir                          # noqa: E402
 from cuberange.gs.import_policy import signed_plan  # noqa: E402
 
 SERVICE_FUNCTION, SUBTYPE_PERFORM = 8, 1
@@ -53,7 +54,7 @@ def poison(delay_s: float = 2.0) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dir", type=Path, default=Path("/tmp/cuberange/gs-plugins"),
+    ap.add_argument("--dir", type=Path, default=out_dir() / "gs-plugins",
                     help="the ground segment's plugin directory")
     ap.add_argument("--delay", type=float, default=2.0, help="seconds until the entry is due")
     ap.add_argument("--signed", action="store_true",

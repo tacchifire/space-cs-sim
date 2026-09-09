@@ -101,7 +101,7 @@ SRAM のあるアドレスについて読み出しを問い合わせてから同
 試行錯誤ではなく、関数のプロローグから読む。
 
 ```bash
-arm-zephyr-eabi-objdump -d /tmp/cuberange/build-obc/zephyr/zephyr.elf \
+arm-zephyr-eabi-objdump -d "$(make -s out)"/build-obc/zephyr/zephyr.elf \
   | sed -n '/<handle_function>:/,+8p'
 ```
 
@@ -112,7 +112,7 @@ arm-zephyr-eabi-objdump -d /tmp/cuberange/build-obc/zephyr/zephyr.elf \
 <details><summary>ヒント3 — アドレスと、その1ビット</summary>
 
 ```bash
-arm-zephyr-eabi-nm /tmp/cuberange/build-obc/zephyr/zephyr.elf | grep maintenance
+arm-zephyr-eabi-nm "$(make -s out)"/build-obc/zephyr/zephyr.elf | grep maintenance
 ```
 
 ビット0を立てること。

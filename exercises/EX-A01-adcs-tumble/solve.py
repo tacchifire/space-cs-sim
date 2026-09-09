@@ -14,7 +14,10 @@ and the panels stop making power. The operator's first evidence of a problem arr
 a battery trend.
 
 Usage:
-    python3 exercises/EX-A01-adcs-tumble/solve.py [--port 3779] [--torque 30000]
+    python3 exercises/EX-A01-adcs-tumble/solve.py [--port N] [--torque 30000]
+
+    --port defaults to the injector port cuberange.ports assigns satellite 0; `make out` and
+    src/cuberange/ports.py are where the numbers live, so this line does not repeat them.
     python3 exercises/EX-A01-adcs-tumble/solve.py --torque 0     # stop commanding torque
 """
 import argparse
@@ -25,6 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
+from cuberange import ports  # noqa: E402
 from cuberange.proto.csp import ADDR_ADCS, encode_packet  # noqa: E402
 
 CSP_PORT_ATT = 12
@@ -62,7 +66,8 @@ def inject(port: int, frames) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--port", type=int, default=3779, help="TcpCanInjector port")
+    ap.add_argument("--port", type=int, default=ports.injector(0),
+                    help="TcpCanInjector port")
     ap.add_argument("--torque", type=int, default=30000,
                     help="commanded torque in mNm; the actuator's authority is "
                          f"+-{TORQUE_AUTHORITY_MNM}")

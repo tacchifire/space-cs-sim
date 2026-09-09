@@ -20,10 +20,23 @@
 $profile?=@~/space-cs-sim/scripts/profiles/interactive.resc
 include $profile
 
-$comm?=@/tmp/cuberange/build-comm/zephyr/zephyr.elf
-$obc?=@/tmp/cuberange/build-obc/zephyr/zephyr.elf
-$commuart?=@/tmp/cuberange/comm.uart
-$obcuart?=@/tmp/cuberange/obc.uart
+# Every path below hangs off $out, and $out has NO default on purpose.
+#
+# These lines used to read @/tmp/cuberange/build-comm/zephyr/zephyr.elf and so on - one absolute
+# path shared by every checkout of this repository. A second working copy on the same machine
+# built into it, and this scenario then loaded THAT checkout's firmware without a word. The
+# exercises made it worse by overriding only the one image under test, so the node being attacked
+# came from here and the nodes around it came from somebody else.
+#
+# Unset, $out resolves to nothing and LoadELF fails where you can see it. That is the intended
+# behaviour: refusing to start beats starting with the wrong firmware. The harness always passes
+# it; for a manual run, so must you:
+#
+#   renode -e '$out=@'"$(make -s out)" -e 'include @<this file>' -e start
+$comm?=$out/build-comm/zephyr/zephyr.elf
+$obc?=$out/build-obc/zephyr/zephyr.elf
+$commuart?=$out/comm.uart
+$obcuart?=$out/obc.uart
 $linkport?=3777
 
 emulation CreateCANHub "canHub"

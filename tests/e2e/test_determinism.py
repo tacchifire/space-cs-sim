@@ -28,12 +28,14 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
+from cuberange import ports  # noqa: E402
+from cuberange.paths import out_dir                             # noqa: E402
 from cuberange.renode.profile import profile_path      # noqa: E402
 from cuberange.renode.supervisor import Outcome, RenodeSupervisor  # noqa: E402
 
 RENODE_DIR = Path(os.environ.get(
     "RENODE_DIR", Path.home() / "tools" / "renode_1.16.1-dotnet_portable"))
-OUT = Path(os.environ.get("OUT", "/tmp/cuberange"))
+OUT = out_dir()
 SCENARIO = REPO / "scripts" / "multi-node" / "p0.resc"
 
 # Virtual seconds per run. Long enough that both nodes boot and exchange CAN traffic; short enough
@@ -42,9 +44,12 @@ SCENARIO = REPO / "scripts" / "multi-node" / "p0.resc"
 RUN_FOR_S = "4"
 REPEATS = int(os.environ.get("CUBERANGE_DETERMINISM_REPEATS", "3"))
 
-# A port nothing else in the suite uses. The scenario opens a socket terminal whether or not
-# anybody connects, and the default 3777 collides with a round-trip test running alongside.
-LINK_PORT = 3877
+# The scenario opens a socket terminal whether or not anybody connects, so this run needs a port
+# of its own: the default link port collides with a round-trip test running alongside. It used to
+# name a literal with the comment "a port nothing else in the suite uses" - which was not true. The
+# number it picked is channel(0), the ground-station side of EX-L01's channel, and nothing reported
+# the overlap because the map was never consulted. ports.SCRATCH_LINK exists for exactly this.
+LINK_PORT = ports.SCRATCH_LINK
 
 
 def _capture(profile: str, index: int, tmp_path: Path) -> dict[str, str]:
@@ -58,6 +63,7 @@ def _capture(profile: str, index: int, tmp_path: Path) -> dict[str, str]:
             "-e", f"$obcuart=@{obc}",
             "-e", f"$linkport={LINK_PORT}",
             "-e", f"$profile=@{profile_path(profile)}",
+            "-e", f"$out=@{OUT}",
             "-e", f"include @{SCENARIO}",
             "-e", f'emulation RunFor "{RUN_FOR_S}"',
             "-e", "quit"]
@@ -184,6 +190,7 @@ def test_a_missing_profile_takes_the_scenario_down(firmware, tmp_path):
             "-e", f"$obcuart=@{obc}",
             "-e", f"$linkport={LINK_PORT + 1}",
             "-e", "$profile=@/nonexistent/cuberange-profile.resc",
+            "-e", f"$out=@{OUT}",
             "-e", f"include @{SCENARIO}",
             "-e", 'emulation RunFor "2"',
             "-e", "quit"]

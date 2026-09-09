@@ -20,10 +20,11 @@ import time
 from typing import List, Optional
 
 from ..proto.frame import Deframer, wrap
+from .. import ports
 
 
 class LinkChannel:
-    def __init__(self, listen_port: int, sat_host: str = "127.0.0.1", sat_port: int = 3777,
+    def __init__(self, listen_port: int, sat_host: str = "127.0.0.1", sat_port: int = ports.link(0),
                  listen_host: str = "127.0.0.1"):
         self.listen_addr = (listen_host, listen_port)
         self.sat_addr = (sat_host, sat_port)
