@@ -25,6 +25,7 @@ sys.path.insert(0, str(REPO / "src"))
 from cuberange.channel.link_channel import LinkChannel          # noqa: E402
 from cuberange.gs.link import SpaceLink                          # noqa: E402
 from cuberange.gs.station import GroundStation                   # noqa: E402
+from cuberange.renode.profile import profile_args
 from cuberange.renode.monitor import Monitor                     # noqa: E402
 from cuberange.renode.powerdomain import PowerDomain             # noqa: E402
 from cuberange.renode.supervisor import RenodeSupervisor         # noqa: E402
@@ -65,6 +66,7 @@ class Range:
                 "--port", str(MONITOR_PORT),
                 "-e", f"$comm=@{self.comm_elf}",
                 "-e", f"$injector=@{INJECTOR}",
+                *profile_args(),
                 "-e", f"include @{SCENARIO}",
                 "-e", "start"]
         self._ctx = self.sup.launch(argv, OUT / "exl01-renode.log")

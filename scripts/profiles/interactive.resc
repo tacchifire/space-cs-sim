@@ -1,0 +1,19 @@
+:name: interactive execution profile
+:description: fast, for the edit loop. NOT bit-reproducible - see ci.resc
+
+# Design section 4.3 defines two execution profiles, and until now neither was selectable: every
+# scenario hard-coded these two lines, so rules G1 and G2 (section 9.2) applied to nothing.
+#
+# quantum 2 ms is the largest quantum that keeps firmware output byte-identical. It is a CORRECTNESS
+# parameter, not a performance one: at 5 ms the firmware loses roughly 2.5% of its counter periods
+# with no error message, and the error is duration-dependent - 5 ms looks right at 5 and 10 virtual
+# seconds and only breaks at 20. Do not raise it to go faster.
+emulation SetGlobalQuantum "0.002"
+
+# Removes Renode's real-time throttle, which otherwise caps the emulation at exactly 1.0x.
+# Measured on an 8-core x86-64 host: 4.50x real time with four nodes.
+#
+# The cost is reproducibility. Runs under this profile diverge in internal state, and the tail of a
+# RunFor boundary can move by a line. Assertions written against this profile must match on content,
+# never on line count.
+emulation SetGlobalAdvanceImmediately true

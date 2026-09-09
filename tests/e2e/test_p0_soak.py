@@ -19,6 +19,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 from cuberange.gs.link import SpaceLink                      # noqa: E402
 from cuberange.gs.station import GroundStation               # noqa: E402
+from cuberange.renode.profile import profile_args
 from cuberange.renode.supervisor import Outcome, RenodeSupervisor  # noqa: E402
 
 RENODE_DIR = Path(os.environ.get(
@@ -43,6 +44,7 @@ def _attempt(sup: RenodeSupervisor, run_dir: Path, index: int, attempt: int):
     log = run_dir / f"run{index:02d}-try{attempt}.log"
     argv = ["./renode", "--disable-xwt", "--plain", "--hide-analyzers", "--hide-log",
             "--port", str(MONITOR_PORT),
+            *profile_args(),
             "-e", f"include @{REPO}/scripts/multi-node/p0.resc",
             "-e", "start"]
 

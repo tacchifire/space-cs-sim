@@ -1,6 +1,25 @@
 :name: EX-B01 - EPS kill switch
 :description: COMM, OBC and EPS on a CAN hub, plus a host-driven attacker with no privileges
 
+# Execution profile (design 4.3; rules G1/G2 of section 9.2). Renode's Monitor has no conditionals,
+# so the profile is a file the harness swaps by overriding $profile - the same mechanism $injector
+# uses, and for the same reason: a relative include inside an included file resolves against
+# Renode's own working directory, not this file. Measured: `include @sub/inner.resc` from a script
+# elsewhere reports "File does not exist: sub/inner.resc".
+#
+# This include is FIRST on purpose. A failing command aborts the rest of a .resc file (measured:
+# the line after a bad include never runs), so a profile that cannot be found takes the machines
+# down with it and the failure is loud. Last, it would have been silent in the worst possible way:
+# the scenario would build every node and run with NO quantum set, falling back to Renode's 100 us
+# default, which changes firmware timing without any error.
+#
+# Emulation-scope settings before any machine exists are fine - measured.
+#
+# The default below only serves someone running this by hand from a clone in $HOME; every harness
+# passes an absolute path via src/cuberange/renode/profile.py.
+$profile?=@~/space-cs-sim/scripts/profiles/interactive.resc
+include $profile
+
 $comm?=@/tmp/cuberange/build-comm/zephyr/zephyr.elf
 $obc?=@/tmp/cuberange/build-obc/zephyr/zephyr.elf
 $eps?=@/tmp/cuberange/build-eps-vuln/zephyr/zephyr.elf
@@ -52,6 +71,3 @@ mach create "attacker"
 include $injector
 machine CreateTcpCanInjector "inj" $injport
 connector Connect inj canHub
-
-emulation SetGlobalQuantum "0.002"
-emulation SetGlobalAdvanceImmediately true

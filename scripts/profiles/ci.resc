@@ -1,0 +1,16 @@
+:name: ci execution profile
+:description: bit-reproducible, 1.0x real time. Rules G1 and G2 of design section 9.2
+
+emulation SetGlobalQuantum "0.002"
+
+# G1. Without serial execution the design measured 14/14 runs diverging in internal state (about
+# 0.75% spread in ExecutedInstructions) and observably divergent peripheral traces; with it, 14/14
+# matched. tests/e2e/test_determinism.py reproduces that comparison on this host.
+emulation SetGlobalSerialExecution true
+
+# G2. Renode's default seed is random per process - three processes produced three values. G2 is an
+# independent requirement from G1 and neither substitutes for the other.
+emulation SetSeed 20260828
+
+# AdvanceImmediately is deliberately absent. It buys speed and costs bit-reproducibility, and this
+# profile exists to spend the speed on the reproducibility.
