@@ -1,0 +1,75 @@
+:name: EX-A01 - ADCS tumble
+:description: Four satellite nodes on a CAN hub, plus a host-driven attacker with no privileges
+
+# Execution profile (design 4.3; rules G1/G2 of section 9.2). Renode's Monitor has no conditionals,
+# so the profile is a file the harness swaps by overriding $profile - the same mechanism $injector
+# uses, and for the same reason: a relative include inside an included file resolves against
+# Renode's own working directory, not this file.
+#
+# This include is FIRST on purpose. A failing command aborts the rest of a .resc file, so a profile
+# that cannot be found takes the machines down with it and the failure is loud. Last, it would have
+# been silent in the worst way: every node built, running with no quantum set at all.
+$profile?=@~/space-cs-sim/scripts/profiles/interactive.resc
+include $profile
+
+$comm?=@/tmp/cuberange/build-comm/zephyr/zephyr.elf
+$obc?=@/tmp/cuberange/build-obc/zephyr/zephyr.elf
+$eps?=@/tmp/cuberange/build-eps-hard/zephyr/zephyr.elf
+$adcs?=@/tmp/cuberange/build-adcs-vuln/zephyr/zephyr.elf
+$commuart?=@/tmp/cuberange/comm.uart
+$obcuart?=@/tmp/cuberange/obc.uart
+$epsuart?=@/tmp/cuberange/eps.uart
+$adcsuart?=@/tmp/cuberange/adcs.uart
+$linkport?=3777
+$injport?=3779
+$injector?=@~/space-cs-sim/attacker/TcpCanInjector.cs
+
+emulation CreateCANHub "canHub"
+
+mach create "COMM"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $comm
+sysbus.usart3 CreateFileBackend $commuart true
+emulation CreateServerSocketTerminal $linkport "spacelink" false
+connector Connect sysbus.usart2 spacelink
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "OBC"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $obc
+sysbus.usart3 CreateFileBackend $obcuart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+# The EPS runs its HARDENED image here. EX-B01's attack is fixed; this exercise is about a
+# subsystem whose commands nobody thought to bound, not about the one nobody thought to authenticate.
+mach create "EPS"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $eps
+sysbus.usart3 CreateFileBackend $epsuart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "ADCS"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $adcs
+sysbus.usart3 CreateFileBackend $adcsuart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+# The attacker: a bare machine with no platform, no ELF and no CPU. It exists only so the CAN hub
+# can resolve GetName()/GetMachine() on the injector - an ICAN attached to a hub must be a
+# registered machine peripheral, or the exception poisons the hub for every node on it.
+mach create "attacker"
+include $injector
+machine CreateTcpCanInjector "inj" $injport
+connector Connect inj canHub

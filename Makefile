@@ -51,6 +51,7 @@ demo:
 	  -e '$$n2=@$(OUT)/build-n2/zephyr/zephyr.elf' \
 	  -e '$$n1uart=@$(OUT)/n1.uart' \
 	  -e '$$n2uart=@$(OUT)/n2.uart' \
+	  -e '$$profile=@$(CURDIR)/scripts/profiles/interactive.resc' \
 	  -e 'include @$(CURDIR)/scripts/multi-node/csp_ping.resc' \
 	  -e 'emulation RunFor "8"' -e 'quit' < /dev/null > $(OUT)/renode.log 2>&1
 	@echo "--- node 1 (client) ---"; cat $(OUT)/n1.uart
@@ -93,10 +94,13 @@ check: probe
 	PYTHONPATH=src python3 -m pytest tests/pytest -q
 	$(MAKE) -C tests/native test
 	$(MAKE) demo-p0
+	$(MAKE) determinism
 	$(MAKE) verify-all
+	$(MAKE) pair-gate
 	@echo
 	@echo "================================================================"
-	@echo "  CHECK PASSED - probe, codecs, native, round trip, exercises"
+	@echo "  CHECK PASSED - probe, codecs, native, round trip, determinism,"
+	@echo "                 exercises, firmware-pair gate"
 	@echo "================================================================"
 
 # P0's last acceptance condition: thirty round trips in a row. Slow (~10 min) and excluded from
@@ -122,7 +126,7 @@ verify:
 	    python3 -m pytest exercises/$(EX)/verify_*.py -v
 
 # Every exercise, both directions. This is the claim the product makes.
-verify-all: firmware-exl01
+verify-all: firmware-exl01 firmware-a01
 	PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest exercises/*/verify_*.py -v
 
@@ -131,3 +135,33 @@ firmware-exl01: firmware-p1
 	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
 	    -d $(OUT)/build-comm-hard firmware/apps/comm -- -DCUBERANGE_COMM_ANTIREPLAY=1
 	@ls -l $(OUT)/build-comm-hard/zephyr/zephyr.elf
+
+# The anti-strawman gate. CONTRIBUTING.md states the proof as a `diff` a contributor runs by hand,
+# and this Makefile used to describe it as "a CI gate" that did not exist. It now exists, it reads
+# firmware-matrix.yml, and it carries self-tests because a gate that cannot fail is not evidence.
+#
+# Four checks per pair, and the last two are the ones that matter: a misspelled cache variable
+# produces two identical images and a perfectly clean Kconfig diff, so "nothing else moved" would
+# pass while the mitigation was never compiled in.
+.PHONY: pair-gate
+pair-gate: firmware-exl01 firmware-a01
+	python3 tools/config_diff_gate.py --self-test
+	OUT=$(OUT) python3 tools/config_diff_gate.py
+
+# Rules G1 and G2 of the design's determinism section, reproduced rather than asserted. Runs the
+# same scenario three times under the CI profile and requires the guest UART captures to be
+# byte-identical. Measured here: 3/3 identical in 27 s.
+.PHONY: determinism
+determinism: firmware-p0
+	PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
+	    python3 -m pytest tests/e2e/test_determinism.py -q
+
+# EX-A01 images: the ADCS in both profiles. Needs the P0 pair and the hardened EPS as well, because
+# the scenario runs the FIXED EPS - EX-A01 is about a subsystem nobody bounded, not one nobody
+# authenticated, and running it against the broken EPS would let a learner solve it the EX-B01 way.
+firmware-a01: firmware-p1
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-adcs-vuln firmware/apps/adcs -- -DCUBERANGE_ADCS_TORQUE_LIMIT=0
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-adcs-hard firmware/apps/adcs -- -DCUBERANGE_ADCS_TORQUE_LIMIT=1
+	@ls -l $(OUT)/build-adcs-vuln/zephyr/zephyr.elf $(OUT)/build-adcs-hard/zephyr/zephyr.elf

@@ -1,0 +1,25 @@
+/*
+ * CubeRange ADCS: the tumble indicator, exposed as a named GPIO.
+ *
+ * Port D for the same measured reason the EPS rails use it: stm32h743.repl lists PB0, PB1, PB6,
+ * PB7, PB13, PB14 and PB15 in invertedAFPins, so a signal on port B reads inverted relative to ODR
+ * once an alternate function is configured. Port D carries no such entry, so a host process reading
+ * ODR sees exactly what the firmware wrote.
+ *
+ * Pin 6, not 5: the EPS COMM rail is on gpioPortD pin 5, and although the two nodes are separate
+ * machines with separate register files, keeping the pin numbers distinct means a host-side reader
+ * that is pointed at the wrong machine gets an obviously wrong answer instead of a plausible one.
+ */
+/ {
+	cuberange_adcs {
+		compatible = "gpio-leds";
+		tumble_flag: tumble_flag {
+			gpios = <&gpiod 6 GPIO_ACTIVE_HIGH>;
+			label = "ADCS tumble indicator";
+		};
+	};
+
+	aliases {
+		tumbleflag = &tumble_flag;
+	};
+};
