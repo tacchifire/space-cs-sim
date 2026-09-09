@@ -14,6 +14,8 @@ ttp:
 
 # EX-B01 — Kill the radio from the internal bus
 
+*日本語版: [README.ja.md](README.ja.md)*
+
 ## The situation
 
 You are on the satellite's CAN bus. You do not own any subsystem; you can only put frames on the

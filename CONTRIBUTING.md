@@ -37,6 +37,11 @@ that assertion it passes.
 The test file basename must be unique across exercises. Two files called `verify_test.py` cannot be
 collected together, and the failure hides well in build output.
 
+**Do not import a sibling `solve.py` by name.** Every exercise has one, and `sys.path.insert` makes
+whichever was imported first answer for all of them — EX-G01's verification silently received
+EX-F01's module and died at collection with "cannot import name PLUGIN_FILE from solve". Load it by
+path; `exercises/EX-G01-schedule-poisoning/verify_ex_g01.py` shows the three lines that do it.
+
 ### The vulnerable and mitigated builds must differ by one thing
 
 Guard the flaw behind a single build flag and change nothing else — no board, no `prj.conf`, no
@@ -48,7 +53,13 @@ diff <(grep ^CONFIG_ build-vuln/zephyr/.config | sort) \
 ```
 
 If that prints anything, the exercise is manufactured by weakening the platform, and it is teaching
-something that is not true. An exercise that only works with a defence disabled must say so in its
+something that is not true.
+
+**For a host-side exercise** there is no pair of builds to diff, so the rule needs an analogue.
+EX-G01's is: one implementation, two policy objects, and the implementation may not know which it
+holds — `test_schedule_policy.py` reads `schedule.py` and fails if it names either policy class. Any
+host-side exercise needs something of that shape, because "we only changed one thing" is otherwise
+unfalsifiable in a single process. An exercise that only works with a defence disabled must say so in its
 README, in those words, and explain what the learner should conclude instead.
 
 ### The target must be synthetic

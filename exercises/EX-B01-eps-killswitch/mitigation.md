@@ -1,5 +1,7 @@
 # EX-B01 mitigation — authenticate power commands
 
+*日本語版: [mitigation.ja.md](mitigation.ja.md)*
+
 ## The change
 
 One check, behind one build flag:

@@ -124,6 +124,7 @@ Recorded so a future run can tell a real regression from a slow machine:
 | `make probe` | 40 pass, 0 fail, 3 skip, about 6 minutes on a quiet host |
 | Four-node speed | 4.50x real time (8-core x86-64; the design's figure from a 14-core host was 2.34x) |
 | `make check` | 11m26s on a quiet host: probe, codecs, native, round trip, determinism, 14 exercise assertions, 4 firmware pairs |
+| Constellation | eight nodes in one emulation: 4 assertions in 17 s, peak RSS 688 MB, 20 virtual seconds in 4.16 s of emulation. NOT comparable with the design's 2.34x four-node figure — these nodes are idle after boot and the host was under load 8.9 |
 | Disk | Zephyr workspace 4.5 GB, SDK 2.0 GB, Renode 200 MB |
 
 **Do not run other Renode work while the probe runs.** The same probe took 35 minutes with two

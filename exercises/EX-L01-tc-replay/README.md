@@ -15,6 +15,8 @@ ttp:
 
 # EX-L01 — Replay a telecommand you cannot read
 
+*日本語版: [README.ja.md](README.ja.md)*
+
 ## The situation
 
 EX-B01 ended with the EPS refusing unauthenticated power commands, and its mitigation notes

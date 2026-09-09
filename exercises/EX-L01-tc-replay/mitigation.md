@@ -1,5 +1,7 @@
 # EX-L01 mitigation — reject frames that are not moving forward
 
+*日本語版: [mitigation.ja.md](mitigation.ja.md)*
+
 ## The change
 
 The TC transfer frame already carries an 8-bit sequence number. The mitigated COMM accepts a frame

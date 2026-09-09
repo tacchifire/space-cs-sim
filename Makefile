@@ -107,14 +107,16 @@ check: probe
 	@# targets rebuilds on its own when run directly, which is what you want while editing; inside
 	@# check it meant four pristine builds of the same six images.
 	$(MAKE) firmware-all
+	$(MAKE) firmware-sat1
 	$(MAKE) demo-p0     NOFW=1
 	$(MAKE) determinism NOFW=1
+	$(MAKE) constellation NOFW=1
 	$(MAKE) verify-all  NOFW=1
 	$(MAKE) pair-gate   NOFW=1
 	@echo
 	@echo "================================================================"
 	@echo "  CHECK PASSED - probe, codecs, native, round trip, determinism,"
-	@echo "                 exercises, firmware-pair gate"
+	@echo "                 constellation, exercises, firmware-pair gate"
 	@echo "================================================================"
 
 # P0's last acceptance condition: thirty round trips in a row. Slow (~10 min) and excluded from
@@ -140,7 +142,7 @@ verify:
 	    python3 -m pytest exercises/$(EX)/verify_*.py -v
 
 # Every exercise, both directions. This is the claim the product makes.
-verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01)
+verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01)
 	PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest exercises/*/verify_*.py -v
 
@@ -215,3 +217,39 @@ exercise:
 	  -e '$$profile=@$(CURDIR)/scripts/profiles/interactive.resc' \
 	  -e 'include @$(CURDIR)/exercises/$(EX)/scenario.resc' \
 	  -e 'start'
+
+# Satellite 1: the same four node roles, built with a different identity.
+#
+# One source tree, one build per (role, spacecraft). firmware/common/identity.cmake derives the CSP
+# addresses and the SCID from CUBERANGE_SAT_INDEX, so a second spacecraft is a build parameter and
+# not a source edit - which is what keeps the pair gate's "differ by exactly one flag" claim true
+# for every image.
+#
+# The vulnerable profiles are used here on purpose: satellite 1 exists so a scenario can show an
+# attack landing on one spacecraft while the other keeps working, and a fully hardened second
+# satellite would have nothing to show.
+.PHONY: firmware-sat1
+firmware-sat1:
+	@test -f $(ENV) || { echo "missing $(ENV) - run 'make toolchain' first"; exit 1; }
+	for role in comm obc eps adcs; do \
+	    . $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	        -d $(OUT)/build-$$role-sat1 firmware/apps/$$role -- -DCUBERANGE_SAT_INDEX=1 || exit 1; \
+	done
+	@ls -l $(OUT)/build-*-sat1/zephyr/zephyr.elf
+
+# Two spacecraft in one emulation: eight machines, two CAN hubs, two space links, one Monitor.
+#
+# Measured on an 8-core x86-64 host: eight nodes boot and the four assertions run in 17 s, peak RSS
+# 688 MB, and 20 virtual seconds cost 4.16 s of emulation (4.81x real time). That last figure is
+# NOT comparable with the design's 2.34x four-node number: these nodes are idle after boot, where
+# that measurement had CAN traffic, and the host was under load 8.9 at the time. RSS is the honest
+# comparison, and it is in line with the design's +50-120 MB per node.
+.PHONY: constellation
+constellation: $(call FWDEP,firmware-all firmware-sat1)
+	PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
+	    python3 -m pytest tests/e2e/test_constellation.py -v
+
+# EX-G01 needs the HARDENED OBC and EPS: the exercise is about a command that every spacecraft-side
+# control honours correctly, so the spacecraft-side controls all have to be present.
+firmware-g01: firmware-f01
+	@ls -l $(OUT)/build-obc-hard/zephyr/zephyr.elf $(OUT)/build-eps-hard/zephyr/zephyr.elf

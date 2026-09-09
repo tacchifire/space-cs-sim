@@ -9,7 +9,7 @@ attacks you can actually land, and mitigations proven to stop them.
 It is the space analogue of Toyota's [RAMN](https://github.com/ToyotaInfoTech/RAMN) board, which
 made automotive security learnable by putting four MCUs and a CAN bus on one PCB.
 
-**Status: four exercises, four satellite nodes.** A ground station sends a real ECSS PUS 17,1 and
+**Status: five exercises, two spacecraft.** A ground station sends a real ECSS PUS 17,1 and
 gets a real 17,2 back through CCSDS framing, an emulated UART link, and CSP over CAN between
 emulated STM32H753 nodes. The exercises chain, and each one attacks a limit the previous one's
 mitigation admitted to:
@@ -26,8 +26,17 @@ mitigation admitted to:
   shellcode: SRAM here is execute-never and Renode enforces it, so the payload is an address that
   was already in the image.
 
-Four attack origins are covered: the internal bus, the space link, the ADCS command envelope, and
-the OBC's own command parser.
+- **EX-G01** — no radio, no bus, no operator account. A file written into the ground segment's
+  plugin directory becomes a telecommand the operator's own station transmits, while every
+  spacecraft-side control from the four exercises above works exactly as designed.
+
+All five attack origins are covered: the internal bus, the space link, the ADCS command envelope,
+the OBC's own command parser, and the ground segment that decides what to send.
+
+There are two spacecraft. `make constellation` runs eight emulated nodes in one emulation — two
+satellites of four, on two CAN hubs, with two space links and their own CSP addresses and
+spacecraft IDs — and asserts that the buses are isolated, using a command that is known to work on
+the hub it belongs to so that "nothing happened" means the hub and not a typo.
 
 See [the design](docs/superpowers/specs/2026-08-28-cuberange-design.md) for where this is going.
 
@@ -93,7 +102,10 @@ make demo-p0
 | --- | --- |
 | `make probe` | Verifies every Renode capability the design depends on. 40 checks, including five deliberate-failure self-tests |
 | `make firmware-p0` | Builds the COMM and OBC images |
-| `make firmware-f01` | Every node image: COMM, OBC (both), both EPS profiles, both ADCS profiles |
+| `make firmware-f01` | Every satellite-0 image: COMM, OBC (both), both EPS profiles, both ADCS profiles |
+| `make firmware-g01` | The hardened OBC and EPS EX-G01 needs — the exercise is about every spacecraft-side control working |
+| `make firmware-sat1` | The same four roles built as spacecraft 1: different CSP addresses, different SCID |
+| `make constellation` | Eight nodes, two spacecraft, one emulation — and the bus isolation between them |
 | `make demo-p0` | Runs the PUS round trip and asserts it |
 | `make demo` | The R0 smoke test: two nodes exchanging CSP pings over CAN |
 | `make determinism` | Runs one scenario three times under the CI profile and requires byte-identical guest output |

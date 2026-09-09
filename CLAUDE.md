@@ -8,13 +8,23 @@ A hands-on range for space cybersecurity. Satellite firmware runs at instruction
 emulated STM32H753 nodes on a CAN bus, a ground station on the host, and security exercises that
 are verified in both directions — the attack lands, and the mitigation stops it.
 
+Two spacecraft, four nodes each, and they can run in one emulation. Identity is a build parameter:
+`firmware/common/identity.cmake` derives the CSP addresses and the SCID from `CUBERANGE_SAT_INDEX`,
+so one source tree still produces every node of every spacecraft. Satellite 0 keeps the numbers
+every existing scenario and write-up names — do not renumber it.
+
 **There is no CI.** `make check` is the gate, and a human has to type it. Nine places in this
 repository used to describe gates as CI-enforced; there has never been a `.github` directory. The
 verification is real and the automation around it is not, and those are different claims — see
 section 16 of the design for why this project is careful about the difference.
 
-Four exercises work today: EX-B01 (internal bus), EX-L01 (space link), EX-A01 (ADCS command
-envelope) and EX-F01 (the OBC's own PUS 8 parser). 14 assertions, all measured.
+Five exercises work today, one per attack origin: EX-B01 (internal bus), EX-L01 (space link),
+EX-A01 (ADCS command envelope), EX-F01 (the OBC's own PUS 8 parser) and EX-G01 (the ground segment
+that decides what to send). 17 assertions, all measured.
+
+EX-G01 is the host-side one, so the "differ by one flag" proof works differently: one `Scheduler`,
+two `ImportPolicy` objects, and `test_schedule_policy.py` fails if `schedule.py` so much as names
+either policy class. A scheduler that could inspect its policy could differ in anything.
 
 `docs/superpowers/specs/2026-08-28-cuberange-design.md` is the design and its section 16 is the
 record of every claim that turned out to be wrong.
@@ -45,7 +55,10 @@ Concretely:
 
 ```bash
 make probe        # 40 Renode capability checks incl. 5 deliberate-failure self-tests   ~6 min
-make firmware-f01 # every node image: COMM, OBC (both), EPS (both), ADCS (both)
+make firmware-f01 # every satellite-0 image: COMM, OBC (both), EPS (both), ADCS (both)
+make firmware-sat1 # the same four roles as spacecraft 1
+make firmware-g01 # the hardened OBC and EPS that EX-G01 runs against
+make constellation # eight nodes, two spacecraft, and the bus isolation between them
 make demo-p0      # PUS 17 round trip, ground station to OBC and back
 make determinism  # rules G1/G2: three CI-profile runs, byte-identical UART capture     ~30 s
 make pair-gate    # every vulnerable/mitigated pair differs by exactly one build flag
@@ -72,6 +85,7 @@ Changing any of these breaks something specific.
 | `csp_conf.version = 1`, set before `csp_init()` | libcsp defaults to **2** and picks header and CFP layouts at runtime. Nodes speaking v2 to each other look perfectly healthy while every v1 tool is silently ignored |
 | `SetGlobalQuantum "0.002"` | Largest quantum with byte-identical firmware output. Above it, timing drifts silently and duration-dependently — 5 ms looks correct at 5 s and 10 s and breaks at 20 s |
 | `SetGlobalAdvanceImmediately true` (interactive only) | Removes Renode's real-time throttle. Without it four nodes run at 0.301x instead of 2.34x. CI leaves it off and adds `SetGlobalSerialExecution` and `SetSeed` |
+| CSP addresses are **five bits** | `csp.py` masks with 0x1F and the CFP CAN identifier uses the same width. Eight addresses per spacecraft gives four spacecraft, and `identity.cmake` refuses an index past that rather than wrapping onto another satellite's nodes |
 | CSP port **10**, not 17 | libcsp's `CSP_PORT_MAX_BIND` defaults to 16 and everything above is reserved for ephemeral source ports |
 
 ## Failure modes that produce no error message
@@ -100,6 +114,21 @@ This domain is full of them. These have all been hit here:
 - **Renode's Monitor emits the prompt and the command echo as separate chunks.** A client that
   waits for "a prompt" returns before the result arrives and finds it at the head of the next
   command's output. `src/cuberange/renode/monitor.py` anchors on the echo.
+- **Every exercise has a `solve.py`, and `sys.path.insert` makes the first one win.** EX-G01's
+  verification silently received EX-F01's module and died at collection with "cannot import name
+  PLUGIN_FILE from solve". CONTRIBUTING.md warned about `verify_*.py` basenames; this is the same
+  hazard in a file every exercise has. Load a sibling `solve.py` by path.
+- **CAN hub names are emulation-scope.** Two scenarios that both say `canHub` join every machine
+  to one bus. Nothing reports it, and the symptom is an attack on one spacecraft landing on the
+  other. `tests/e2e/test_constellation.py` asserts the isolation with a positive control — the same
+  command on the hub it belongs to must work — because asserting only that nothing happened would
+  pass just as well against a typo.
+- **A global `pause` is unavoidable for a node reload, and costs the other machines nothing they
+  can tell.** Measured: `sysbus LoadELF` fails on a running emulation even with the target CPU
+  already halted, while `machine RequestReset` and `cpu IsHalted false` both succeed without one.
+  `pause` stops the whole TIME DOMAIN, so during the window the other spacecraft's instruction
+  counter and elapsed virtual time are both frozen and both resume. The cost is wall clock, which
+  matters only to host code holding a real-time budget across it.
 - **`cpu TranslateAddress` caches by address and not by access type.** Ask about `Read` on an
   address and the very next `InstructionFetch` on the SAME address returns a false success. A
   different page, or flash, is unaffected. This matters because the natural way to check "SRAM is
@@ -164,6 +193,12 @@ src/cuberange/renode/           supervisor, Monitor client, External Control cli
 src/cuberange/gs/               ground station
 src/cuberange/channel/          the link proxy an attacker taps and replays through
 attacker/TcpCanInjector.cs      90 lines of C# Renode compiles at runtime; raw CAN from a socket
+src/cuberange/ports.py          the port map; one place, with a collision test
+src/cuberange/identity.py       who is who, mirroring identity.cmake; a test asserts they agree
+src/cuberange/gs/schedule.py    the TC plan and the importer EX-G01 attacks
+src/cuberange/gs/import_policy.py  the two policies that are EX-G01's whole difference
+firmware/common/identity.cmake  CSP addresses and SCID derived from CUBERANGE_SAT_INDEX
+scripts/multi-node/constellation.resc  two spacecraft, two hubs, two links, one Monitor
 scripts/profiles/               interactive and ci execution profiles; scenarios include one
 tools/config_diff_gate.py       the anti-strawman gate, with self-tests
 firmware-matrix.yml             which vulnerable/mitigated pairs the gate checks
