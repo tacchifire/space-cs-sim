@@ -9,6 +9,7 @@
  */
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
+#include <zephyr/drivers/gpio.h>
 #include <zephyr/sys/printk.h>
 #include <string.h>
 
@@ -41,6 +42,7 @@
  * an authenticated command to the EPS - the OBC is one of the nodes that legitimately holds the
  * power token. This is the command EX-L01 replays. */
 #define FUNC_SET_COMM_RAIL 1
+#define FUNC_MAINTENANCE   9
 #define CSP_PORT_POWER     11
 #define ADDR_EPS           2
 #define PWR_OP_SET_RAIL    1
@@ -48,6 +50,82 @@
 static const uint8_t POWER_TOKEN[4] = {0x5A, 0xC3, 0x11, 0xE7};
 #define OBC_APID          0x0A9
 #define TIME_LEN          4
+
+/* --------------------------------------------------------------- EX-F01 -----
+ *
+ * The PUS 8 argument block is copied into a frame-local buffer before it is parsed. That is an
+ * ordinary shape - a handler that wants a stable, aligned copy of its arguments - and the
+ * vulnerable build sizes the copy from the packet rather than from the buffer.
+ *
+ * What this can and cannot be exploited into is settled by measurement, not by preference. Renode
+ * enforces the MPU exactly as the part does: SRAM is execute-never, so PC landing in the buffer
+ * executes nothing and takes a MemManage fault. probe.sh section G reproduces that. Teaching
+ * shellcode here would be teaching something false, so the exercise is code reuse - and the
+ * defaults that make it work are the real ones, not a weakened build: Zephyr has ARM_MPU,
+ * HW_STACK_PROTECTION and MPU_STACK_GUARD on, and STACK_CANARIES, STACK_SENTINEL and USERSPACE off.
+ * The stack guard sits BELOW the stack, so a copy running upward through the frame never touches
+ * it.
+ */
+#define PUS8_ARG_BUF_LEN  16
+
+static bool fdir_inhibited;
+static const struct gpio_dt_spec fdir_flag = GPIO_DT_SPEC_GET(DT_ALIAS(fdirinhibit), gpios);
+
+/* Maintenance handler, disabled in flight.
+ *
+ * Every spacecraft carries a few of these: a privileged action that made sense on the bench, was
+ * never removed, and is not reachable from any command the ground can legally send. It sits in the
+ * command table below with its enable bit clear, so the dispatcher refuses it and the linker keeps
+ * it. At a fixed address, because the flash is XIP and there is no ASLR - both measured.
+ *
+ * An earlier version used `__attribute__((used))` plus a volatile function pointer, and
+ * --gc-sections removed it anyway: nothing reachable referenced the pointer either, and the
+ * "FDIR INHIBITED" string was simply absent from the image. Dead code that ships is the premise of
+ * this exercise; dead code the linker removes would make it a fiction. The table is what keeps it
+ * honest, and it is also the more realistic shape.
+ */
+__attribute__((noinline))
+static void maintenance_inhibit_fdir(void)
+{
+	if (!fdir_inhibited) {
+		fdir_inhibited = true;
+		gpio_pin_set_dt(&fdir_flag, 1);
+		printk("OBC: FDIR INHIBITED by maintenance handler\n");
+	}
+	/* This handler cannot return, and the reason is worth stating rather than hiding.
+	 *
+	 * It was entered by a return instruction reading a saved link register the attacker chose,
+	 * so its own link register still holds that same value: returning re-enters it, forever.
+	 * Measured before this line existed - 21 repeats of the message in six seconds, a thread
+	 * spinning on a poisoned LR and burning the CPU that everything else on this node shares.
+	 *
+	 * Parking the task is the least misleading model. A real chain would not stop here: it would
+	 * pivot the stack and keep going, which is EX-F01b. This exercise ends at the first gadget,
+	 * and says so.
+	 */
+	k_thread_abort(k_current_get());
+}
+
+static void command_comm_rail(uint8_t state);
+
+static void function_set_comm_rail(void)
+{
+	/* The argument is read from the copied block by the dispatcher's caller. */
+}
+
+struct pus8_function {
+	uint16_t id;
+	bool enabled;
+	void (*handler)(void);
+};
+
+/* Function 9 is the maintenance entry, and `enabled` is what stands between the ground and it.
+ * That is an authorisation check, and it is not the bug in this exercise - the dispatcher honours
+ * it faithfully. EX-F01 never calls this table at all. */
+static const struct pus8_function FUNCTION_TABLE[] = {
+	{ FUNC_SET_COMM_RAIL,   true,  function_set_comm_rail },
+	{ FUNC_MAINTENANCE,     false, maintenance_inhibit_fdir },
+};
 
 #define ROUTER_STACK 1024
 #define APP_STACK    2048
@@ -132,19 +210,48 @@ static void command_comm_rail(uint8_t state)
 	printk("OBC: PUS 8 executed - COMM rail %s\n", state ? "ON" : "OFF");
 }
 
+/* noinline so the handler owns a frame with a saved return address. Inlining is not a security
+ * control and this is set for both builds, so the pair stays identical apart from the flag. */
+__attribute__((noinline))
 static void handle_function(const uint8_t *app_data, size_t len)
 {
+	uint8_t args[PUS8_ARG_BUF_LEN];
+
 	if (len < 3) {
 		printk("OBC: PUS 8 argument block too short (%u octets)\n", (unsigned int)len);
 		return;
 	}
 	uint16_t function_id = (uint16_t)((app_data[0] << 8) | app_data[1]);
+	size_t arg_len = len - 2;
 
-	if (function_id == FUNC_SET_COMM_RAIL) {
-		command_comm_rail(app_data[2]);
-	} else {
-		printk("OBC: unknown function %u\n", function_id);
+#if CUBERANGE_OBC_PUS8_LENGTH_CHECK
+	/* The whole mitigation. One line, and it is the difference between a range exercise and a
+	 * control-flow hijack. */
+	if (arg_len > sizeof(args)) {
+		printk("OBC: REJECTED PUS 8 argument block of %u octets (buffer is %u)\n",
+		       (unsigned int)arg_len, (unsigned int)sizeof(args));
+		return;
 	}
+#endif
+	/* The length comes from the packet. Nothing above bounds it against the buffer. */
+	memcpy(args, &app_data[2], arg_len);
+
+	for (size_t i = 0; i < ARRAY_SIZE(FUNCTION_TABLE); i++) {
+		if (FUNCTION_TABLE[i].id != function_id) {
+			continue;
+		}
+		if (!FUNCTION_TABLE[i].enabled) {
+			printk("OBC: function %u is disabled in flight\n", function_id);
+			return;
+		}
+		if (function_id == FUNC_SET_COMM_RAIL) {
+			command_comm_rail(args[0]);
+		} else {
+			FUNCTION_TABLE[i].handler();
+		}
+		return;
+	}
+	printk("OBC: unknown function %u\n", function_id);
 }
 
 static void handle_space_packet(const uint8_t *raw, size_t len)
@@ -230,6 +337,14 @@ K_THREAD_DEFINE(app_id, APP_STACK, app_task, NULL, NULL, NULL, 1, 0, K_TICKS_FOR
 int main(void)
 {
 	printk("CUBERANGE: OBC (addr %d) booting\n", OBC_ADDR);
+
+	if (!gpio_is_ready_dt(&fdir_flag)) {
+		printk("OBC: FATAL FDIR indicator GPIO not ready\n");
+		return -1;
+	}
+	/* Starts low. FDIR is active until something inhibits it, and nothing the ground can send
+	 * legally does. */
+	gpio_pin_configure_dt(&fdir_flag, GPIO_OUTPUT_INACTIVE);
 
 	/* Pin CSP v1. libcsp defaults csp_conf.version to 2 (src/csp_init.c:18) and selects the
 	 * header and CFP layouts from it at RUNTIME, so "we use CSP v1" is not true unless it is set

@@ -1,0 +1,25 @@
+/*
+ * CubeRange OBC: the FDIR-inhibit indicator, exposed as a named GPIO.
+ *
+ * Port D for the measured reason the EPS rails and the ADCS tumble flag use it: stm32h743.repl
+ * lists six port-B pins in invertedAFPins, where a signal reads inverted relative to ODR once an
+ * alternate function is configured. Port D carries no such entry.
+ *
+ * Pin 7, distinct from the EPS COMM rail (pin 5) and the ADCS tumble flag (pin 6). The three nodes
+ * have separate register files, so the numbers need not differ - but keeping them distinct means a
+ * host reader pointed at the wrong machine gets an obviously wrong answer rather than a plausible
+ * one, and that has already saved a debugging session on this range.
+ */
+/ {
+	cuberange_obc {
+		compatible = "gpio-leds";
+		fdir_inhibit: fdir_inhibit {
+			gpios = <&gpiod 7 GPIO_ACTIVE_HIGH>;
+			label = "FDIR inhibit";
+		};
+	};
+
+	aliases {
+		fdirinhibit = &fdir_inhibit;
+	};
+};

@@ -35,3 +35,9 @@ pairs:
     flag: CUBERANGE_ADCS_TORQUE_LIMIT
     vuln: { value: "0", build: build-adcs-vuln }
     hard: { value: "1", build: build-adcs-hard }
+
+  - id: EX-F01
+    app: firmware/apps/obc
+    flag: CUBERANGE_OBC_PUS8_LENGTH_CHECK
+    vuln: { value: "0", build: build-obc }
+    hard: { value: "1", build: build-obc-hard }
