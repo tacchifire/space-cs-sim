@@ -9,6 +9,8 @@ project(cuberange_eps)
 #   west build ... -- -DCUBERANGE_EPS_REQUIRE_AUTH=1
 set(CUBERANGE_EPS_REQUIRE_AUTH 0 CACHE STRING "reject unauthenticated power commands")
 
+include(${CMAKE_CURRENT_LIST_DIR}/../../common/identity.cmake)
+
 target_sources(app PRIVATE src/main.c ../../common/cuberange_proto.c)
 target_include_directories(app PRIVATE ../../common)
 target_link_libraries(app PRIVATE csp)

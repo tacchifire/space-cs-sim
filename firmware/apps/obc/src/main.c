@@ -18,8 +18,12 @@
 
 #include "cuberange_proto.h"
 
-#define OBC_ADDR      1
-#define COMM_ADDR     5
+#ifndef OBC_ADDR
+#define OBC_ADDR 1
+#endif
+#ifndef COMM_ADDR
+#define COMM_ADDR 5
+#endif
 /* CSP port for the PUS pipe. NOT 17: libcsp's CSP_PORT_MAX_BIND defaults to 16, csp_port.c
  * rejects any lookup above it, and ports above 16 are reserved for outgoing ephemeral source
  * ports (conn->sport_outgoing = CSP_PORT_MAX_BIND + 1 + i). Binding 17 to match the PUS service
@@ -44,11 +48,15 @@
 #define FUNC_SET_COMM_RAIL 1
 #define FUNC_MAINTENANCE   9
 #define CSP_PORT_POWER     11
+#ifndef ADDR_EPS
 #define ADDR_EPS           2
+#endif
 #define PWR_OP_SET_RAIL    1
 #define RAIL_COMM          0
 static const uint8_t POWER_TOKEN[4] = {0x5A, 0xC3, 0x11, 0xE7};
-#define OBC_APID          0x0A9
+#ifndef OBC_APID
+#define OBC_APID 0x0A9
+#endif
 #define TIME_LEN          4
 
 /* --------------------------------------------------------------- EX-F01 -----

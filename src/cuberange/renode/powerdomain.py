@@ -53,30 +53,62 @@ class PowerDomain:
         self.pin = pin
         self.state: Optional[bool] = None
         self.events: list = []
+        self.latched_unpowered_at_start = False
 
     def read_rail(self) -> bool:
-        self.mon.command(f'mach set "{self.eps_machine}"')
-        return bool((self.mon.read_u32(self.odr_addr) >> self.pin) & 1)
+        # Two dependent commands, so they have to be atomic. With one satellite there was only
+        # ever one caller; with two there are two PowerDomains sharing the single permitted
+        # Monitor session, and a `mach set` from the other landing in between returns the WRONG
+        # machine's register with no error anywhere.
+        with self.mon.exclusive():
+            self.mon.command(f'mach set "{self.eps_machine}"')
+            return bool((self.mon.read_u32(self.odr_addr) >> self.pin) & 1)
 
     def _cut_power(self) -> None:
-        self.mon.command(f'mach set "{self.comm_machine}"')
-        self.mon.command("cpu IsHalted true")
+        with self.mon.exclusive():
+            self.mon.command(f'mach set "{self.comm_machine}"')
+            self.mon.command("cpu IsHalted true")
 
     def _restore_power(self) -> None:
-        # Free-running flow. `sysbus LoadELF` refuses on an unpaused machine, so take a brief
-        # global pause; under a global pause `machine Reset` is safe and does not deadlock.
-        self.mon.command("pause")
-        self.mon.command(f'mach set "{self.comm_machine}"')
-        self.mon.command("machine Reset")
-        self.mon.command(f"sysbus LoadELF @{self.comm_elf}")
-        self.mon.command("cpu IsHalted false")
-        self.mon.command("start")
+        """Reload and unhalt the node whose rail came back.
+
+        The global pause is unavoidable and it was worth checking rather than assuming. Measured:
+        `sysbus LoadELF` fails on a running emulation even when the target CPU is already halted -
+        "There was an error executing command" - while `machine RequestReset` and
+        `cpu IsHalted false` both succeed without one. Only the reload needs it, and the reload is
+        needed because `machine Reset` does not zero RAM, so a bare unhalt resumes into the old
+        heap and the node never boots.
+
+        What that global pause costs the OTHER spacecraft, also measured: nothing they can tell.
+        `pause` stops the whole TIME DOMAIN, so during the window the other machines' instruction
+        counters and elapsed virtual time are both frozen, and both advance again afterwards. The
+        cost is wall clock, not virtual time - which matters only to host-side code holding a
+        real-time budget across the window, and is why the window contains nothing but the reload.
+        """
+        with self.mon.exclusive():
+            self.mon.command("pause")
+            self.mon.command(f'mach set "{self.comm_machine}"')
+            self.mon.command("machine Reset")
+            self.mon.command(f"sysbus LoadELF @{self.comm_elf}")
+            self.mon.command("cpu IsHalted false")
+            self.mon.command("start")
 
     def poll(self) -> Optional[RailEvent]:
-        """Apply any rail change since the last call. Returns the event, or None if unchanged."""
+        """Apply any rail change since the last call. Returns the event, or None if unchanged.
+
+        The first call only latches. That is deliberate - there is nothing to apply on the first
+        observation - but it does mean `state` can read False while the node is still executing,
+        because nothing has cut its power yet. Callers that treat `state is False` as "the node is
+        down" are asking the wrong object; ask whether an EVENT arrived.
+        """
         powered = self.read_rail()
         if self.state is None:
             self.state = powered
+            if not powered:
+                # A rail that is already off at the first look is not a transition, so no event is
+                # raised and no machine is halted. Say so, rather than leaving a latched False that
+                # reads like an applied outage.
+                self.latched_unpowered_at_start = True
             return None
         if powered == self.state:
             return None

@@ -21,8 +21,17 @@
 #define CR_ASM_2 0xfc
 #define CR_ASM_3 0x1d
 
+/* Spacecraft identity. Overridable so a second satellite is a build parameter rather than a
+ * source edit: with both spacecraft emitting 0x0A9 their frames are wire-indistinguishable, and a
+ * ground station connected to one would accept the other's telemetry without a word. See
+ * firmware/common/identity.cmake and src/cuberange/proto/frame.py, which parameterises the same
+ * pair on the host side. */
+#ifndef CR_SCID
 #define CR_SCID           0x0A9
+#endif
+#ifndef CR_VCID
 #define CR_VCID           0
+#endif
 #define CR_TC_HEADER_LEN  5
 #define CR_TM_HEADER_LEN  6
 #define CR_FECF_LEN       2

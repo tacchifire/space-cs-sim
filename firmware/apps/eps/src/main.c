@@ -19,7 +19,9 @@
 #include <csp/csp.h>
 #include <csp/drivers/can_zephyr.h>
 
-#define EPS_ADDR        2
+#ifndef EPS_ADDR
+#define EPS_ADDR 2
+#endif
 #define CSP_PORT_PUS    10
 #define CSP_PORT_POWER  11
 #define CAN_BITRATE     1000000

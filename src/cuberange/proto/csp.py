@@ -36,10 +36,16 @@ BEGIN = 0
 MORE = 1
 
 # Node addresses used across CubeRange.
-ADDR_OBC = 1
-ADDR_EPS = 2
-ADDR_ADCS = 4
-ADDR_COMM = 5
+# Spacecraft 0's node addresses, kept as names because every solver and write-up refers to them.
+# They are DERIVED, not authoritative: cuberange.identity.spacecraft(n) is where the derivation
+# lives, and it mirrors firmware/common/identity.cmake. Anything that has to work on more than one
+# spacecraft must ask identity, because these four constants silently address spacecraft 0.
+from ..identity import SAT0 as _SAT0
+
+ADDR_OBC = _SAT0.obc
+ADDR_EPS = _SAT0.eps
+ADDR_ADCS = _SAT0.adcs
+ADDR_COMM = _SAT0.comm
 
 
 def encode_header(priority: int, src: int, dst: int, dport: int, sport: int,

@@ -1,0 +1,125 @@
+:name: CubeRange constellation
+:description: Two independent spacecraft, four nodes each, in one emulation
+
+# Execution profile (design 4.3; rules G1/G2 of section 9.2), included FIRST so that a profile
+# which cannot be found takes the machines down with it rather than leaving eight nodes running
+# with no quantum set.
+$profile?=@~/space-cs-sim/scripts/profiles/interactive.resc
+include $profile
+
+# ---------------------------------------------------------------------------- satellite 0
+# CSP addresses OBC 1, EPS 2, ADCS 4, COMM 5. SCID 0x0A9. Space link on 3777.
+$comm0?=@/tmp/cuberange/build-comm/zephyr/zephyr.elf
+$obc0?=@/tmp/cuberange/build-obc/zephyr/zephyr.elf
+$eps0?=@/tmp/cuberange/build-eps-vuln/zephyr/zephyr.elf
+$adcs0?=@/tmp/cuberange/build-adcs-vuln/zephyr/zephyr.elf
+$comm0uart?=@/tmp/cuberange/sat0-comm.uart
+$obc0uart?=@/tmp/cuberange/sat0-obc.uart
+$eps0uart?=@/tmp/cuberange/sat0-eps.uart
+$adcs0uart?=@/tmp/cuberange/sat0-adcs.uart
+$link0?=3777
+
+# ---------------------------------------------------------------------------- satellite 1
+# CSP addresses OBC 9, EPS 10, ADCS 12, COMM 13. SCID 0x0AA. Space link on 3787.
+$comm1?=@/tmp/cuberange/build-comm-sat1/zephyr/zephyr.elf
+$obc1?=@/tmp/cuberange/build-obc-sat1/zephyr/zephyr.elf
+$eps1?=@/tmp/cuberange/build-eps-sat1/zephyr/zephyr.elf
+$adcs1?=@/tmp/cuberange/build-adcs-sat1/zephyr/zephyr.elf
+$comm1uart?=@/tmp/cuberange/sat1-comm.uart
+$obc1uart?=@/tmp/cuberange/sat1-obc.uart
+$eps1uart?=@/tmp/cuberange/sat1-eps.uart
+$adcs1uart?=@/tmp/cuberange/sat1-adcs.uart
+$link1?=3787
+
+# TWO hubs, and the names are what keeps them apart. Hub names are emulation-scope, so a scenario
+# that reused "canHub" would silently join both spacecraft to one bus - and the symptom would be a
+# range where an attack on one satellite mysteriously worked on the other. The test in
+# tests/e2e/test_constellation.py asserts the isolation rather than assuming it.
+emulation CreateCANHub "canHub0"
+emulation CreateCANHub "canHub1"
+
+mach create "SAT0_COMM"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub0
+sysbus LoadELF $comm0
+sysbus.usart3 CreateFileBackend $comm0uart true
+emulation CreateServerSocketTerminal $link0 "spacelink0" false
+connector Connect sysbus.usart2 spacelink0
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "SAT0_OBC"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub0
+sysbus LoadELF $obc0
+sysbus.usart3 CreateFileBackend $obc0uart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "SAT0_EPS"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub0
+sysbus LoadELF $eps0
+sysbus.usart3 CreateFileBackend $eps0uart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "SAT0_ADCS"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub0
+sysbus LoadELF $adcs0
+sysbus.usart3 CreateFileBackend $adcs0uart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "SAT1_COMM"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub1
+sysbus LoadELF $comm1
+sysbus.usart3 CreateFileBackend $comm1uart true
+emulation CreateServerSocketTerminal $link1 "spacelink1" false
+connector Connect sysbus.usart2 spacelink1
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "SAT1_OBC"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub1
+sysbus LoadELF $obc1
+sysbus.usart3 CreateFileBackend $obc1uart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "SAT1_EPS"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub1
+sysbus LoadELF $eps1
+sysbus.usart3 CreateFileBackend $eps1uart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "SAT1_ADCS"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub1
+sysbus LoadELF $adcs1
+sysbus.usart3 CreateFileBackend $adcs1uart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+# No attacker machine here. The constellation scenario exists to establish that two spacecraft can
+# coexist and stay apart; the exercises that need an injector create their own on the hub they are
+# attacking. Adding one to both hubs by default would put a raw CAN entry point on a spacecraft no
+# exercise had asked to expose.
+#
+# ONE Monitor serves both, because rule L1 permits exactly one control client per emulation and
+# both control listeners have a backlog of 1. Host code selects a spacecraft with `mach set`, which
+# is why src/cuberange/renode/monitor.py serialises the session - a `mach set` from one satellite's
+# poller landing inside another's read returns the wrong machine's register with no error.

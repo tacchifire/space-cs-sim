@@ -23,6 +23,12 @@ from __future__ import annotations
 from .crc import crc16_ccsds
 
 ASM = b"\x1a\xcf\xfc\x1d"
+
+# Satellite 0's identity. It is a DEFAULT, not a constant of the range: a second spacecraft needs
+# its own, and until these were parameters both would have emitted and accepted byte-identical
+# frame identities. A ground station wired to satellite 2's link would have accepted satellite 1's
+# telemetry without a word - the quietest possible failure, and the one that makes a multi-satellite
+# range teach something false.
 SCID = 0x0A9
 VCID = 0
 
@@ -33,15 +39,32 @@ FIRST_HEADER_POINTER = 0          # a packet starts at the first octet of the da
 MAX_FRAME_LEN = 1024
 
 
-def encode_tc_frame(payload: bytes, seq: int) -> bytes:
+def _check_identity(scid: int, vcid: int, scid_bits: int, vcid_bits: int) -> None:
+    """Refuse an identity that does not fit, rather than masking it into a different spacecraft.
+
+    The encoders used to mask: `scid=0x4A9` went out as 0x0A9. A ground station that kept the
+    untruncated value would then transmit to one spacecraft and reject every reply from it, which
+    presents as a satellite that has gone silent.
+    """
+    if not 0 <= scid < (1 << scid_bits):
+        raise ValueError(
+            f"SCID 0x{scid:X} does not fit in {scid_bits} bits; masking it would address a "
+            f"different spacecraft")
+    if not 0 <= vcid < (1 << vcid_bits):
+        raise ValueError(f"VCID {vcid} does not fit in {vcid_bits} bits")
+
+
+def encode_tc_frame(payload: bytes, seq: int, scid: int = SCID, vcid: int = VCID) -> bytes:
+    # TC primary header: SCID is 10 bits split across octets 0-1, VCID is 6 bits in octet 2.
+    _check_identity(scid, vcid, scid_bits=10, vcid_bits=6)
     total = TC_HEADER_LEN + len(payload) + FECF_LEN
     if total > MAX_FRAME_LEN:
         raise ValueError(f"TC frame of {total} octets exceeds the {MAX_FRAME_LEN} limit")
     length_field = total - 1
     header = bytes([
-        (SCID >> 8) & 0x03,
-        SCID & 0xFF,
-        ((VCID & 0x3F) << 2) | ((length_field >> 8) & 0x03),
+        (scid >> 8) & 0x03,
+        scid & 0xFF,
+        ((vcid & 0x3F) << 2) | ((length_field >> 8) & 0x03),
         length_field & 0xFF,
         seq & 0xFF,
     ])
@@ -49,7 +72,21 @@ def encode_tc_frame(payload: bytes, seq: int) -> bytes:
     return body + crc16_ccsds(body).to_bytes(2, "big")
 
 
-def decode_tc_frame(frame: bytes) -> tuple[int, bytes]:
+def tc_frame_identity(frame: bytes) -> tuple[int, int]:
+    """(scid, vcid) out of a TC primary header, without validating anything else."""
+    if len(frame) < TC_HEADER_LEN:
+        raise ValueError(f"TC frame too short to carry an identity: {len(frame)} octets")
+    return ((frame[0] & 0x03) << 8) | frame[1], (frame[2] >> 2) & 0x3F
+
+
+def decode_tc_frame(frame: bytes, expect_scid: int | None = None,
+                    expect_vcid: int | None = None) -> tuple[int, bytes]:
+    """Decode a TC frame, optionally requiring it to be addressed to a particular spacecraft.
+
+    `expect_scid` defaults to None - accept anything - because the FRAMING layer genuinely does not
+    know which spacecraft the caller meant. The caller does, and a ground station that omits it is
+    choosing to accept every satellite in earshot.
+    """
     if len(frame) < TC_HEADER_LEN + FECF_LEN:
         raise ValueError(f"TC frame too short: {len(frame)} octets")
     if crc16_ccsds(frame) != 0x0000:
@@ -57,14 +94,22 @@ def decode_tc_frame(frame: bytes) -> tuple[int, bytes]:
     declared = (((frame[2] & 0x03) << 8) | frame[3]) + 1
     if declared != len(frame):
         raise ValueError(f"TC frame declares {declared} octets but is {len(frame)}")
+    scid, vcid = tc_frame_identity(frame)
+    if expect_scid is not None and scid != expect_scid:
+        raise ValueError(f"TC frame is for spacecraft 0x{scid:03X}, expected 0x{expect_scid:03X}")
+    if expect_vcid is not None and vcid != expect_vcid:
+        raise ValueError(f"TC frame is on VC {vcid}, expected {expect_vcid}")
     return frame[4], frame[TC_HEADER_LEN:-FECF_LEN]
 
 
-def encode_tm_frame(payload: bytes, mc_count: int, vc_count: int) -> bytes:
+def encode_tm_frame(payload: bytes, mc_count: int, vc_count: int,
+                    scid: int = SCID, vcid: int = VCID) -> bytes:
+    # TM primary header: SCID is 10 bits and VCID only 3, both inside the first 16-bit word.
+    _check_identity(scid, vcid, scid_bits=10, vcid_bits=3)
     total = TM_HEADER_LEN + len(payload) + FECF_LEN
     if total > MAX_FRAME_LEN:
         raise ValueError(f"TM frame of {total} octets exceeds the {MAX_FRAME_LEN} limit")
-    word0 = ((SCID & 0x3FF) << 4) | ((VCID & 0x7) << 1)      # ocf flag = 0
+    word0 = ((scid & 0x3FF) << 4) | ((vcid & 0x7) << 1)      # ocf flag = 0
     header = (word0.to_bytes(2, "big")
               + bytes([mc_count & 0xFF, vc_count & 0xFF])
               + FIRST_HEADER_POINTER.to_bytes(2, "big"))
@@ -72,11 +117,26 @@ def encode_tm_frame(payload: bytes, mc_count: int, vc_count: int) -> bytes:
     return body + crc16_ccsds(body).to_bytes(2, "big")
 
 
-def decode_tm_frame(frame: bytes) -> tuple[int, int, bytes]:
+def tm_frame_identity(frame: bytes) -> tuple[int, int]:
+    """(scid, vcid) out of a TM primary header, without validating anything else."""
+    if len(frame) < 2:
+        raise ValueError(f"TM frame too short to carry an identity: {len(frame)} octets")
+    word0 = (frame[0] << 8) | frame[1]
+    return (word0 >> 4) & 0x3FF, (word0 >> 1) & 0x7
+
+
+def decode_tm_frame(frame: bytes, expect_scid: int | None = None,
+                    expect_vcid: int | None = None) -> tuple[int, int, bytes]:
+    """Decode a TM frame, optionally requiring it to come from a particular spacecraft."""
     if len(frame) < TM_HEADER_LEN + FECF_LEN:
         raise ValueError(f"TM frame too short: {len(frame)} octets")
     if crc16_ccsds(frame) != 0x0000:
         raise ValueError("FECF check failed")
+    scid, vcid = tm_frame_identity(frame)
+    if expect_scid is not None and scid != expect_scid:
+        raise ValueError(f"TM frame is from spacecraft 0x{scid:03X}, expected 0x{expect_scid:03X}")
+    if expect_vcid is not None and vcid != expect_vcid:
+        raise ValueError(f"TM frame is on VC {vcid}, expected {expect_vcid}")
     return frame[2], frame[3], frame[TM_HEADER_LEN:-FECF_LEN]
 
 

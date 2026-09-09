@@ -8,6 +8,8 @@ project(cuberange_obc)
 #   west build ... -- -DCUBERANGE_OBC_PUS8_LENGTH_CHECK=1
 set(CUBERANGE_OBC_PUS8_LENGTH_CHECK 0 CACHE STRING "bound the PUS 8 argument copy")
 
+include(${CMAKE_CURRENT_LIST_DIR}/../../common/identity.cmake)
+
 target_sources(app PRIVATE src/main.c ../../common/cuberange_proto.c)
 target_include_directories(app PRIVATE ../../common)
 target_link_libraries(app PRIVATE csp)

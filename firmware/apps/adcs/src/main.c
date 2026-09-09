@@ -30,7 +30,9 @@
 #include <csp/csp.h>
 #include <csp/drivers/can_zephyr.h>
 
-#define ADCS_ADDR       4
+#ifndef ADCS_ADDR
+#define ADCS_ADDR 4
+#endif
 #define CSP_PORT_PUS    10
 #define CSP_PORT_ATT    12
 #define CAN_BITRATE     1000000

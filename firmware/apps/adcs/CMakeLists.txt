@@ -9,6 +9,8 @@ project(cuberange_adcs)
 #   west build ... -- -DCUBERANGE_ADCS_TORQUE_LIMIT=1
 set(CUBERANGE_ADCS_TORQUE_LIMIT 0 CACHE STRING "reject out-of-range torque commands")
 
+include(${CMAKE_CURRENT_LIST_DIR}/../../common/identity.cmake)
+
 target_sources(app PRIVATE src/main.c ../../common/cuberange_proto.c)
 target_include_directories(app PRIVATE ../../common)
 target_link_libraries(app PRIVATE csp)

@@ -21,8 +21,10 @@ Every hazard handled here was measured, not guessed:
 """
 from __future__ import annotations
 
+import contextlib
 import re
 import socket
+import threading
 import time
 from typing import List, Optional
 
@@ -33,13 +35,54 @@ class MonitorError(RuntimeError):
     pass
 
 
+# Which endpoints already have a live Monitor in this process. Renode services exactly one client
+# per emulation, so a second connection is accepted by TCP and then never serviced - the caller
+# hangs on its first command with no error from either end. Nothing prevented that; now a second
+# Monitor for the same endpoint raises instead of hanging.
+_LIVE: dict = {}
+_LIVE_LOCK = threading.Lock()
+
+
 class Monitor:
+    """One Monitor session, safely shared.
+
+    Renode services ONE Monitor client per process and does not accept a reconnect. That is a
+    property of Renode, not of this class - so this class refuses to open a second session to the
+    same endpoint rather than letting the caller hang, and everything that wants to talk to the
+    emulation shares one object.
+
+    With one satellite there was always one caller. With two there are two PowerDomains, and a
+    `mach set` from one landing between the other's `mach set` and its register read returns the
+    wrong machine's value with no error anywhere. The lock is therefore not defensive tidiness:
+    `read_rail` is two dependent commands and the pair has to be atomic. It is re-entrant so a
+    caller holding it through `exclusive()` can still use the single-command helpers.
+
+    The lock is held for the whole of a command, including the wait for the reply. `emulation
+    RunFor` does not return until the run finishes, so a caller issuing one blocks every other
+    user of this object for that long. That is a real constraint on any future live UI, and the
+    reason the design gives a UI its own channel (logNetwork) rather than the Monitor.
+    """
+
     def __init__(self, host: str = "127.0.0.1", port: int = 3778, timeout: float = 10.0):
         self._addr = (host, port)
         self._timeout = timeout
         self._sock: Optional[socket.socket] = None
+        self._lock = threading.RLock()
+
+    @contextlib.contextmanager
+    def exclusive(self):
+        """Hold the session across several commands that depend on each other."""
+        with self._lock:
+            yield self
 
     def connect(self, retries: int = 60) -> "Monitor":
+        with _LIVE_LOCK:
+            if self._addr in _LIVE:
+                raise MonitorError(
+                    f"a Monitor session to {self._addr} is already open in this process. Renode "
+                    f"services one client and never the second, so this would hang on its first "
+                    f"command - share the existing object instead.")
+            _LIVE[self._addr] = self
         last: Optional[OSError] = None
         for _ in range(retries):
             try:
@@ -50,6 +93,8 @@ class Monitor:
                 last = exc
                 time.sleep(0.5)
         else:
+            with _LIVE_LOCK:
+                _LIVE.pop(self._addr, None)
             raise MonitorError(f"Renode Monitor {self._addr} never came up") from last
         # Reconnects are silent, so never wait for an unprompted banner - ask for something.
         self.command("version")
@@ -78,20 +123,21 @@ class Monitor:
         if "\n" in line:
             raise MonitorError("use batch() for multiple commands")
 
-        echo = line.encode()
-        self._sock.sendall(echo + b"\n")
-        deadline = time.time() + self._timeout
+        with self._lock:
+            echo = line.encode()
+            self._sock.sendall(echo + b"\n")
+            deadline = time.time() + self._timeout
 
-        buf = b""
-        while echo not in buf:
-            buf = self._recv(buf, deadline)
-        start = buf.index(echo) + len(echo)
+            buf = b""
+            while echo not in buf:
+                buf = self._recv(buf, deadline)
+            start = buf.index(echo) + len(echo)
 
-        while not PROMPT.search(buf[start:]):
-            buf = self._recv(buf, deadline)
+            while not PROMPT.search(buf[start:]):
+                buf = self._recv(buf, deadline)
 
-        body = PROMPT.sub(b"", buf[start:], count=1)
-        return body.decode(errors="replace").strip()
+            body = PROMPT.sub(b"", buf[start:], count=1)
+            return body.decode(errors="replace").strip()
 
     def batch(self, lines: List[str]) -> str:
         """Send several commands as one ';'-joined line.
@@ -116,14 +162,23 @@ class Monitor:
         return int(match.group(1), 16)
 
     def close(self) -> None:
-        if self._sock is not None:
-            try:
-                # Always finish the line first; a partial line can wedge the listener for good.
-                self._sock.sendall(b"\n")
-            except OSError:
-                pass
-            self._sock.close()
-            self._sock = None
+        """Close the session. Idempotent, and safe to call while another thread is mid-command.
+
+        Under the lock: without it a close could null `_sock` while another thread was blocked in
+        `command()`, turning an orderly teardown into a socket error from inside a recv.
+        """
+        with self._lock:
+            if self._sock is not None:
+                try:
+                    # Always finish the line first; a partial line can wedge the listener for good.
+                    self._sock.sendall(b"\n")
+                except OSError:
+                    pass
+                self._sock.close()
+                self._sock = None
+        with _LIVE_LOCK:
+            if _LIVE.get(self._addr) is self:
+                del _LIVE[self._addr]
 
     def __enter__(self) -> "Monitor":
         return self.connect()
