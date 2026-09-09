@@ -1,0 +1,37 @@
+# CubeRange firmware matrix.
+#
+# Every exercise that ships a vulnerable and a mitigated image declares the pair here, and
+# tools/config_diff_gate.py proves the pair really differs by one declared build flag and nothing
+# else. Design section 12 asks for this file; until now it did not exist, and the proof it
+# describes was a shell snippet in CONTRIBUTING.md that a human had to remember to type.
+#
+# `flag` is the CMake cache variable that guards the flaw. `vuln` and `hard` are its two values,
+# and `build` names the directory west writes under $OUT.
+#
+# The gate asserts four things per pair, and the last two exist because the first two can both
+# pass while the flag does nothing at all:
+#
+#   1. the two Kconfig outputs are identical           - the flaw is not manufactured by
+#                                                        weakening the platform
+#   2. no other CUBERANGE_* cache variable differs     - one flag, not two
+#   3. the two ELFs are NOT byte-identical             - the flag reached the compiler
+#   4. the guarded symbol appears in the source        - the flag is spelled the same in
+#                                                        CMakeLists.txt and in the C
+pairs:
+  - id: EX-B01
+    app: firmware/apps/eps
+    flag: CUBERANGE_EPS_REQUIRE_AUTH
+    vuln: { value: "0", build: build-eps-vuln }
+    hard: { value: "1", build: build-eps-hard }
+
+  - id: EX-L01
+    app: firmware/apps/comm
+    flag: CUBERANGE_COMM_ANTIREPLAY
+    vuln: { value: "0", build: build-comm }
+    hard: { value: "1", build: build-comm-hard }
+
+  - id: EX-A01
+    app: firmware/apps/adcs
+    flag: CUBERANGE_ADCS_TORQUE_LIMIT
+    vuln: { value: "0", build: build-adcs-vuln }
+    hard: { value: "1", build: build-adcs-hard }
