@@ -15,6 +15,16 @@ BOARD      ?= nucleo_h753zi
 
 APP_CSP_PING := firmware/apps/csp_ping
 
+# Every firmware target uses `west build -p always`, a pristine build, deliberately: an incremental
+# build that silently reuses a stale object is exactly the kind of thing this project refuses to
+# rely on. The cost is that a target which depends on firmware rebuilds it every time, and `check`
+# runs four such targets - so it was building the same six images four times over and taking an
+# hour and a half.
+#
+# NOFW=1 says "the images in $(OUT) were just built by the caller". `check` sets it after building
+# them once. Running any target directly still rebuilds, which is the safe default.
+FWDEP = $(if $(NOFW),,$(1))
+
 .PHONY: help probe firmware demo spike clean toolchain
 
 help:
@@ -75,7 +85,7 @@ firmware-p0:
 	    -d $(OUT)/build-obc firmware/apps/obc
 	@ls -l $(OUT)/build-comm/zephyr/zephyr.elf $(OUT)/build-obc/zephyr/zephyr.elf
 
-demo-p0: firmware-p0
+demo-p0: $(call FWDEP,firmware-p0)
 	PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest tests/e2e/test_p0_roundtrip.py -v
 
@@ -93,10 +103,14 @@ check: probe
 	    echo "(without them the CCSDS and CRC conformance tests skip silently)"; exit 1; }
 	PYTHONPATH=src python3 -m pytest tests/pytest -q
 	$(MAKE) -C tests/native test
-	$(MAKE) demo-p0
-	$(MAKE) determinism
-	$(MAKE) verify-all
-	$(MAKE) pair-gate
+	@# Build every image ONCE, then run the four targets that need them with NOFW=1. Each of those
+	@# targets rebuilds on its own when run directly, which is what you want while editing; inside
+	@# check it meant four pristine builds of the same six images.
+	$(MAKE) firmware-all
+	$(MAKE) demo-p0     NOFW=1
+	$(MAKE) determinism NOFW=1
+	$(MAKE) verify-all  NOFW=1
+	$(MAKE) pair-gate   NOFW=1
 	@echo
 	@echo "================================================================"
 	@echo "  CHECK PASSED - probe, codecs, native, round trip, determinism,"
@@ -126,7 +140,7 @@ verify:
 	    python3 -m pytest exercises/$(EX)/verify_*.py -v
 
 # Every exercise, both directions. This is the claim the product makes.
-verify-all: firmware-exl01 firmware-a01
+verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01)
 	PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest exercises/*/verify_*.py -v
 
@@ -144,7 +158,7 @@ firmware-exl01: firmware-p1
 # produces two identical images and a perfectly clean Kconfig diff, so "nothing else moved" would
 # pass while the mitigation was never compiled in.
 .PHONY: pair-gate
-pair-gate: firmware-exl01 firmware-a01
+pair-gate: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01)
 	python3 tools/config_diff_gate.py --self-test
 	OUT=$(OUT) python3 tools/config_diff_gate.py
 
@@ -152,7 +166,7 @@ pair-gate: firmware-exl01 firmware-a01
 # same scenario three times under the CI profile and requires the guest UART captures to be
 # byte-identical. Measured here: 3/3 identical in 27 s.
 .PHONY: determinism
-determinism: firmware-p0
+determinism: $(call FWDEP,firmware-p0)
 	PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest tests/e2e/test_determinism.py -q
 
@@ -165,3 +179,39 @@ firmware-a01: firmware-p1
 	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
 	    -d $(OUT)/build-adcs-hard firmware/apps/adcs -- -DCUBERANGE_ADCS_TORQUE_LIMIT=1
 	@ls -l $(OUT)/build-adcs-vuln/zephyr/zephyr.elf $(OUT)/build-adcs-hard/zephyr/zephyr.elf
+
+# EX-F01 images: the OBC in both profiles. build-obc is the vulnerable one, the same way build-comm
+# is for EX-L01 - the default build of a node is the one with the flaw, so a learner who runs
+# `make firmware-p0` and nothing else gets the exercise rather than the fix.
+firmware-f01: firmware-p1
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-obc-hard firmware/apps/obc -- -DCUBERANGE_OBC_PUS8_LENGTH_CHECK=1
+	@ls -l $(OUT)/build-obc/zephyr/zephyr.elf $(OUT)/build-obc-hard/zephyr/zephyr.elf
+
+# Every image, built once. The three leaf targets all chain through firmware-p1, and make runs a
+# prerequisite once per invocation, so this is one pristine build of each of the seven images
+# rather than the four rounds `check` used to do.
+.PHONY: firmware-all
+firmware-all: firmware-exl01 firmware-a01 firmware-f01
+	@echo "all node images built:"
+	@ls -1 $(OUT)/build-*/zephyr/zephyr.elf
+
+# Run one exercise's scenario and leave it up, so a learner can send their own packets at it. Three
+# exercise READMEs have told people to type this since before the target existed; it does now.
+#
+# Foreground and unsupervised on purpose: you are meant to watch it, and Ctrl-C is the stop button.
+# Anything automated goes through src/cuberange/renode/supervisor.py instead, which is where the
+# watchdog and the RSS ceiling live.
+.PHONY: exercise
+exercise:
+	@test -n "$(EX)" || { echo "usage: make exercise EX=<exercise-dir>"; exit 1; }
+	@test -d exercises/$(EX) || { echo "no such exercise: exercises/$(EX)"; \
+	    echo "available:"; ls -1 exercises; exit 1; }
+	@echo "starting exercises/$(EX) - Ctrl-C to stop"
+	@echo "  space link  localhost:3777"
+	@echo "  monitor     localhost:3778"
+	cd $(RENODE_DIR) && ./renode --disable-xwt --plain --hide-analyzers --port 3778 \
+	  -e '$$injector=@$(CURDIR)/attacker/TcpCanInjector.cs' \
+	  -e '$$profile=@$(CURDIR)/scripts/profiles/interactive.resc' \
+	  -e 'include @$(CURDIR)/exercises/$(EX)/scenario.resc' \
+	  -e 'start'
