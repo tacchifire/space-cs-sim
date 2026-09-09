@@ -1,5 +1,7 @@
 # CubeRange
 
+*日本語版: [README.ja.md](README.ja.md)*
+
 A hands-on range for **space cybersecurity**: satellite firmware running at instruction level in
 [Renode](https://renode.io), a CubeSat's internal CAN bus, an RF link, and a ground station — with
 attacks you can actually land, and mitigations proven to stop them.
@@ -7,7 +9,7 @@ attacks you can actually land, and mitigations proven to stop them.
 It is the space analogue of Toyota's [RAMN](https://github.com/ToyotaInfoTech/RAMN) board, which
 made automotive security learnable by putting four MCUs and a CAN bus on one PCB.
 
-**Status: three exercises, four satellite nodes.** A ground station sends a real ECSS PUS 17,1 and
+**Status: four exercises, four satellite nodes.** A ground station sends a real ECSS PUS 17,1 and
 gets a real 17,2 back through CCSDS framing, an emulated UART link, and CSP over CAN between
 emulated STM32H753 nodes. The exercises chain, and each one attacks a limit the previous one's
 mitigation admitted to:
@@ -19,6 +21,13 @@ mitigation admitted to:
 - **EX-A01** — authentication was never the missing control. A torque command that is authentic,
   well-formed and physically impossible spins the spacecraft up, and every subsystem keeps
   reporting nominal while it does.
+- **EX-F01** — a telecommand with nothing wrong with it but its length overruns a stack buffer in
+  the OBC's PUS 8 handler and returns into a maintenance function no command can reach. Not
+  shellcode: SRAM here is execute-never and Renode enforces it, so the payload is an address that
+  was already in the image.
+
+Four attack origins are covered: the internal bus, the space link, the ADCS command envelope, and
+the OBC's own command parser.
 
 See [the design](docs/superpowers/specs/2026-08-28-cuberange-design.md) for where this is going.
 
@@ -84,7 +93,7 @@ make demo-p0
 | --- | --- |
 | `make probe` | Verifies every Renode capability the design depends on. 40 checks, including five deliberate-failure self-tests |
 | `make firmware-p0` | Builds the COMM and OBC images |
-| `make firmware-a01` | Every node image: COMM, OBC, both EPS profiles, both ADCS profiles |
+| `make firmware-f01` | Every node image: COMM, OBC (both), both EPS profiles, both ADCS profiles |
 | `make demo-p0` | Runs the PUS round trip and asserts it |
 | `make demo` | The R0 smoke test: two nodes exchanging CSP pings over CAN |
 | `make determinism` | Runs one scenario three times under the CI profile and requires byte-identical guest output |

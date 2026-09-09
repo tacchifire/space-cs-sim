@@ -1,5 +1,7 @@
 # Contributing
 
+*日本語版: [CONTRIBUTING.ja.md](CONTRIBUTING.ja.md)*
+
 ## The rule the whole project runs on
 
 **Do not claim what you have not run.** Every capability this project depends on is reproduced by a

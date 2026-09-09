@@ -13,9 +13,11 @@ repository used to describe gates as CI-enforced; there has never been a `.githu
 verification is real and the automation around it is not, and those are different claims — see
 section 16 of the design for why this project is careful about the difference.
 
-Three exercises work today: EX-B01 (internal bus), EX-L01 (space link), EX-A01 (ADCS command
-envelope). `docs/superpowers/specs/2026-08-28-cuberange-design.md` is the design and its section 16
-is the record of every claim that turned out to be wrong.
+Four exercises work today: EX-B01 (internal bus), EX-L01 (space link), EX-A01 (ADCS command
+envelope) and EX-F01 (the OBC's own PUS 8 parser). 14 assertions, all measured.
+
+`docs/superpowers/specs/2026-08-28-cuberange-design.md` is the design and its section 16 is the
+record of every claim that turned out to be wrong.
 
 ## The rule
 
@@ -43,12 +45,12 @@ Concretely:
 
 ```bash
 make probe        # 40 Renode capability checks incl. 5 deliberate-failure self-tests   ~6 min
-make firmware-a01 # COMM, OBC, both EPS profiles, both ADCS profiles
+make firmware-f01 # every node image: COMM, OBC (both), EPS (both), ADCS (both)
 make demo-p0      # PUS 17 round trip, ground station to OBC and back
 make determinism  # rules G1/G2: three CI-profile runs, byte-identical UART capture     ~30 s
 make pair-gate    # every vulnerable/mitigated pair differs by exactly one build flag
 make verify-all   # every exercise, three assertions each
-make check        # all of it
+make check        # all of it                                                          ~11 min
 make soak-p0      # 30 consecutive round trips under a watchdog                        ~3.5 min
 ```
 

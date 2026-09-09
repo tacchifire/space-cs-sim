@@ -1,5 +1,7 @@
 # EX-A01 mitigation — bound the command by what the actuator can do
 
+*日本語版: [mitigation.ja.md](mitigation.ja.md)*
+
 ## The change
 
 One check, behind one build flag:

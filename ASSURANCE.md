@@ -1,5 +1,7 @@
 # What CubeRange does and does not support as a claim
 
+*日本語版: [ASSURANCE.ja.md](ASSURANCE.ja.md)*
+
 A simulator that is useful for training is routinely mistaken for evidence about flight hardware.
 This document exists so that mistake has to be made deliberately.
 
@@ -53,10 +55,17 @@ These came out of testing the emulator itself, and each one rules out a class of
   regions are enforced, so "no region means denied" does not hold here as it would on silicon.
 - **The CAN hub does not model bus acknowledgement.** Error frames and bus-off diagnostics cannot
   be taught on this platform.
-- **Renode does enforce MPU execute-never**, verified against the fault the hardware would raise.
-  This is why the planned memory-corruption exercise is code reuse rather than injected shellcode:
-  shellcode would fail here exactly as it fails on real silicon, and an exercise that needed the
-  MPU disabled to work would be teaching something untrue.
+- **Renode does enforce MPU execute-never.** `probe.sh` section G is the reproduction: an
+  instruction fetch at 0x24003000 is refused while the same query in flash succeeds. This is why
+  EX-F01 is code reuse rather than injected shellcode — shellcode fails here exactly as it fails on
+  real silicon, and an exercise that needed the MPU disabled would be teaching something untrue.
+
+  **How you ask matters.** `cpu TranslateAddress` in 1.16.1 caches by address and not by access
+  type, so a Read query followed by an InstructionFetch query on the same address returns success
+  for both. Checking execute-never in that order — the natural order — reports that SRAM is
+  executable. Ask about the fetch first, or in a fresh process. Pinned as a negative assertion (D22)
+  so a future Renode that fixes the cache makes the probe fail rather than quietly changing what
+  this paragraph means.
 
 The full register of emulator and library defects is section 3.2 of
 `docs/superpowers/specs/2026-08-28-cuberange-design.md`.

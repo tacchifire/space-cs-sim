@@ -1,5 +1,7 @@
 # Security policy
 
+*日本語版: [SECURITY.ja.md](SECURITY.ja.md)*
+
 CubeRange ships deliberate vulnerabilities. That makes the usual "report anything that looks
 broken" advice useless, so this document draws the line precisely.
 
@@ -15,8 +17,11 @@ Currently intended, and not vulnerabilities:
 | --- | --- |
 | `firmware/apps/eps` built with `CUBERANGE_EPS_REQUIRE_AUTH=0` | power commands are unauthenticated (EX-B01) |
 | `firmware/apps/comm` built with `CUBERANGE_COMM_ANTIREPLAY=0` | telecommands can be replayed (EX-L01) |
+| `firmware/apps/adcs` built with `CUBERANGE_ADCS_TORQUE_LIMIT=0` | torque commands are not bounded by the actuator's authority (EX-A01) |
+| `firmware/apps/obc` built with `CUBERANGE_OBC_PUS8_LENGTH_CHECK=0` | the PUS 8 argument copy is unbounded (EX-F01) |
+| `maintenance_inhibit_fdir` in `firmware/apps/obc/src/main.c` | a privileged handler left in the image, disabled rather than removed — EX-F01's target |
 | `POWER_TOKEN` in `firmware/apps/eps/src/main.c` | a shared secret committed in the clear, by design |
-| the exercise scenarios | listen on loopback ports with no authentication |
+| the exercise scenarios | listen with no authentication, on **all interfaces** — see below |
 
 **Real, and worth reporting.** Anything that lets code or data escape the intended blast radius:
 
@@ -27,8 +32,19 @@ Currently intended, and not vulnerabilities:
   node including the mitigated builds, and it is fuzzed and sanitised precisely because it is not
   supposed to have any.
 - Anything in a mitigated build (`*-hard`) that the corresponding exercise claims is blocked.
-- Anything that binds a socket to a non-loopback address, executes downloaded content, or reaches
-  the network outside the artifact-fetch step.
+- Anything that executes downloaded content, or reaches the network outside the artifact-fetch
+  step.
+
+**Known, and not a report: the emulator listens on all interfaces.** This entry used to say that a
+non-loopback bind was reportable, while the scenarios were doing exactly that. Measured by reading
+`/proc/net/tcp` during a run: the space link's socket terminal and the Renode Monitor both bind
+`0.0.0.0`. Renode 1.16.1 offers no way to change it — `--port` takes no address, and
+`emulation CreateServerSocketTerminal` takes a port, a name and two booleans.
+
+The Monitor is the part that matters: it accepts arbitrary Renode commands from anyone who can
+reach the port, with no authentication. Containment is the host's job here, and
+[SAFE_USE.md](SAFE_USE.md) says so. A report that Renode binds broadly is already known; a report
+that CubeRange's own host-side code does is not, and is wanted.
 - Anything that would let a malicious *exercise* — a contributed one — affect the host beyond its
   own scenario.
 

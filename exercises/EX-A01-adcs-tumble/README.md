@@ -15,6 +15,8 @@ ttp:
 
 # EX-A01 — Spin the satellite up without it noticing
 
+*日本語版: [README.ja.md](README.ja.md)*
+
 ## The situation
 
 You are on the satellite's CAN bus again, in the same position as EX-B01. Something has changed
@@ -47,7 +49,8 @@ The EPS here is the **hardened** build from EX-B01. Four satellite nodes now, no
 
 ```bash
 make firmware-a01
-python3 exercises/EX-A01-adcs-tumble/solve.py      # the model answer
+make exercise EX=EX-A01-adcs-tumble               # runs the scenario and leaves it up
+python3 exercises/EX-A01-adcs-tumble/solve.py     # the model answer
 make verify EX=EX-A01-adcs-tumble
 ```
 

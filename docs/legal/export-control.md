@@ -1,5 +1,7 @@
 # Export control
 
+*日本語版: [export-control.ja.md](export-control.ja.md)*
+
 **Status: UNVERIFIED. No classification has been made, and none is claimed.**
 
 This page records what is known, what is not, and who has to decide. It is not legal advice and it

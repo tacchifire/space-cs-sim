@@ -1,5 +1,7 @@
 # Building CubeRange on a host with no root
 
+*日本語版: [host-setup-without-root.ja.md](host-setup-without-root.ja.md)*
+
 The setup in [README.md](../README.md) starts with `sudo apt install build-essential` and
 `pip install`. On a locked-down workstation you have neither. This is the path that was actually
 walked on such a machine — Ubuntu 26.04 with no `sudo`, no `gcc`, no `pip`, no `make` and no
@@ -119,9 +121,9 @@ Recorded so a future run can tell a real regression from a slow machine:
 
 | | |
 | --- | --- |
-| `make probe` | 39 pass, 0 fail, 4 skip, about 6 minutes on a quiet host |
+| `make probe` | 40 pass, 0 fail, 3 skip, about 6 minutes on a quiet host |
 | Four-node speed | 4.50x real time (8-core x86-64; the design's figure from a 14-core host was 2.34x) |
-| `make check` | about 10 minutes quiet |
+| `make check` | 11m26s on a quiet host: probe, codecs, native, round trip, determinism, 14 exercise assertions, 4 firmware pairs |
 | Disk | Zephyr workspace 4.5 GB, SDK 2.0 GB, Renode 200 MB |
 
 **Do not run other Renode work while the probe runs.** The same probe took 35 minutes with two
