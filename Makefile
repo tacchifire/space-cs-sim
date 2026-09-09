@@ -253,3 +253,22 @@ constellation: $(call FWDEP,firmware-all firmware-sat1)
 # control honours correctly, so the spacecraft-side controls all have to be present.
 firmware-g01: firmware-f01
 	@ls -l $(OUT)/build-obc-hard/zephyr/zephyr.elf $(OUT)/build-eps-hard/zephyr/zephyr.elf
+
+# Rebuild the independent oracles and regenerate the golden vectors.
+#
+# Not part of `make check`: it clones two external projects and needs a network, and the vectors it
+# produces are committed precisely so that the conformance layer does NOT depend on either. Run it
+# when a vector needs to change, and let the diff be the review.
+#
+# Neither oracle is vendored. libcsp is MIT and CryptoLib is NOSA 1.3, and the licence policy
+# (README section 11) permits both as external oracles and not as dependencies.
+.PHONY: oracles golden
+oracles:
+	tools/oracles/build.sh $(ORACLE_DIR)
+
+ORACLE_DIR ?= /tmp/cuberange-oracles
+golden: oracles
+	cd $(ORACLE_DIR) && python3 $(CURDIR)/tools/gen_golden.py $(CURDIR)/tests/golden
+	@echo
+	@echo "Review the diff before committing - these vectors are what the codecs are checked against."
+	@git -C $(CURDIR) diff --stat tests/golden || true

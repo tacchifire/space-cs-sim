@@ -1,0 +1,119 @@
+{
+  "spec": "ECSS-E-ST-70-41C (PUS-C)",
+  "tc_secondary_header": {
+    "size": 5,
+    "fields": [
+      "[0] bits7-4 TC-packet-PUS-version = 2 ; bits3-0 acknowledgement flags",
+      "[1] service type",
+      "[2] message subtype",
+      "[3:5] source ID (uint16 big-endian)"
+    ]
+  },
+  "tm_secondary_header": {
+    "size": "7 + time field",
+    "fields": [
+      "[0] bits7-4 TM-packet-PUS-version = 2 ; bits3-0 spacecraft time reference status",
+      "[1] service type",
+      "[2] message subtype",
+      "[3:5] message type counter (uint16 big-endian)",
+      "[5:7] destination ID (uint16 big-endian)",
+      "[7:] time field (here CDS 7 octets: P-field 0x40 + 2B day + 4B ms-of-day)"
+    ]
+  },
+  "packet_error_control": "trailing uint16 big-endian, CRC-16/IBM-3740 over the whole packet excluding the 2 CRC octets",
+  "oracle": "spacepackets 0.32.0 (Apache-2.0)",
+  "tc_vectors": [
+    {
+      "service": 17,
+      "subtype": 1,
+      "apid": 100,
+      "seq": 0,
+      "source_id": 0,
+      "ack": 15,
+      "app_data": "",
+      "packet": "1864C00000062F110100009F7A"
+    },
+    {
+      "service": 17,
+      "subtype": 1,
+      "apid": 100,
+      "seq": 1,
+      "source_id": 0,
+      "ack": 15,
+      "app_data": "",
+      "packet": "1864C00100062F11010000D8A9"
+    },
+    {
+      "service": 8,
+      "subtype": 1,
+      "apid": 100,
+      "seq": 2,
+      "source_id": 171,
+      "ack": 9,
+      "app_data": "DEADBEEF",
+      "packet": "1864C002000A29080100ABDEADBEEFD0D5"
+    },
+    {
+      "service": 3,
+      "subtype": 1,
+      "apid": 291,
+      "seq": 16383,
+      "source_id": 65535,
+      "ack": 15,
+      "app_data": "01",
+      "packet": "1923FFFF00072F0301FFFF013559"
+    },
+    {
+      "service": 11,
+      "subtype": 4,
+      "apid": 1,
+      "seq": 5,
+      "source_id": 1,
+      "ack": 0,
+      "app_data": "0102030405",
+      "packet": "1801C005000B200B0400010102030405E571"
+    }
+  ],
+  "tm_vectors": [
+    {
+      "service": 17,
+      "subtype": 2,
+      "apid": 100,
+      "msg_counter": 0,
+      "dest_id": 0,
+      "time_cds": "4003E802932E00",
+      "source_data": "",
+      "packet": "0864C000000F201102000000004003E802932E00EAB5"
+    },
+    {
+      "service": 3,
+      "subtype": 25,
+      "apid": 100,
+      "msg_counter": 7,
+      "dest_id": 1,
+      "time_cds": "4003E802932E00",
+      "source_data": "0A0B0C0D",
+      "packet": "0864C0000013200319000700014003E802932E000A0B0C0D8BDC"
+    },
+    {
+      "service": 1,
+      "subtype": 1,
+      "apid": 291,
+      "msg_counter": 65535,
+      "dest_id": 65535,
+      "time_cds": "4003E802932E00",
+      "source_data": "0164000000",
+      "packet": "0923C0000014200101FFFFFFFF4003E802932E0001640000005012"
+    },
+    {
+      "service": 5,
+      "subtype": 4,
+      "apid": 1,
+      "msg_counter": 1,
+      "dest_id": 2,
+      "time_cds": "4003E802932E00",
+      "source_data": "FF",
+      "packet": "0801C0000010200504000100024003E802932E00FF8F27"
+    }
+  ]
+}

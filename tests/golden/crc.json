@@ -1,0 +1,114 @@
+{
+  "ccsds_fecf_crc16": {
+    "spec": "CCSDS 132.0-B-3 4.1.6.2.2 / CCSDS 232.0-B-4 (same CRC)",
+    "width": 16,
+    "poly": "0x1021 (G(X)=X^16+X^12+X^5+1)",
+    "init": "0xFFFF (L(X)=sum X^i, i=0..15 -> shift register preset to all ones)",
+    "refin": false,
+    "refout": false,
+    "xorout": "0x0000",
+    "catalogue_name": "CRC-16/IBM-3740 (a.k.a. CRC-16/CCITT-FALSE)",
+    "check_123456789": "0x29B1",
+    "coverage": "whole Transfer Frame from first octet of the Primary Header through the last octet before the FECF (i.e. incl. secondary header, data field and OCF). The ASM (0x1ACFFC1D) is NOT covered - it belongs to the Channel Coding sublayer (CCSDS 131.0-B / 231.0-B), not to the frame.",
+    "residue_property": "CRC over (frame including its FECF) == 0x0000",
+    "oracles": [
+      "crcmod",
+      "fastcrc.crc16.ibm_3740",
+      "crc.Calculator",
+      "NASA CryptoLib Crypto_Calc_FECF"
+    ],
+    "vectors": [
+      {
+        "in": "313233343536373839",
+        "crc": "0x29B1",
+        "residue": "0x0000"
+      },
+      {
+        "in": "00",
+        "crc": "0xE1F0",
+        "residue": "0x0000"
+      },
+      {
+        "in": "A5",
+        "crc": "0x04BF",
+        "residue": "0x0000"
+      },
+      {
+        "in": "0000",
+        "crc": "0x1D0F",
+        "residue": "0x0000"
+      },
+      {
+        "in": "FFFFFFFF",
+        "crc": "0x1D0F",
+        "residue": "0x0000"
+      },
+      {
+        "in": "0842C00000010203",
+        "crc": "0x4DEA",
+        "residue": "0x0000"
+      },
+      {
+        "in": "086400010003DEADBEEF",
+        "crc": "0x5D5C",
+        "residue": "0x0000"
+      },
+      {
+        "in": "06000CF0000400558873C900000521",
+        "crc": "0x75FB",
+        "residue": "0x0000"
+      }
+    ]
+  },
+  "csp_crc32": {
+    "spec": "libcsp src/csp_crc32.c (csp_crc32_init/update/final)",
+    "width": 32,
+    "poly": "0x1EDC6F41 (reflected 0x82F63B78)",
+    "init": "0xFFFFFFFF",
+    "refin": true,
+    "refout": true,
+    "xorout": "0xFFFFFFFF",
+    "catalogue_name": "CRC-32/ISCSI (a.k.a. CRC-32C, Castagnoli)",
+    "check_123456789": "0xE3069283",
+    "coverage": "csp_crc32_append(): over packet->frame_begin..frame_length (header+data) when the CSP id is prepended, else over packet->data[0..length]. Appended BIG-ENDIAN (htobe32).",
+    "oracles": [
+      "crcmod",
+      "fastcrc.crc32.iscsi",
+      "libcsp csp_crc32_memory()"
+    ],
+    "vectors": [
+      {
+        "in": "313233343536373839",
+        "crc": "0xE3069283"
+      },
+      {
+        "in": "00",
+        "crc": "0x527D5351"
+      },
+      {
+        "in": "A5",
+        "crc": "0xC5C7F2EB"
+      },
+      {
+        "in": "0000",
+        "crc": "0xF16177D2"
+      },
+      {
+        "in": "FFFFFFFF",
+        "crc": "0xFFFFFFFF"
+      },
+      {
+        "in": "0842C00000010203",
+        "crc": "0xE7FA55E3"
+      },
+      {
+        "in": "086400010003DEADBEEF",
+        "crc": "0xD9966710"
+      },
+      {
+        "in": "06000CF0000400558873C900000521",
+        "crc": "0xFB20129C"
+      }
+    ]
+  }
+}

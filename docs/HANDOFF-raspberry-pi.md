@@ -263,10 +263,14 @@ Zephyr ビルドを Pi でやるかは判断が要る。7.8 GB のツールチ�
   **`.robot` ファイルは 1 つも無い**。全部 pytest。どちらかに寄せる必要がある。
 - G9（quantum を変えたら 100 µs 参照トレースと 60 仮想秒以上を比較する CI チェック）は
   存在しない。CI 自体が無い。
-- `tests/golden/csp.json` は**このリポジトリからは再生成できない**。`tools/gen_golden.py` が
-  `./csp_oracle` と `./cryptolib/build/libcryptolib.so` を呼ぶが、どちらもソースも
-  ビルド手順も追跡されていない。「自作コーデック同士で検証していない」という論拠を
-  支えているファイルが、クローンしただけでは不透明なバイナリ成果物になっている。
+- ~~`tests/golden/csp.json` は**このリポジトリからは再生成できない**~~ — **2026-09-09 に解消。**
+  `tools/oracles/csp_oracle.c` と `tools/oracles/build.sh` を追加し、`make golden` で
+  両オラクル（libcsp と NASA CryptoLib）をビルドしてベクタを再生成できるようにした。
+  復元した `csp_oracle` の出力は、コミット済みの `csp.json` と**64行すべてバイト単位で一致**する。
+  併せて、生成できるのにコミットされていなかった `pus.json` と `space_packet.json` を追加し、
+  誰も読んでいなかった `crc.json` と `space_packet.json` を消費するテストを書いた。
+  `tests/pytest/test_golden_coverage.py` が、コミットされた全ベクタがどこかのテストに
+  読まれていることを検査する。読まれないベクタは、被覆に見えて被覆ではない。
 - 演習 README の TTP フロントマターは、存在しない `tools/ttp_map.py` が
   「CI で ID の実在を検証する」と書いていた。**この文書と同じコミットで直した** —
   検証する仕組みが無いことを正直に書く形にした。

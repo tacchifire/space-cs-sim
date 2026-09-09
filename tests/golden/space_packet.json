@@ -1,0 +1,81 @@
+{
+  "spec": "CCSDS 133.0-B-2 4.1.2/4.1.3 (Packet Primary Header, 6 octets)",
+  "length_convention": "Packet Data Length C = (octets in Packet Data Field) - 1  [4.1.3.5.3]",
+  "oracles": [
+    "spacepackets 0.32.0",
+    "ccsdspy 2.0.1",
+    "hand decode from the 133.0-B-2 field table"
+  ],
+  "vectors": [
+    {
+      "hdr": "0000C0000001",
+      "apid": 0,
+      "seq_count": 0,
+      "data_len_field": 1,
+      "packet_type": 0,
+      "sec_hdr_flag": 0,
+      "seq_flags": 3,
+      "total_packet_octets": 8
+    },
+    {
+      "hdr": "1FFFFFFF0001",
+      "apid": 2047,
+      "seq_count": 16383,
+      "data_len_field": 1,
+      "packet_type": 1,
+      "sec_hdr_flag": 1,
+      "seq_flags": 3,
+      "total_packet_octets": 8
+    },
+    {
+      "hdr": "1864C0010004",
+      "apid": 100,
+      "seq_count": 1,
+      "data_len_field": 4,
+      "packet_type": 1,
+      "sec_hdr_flag": 1,
+      "seq_flags": 3,
+      "total_packet_octets": 11
+    },
+    {
+      "hdr": "0923C02A0008",
+      "apid": 291,
+      "seq_count": 42,
+      "data_len_field": 8,
+      "packet_type": 0,
+      "sec_hdr_flag": 1,
+      "seq_flags": 3,
+      "total_packet_octets": 15
+    },
+    {
+      "hdr": "000140000001",
+      "apid": 1,
+      "seq_count": 0,
+      "data_len_field": 1,
+      "packet_type": 0,
+      "sec_hdr_flag": 0,
+      "seq_flags": 1,
+      "total_packet_octets": 8
+    },
+    {
+      "hdr": "000100000001",
+      "apid": 1,
+      "seq_count": 0,
+      "data_len_field": 1,
+      "packet_type": 0,
+      "sec_hdr_flag": 0,
+      "seq_flags": 0,
+      "total_packet_octets": 8
+    },
+    {
+      "hdr": "000180000001",
+      "apid": 1,
+      "seq_count": 0,
+      "data_len_field": 1,
+      "packet_type": 0,
+      "sec_hdr_flag": 0,
+      "seq_flags": 2,
+      "total_packet_octets": 8
+    }
+  ]
+}

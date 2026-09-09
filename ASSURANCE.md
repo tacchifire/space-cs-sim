@@ -15,17 +15,24 @@ This document exists so that mistake has to be made deliberately.
 
   | Layer | Independent oracle | Where |
   | --- | --- | --- |
-  | Space Packet primary header | spacepackets | `tests/pytest/test_oracle_spacepacket.py` |
-  | FECF CRC-16 | crcmod, plus the CCSDS 132.0-B-3 text | `tests/pytest/test_crc.py` |
+  | Space Packet primary header | spacepackets, ccsdspy, and a hand decode from 133.0-B-2 | `test_golden_spacepacket.py` |
+  | FECF CRC-16 | crcmod, fastcrc, crc, NASA CryptoLib, and the CCSDS 132.0-B-3 text | `test_golden_frame.py` |
   | CSP v1 header and CFP-over-CAN | libcsp itself, run to produce the vectors | `tests/golden/csp.json` |
-  | **PUS-C secondary headers** | **none** | — |
-  | **TM/TC transfer frames** | **none** | — |
+  | PUS-C secondary headers | spacepackets | `test_oracle_pus.py` |
+  | **TM/TC transfer frame HEADERS** | **none** | — |
 
-  The last two rows are checked only against this project's own second implementation, which the
-  design's own section 9.3 opens by saying is not evidence. PUS is also the layer whose primary
-  source could not be obtained, so it is the one resting on the least. `tools/gen_golden.py` can
-  generate both from independent oracles; the vectors have not been committed and no test consumes
-  them yet.
+  Read the last row precisely, because the row above it is easy to over-read. The FECF that covers
+  a transfer frame is independently verified four ways, and one vector reproduces a value Yamcs
+  publishes for a real TM frame. The FIELD PACKING of the TC and TM primary headers is not: no
+  second implementation of them exists here, so their layout still rests on this project's reading
+  of CCSDS 232.0-B-4 and 132.0-B-3. A transposed field inside a header would satisfy every test in
+  the tree.
+
+  All committed vectors are produced by `tools/gen_golden.py` from oracles that
+  `tools/oracles/build.sh` builds — and until 2026-09-09 neither of those oracles was in the
+  repository, so the vectors could not be regenerated and their independence was an assertion.
+  `test_golden_coverage.py` now requires every committed vector to be read by a test, because a
+  vector nobody checks against looks like coverage and is not.
 - **That a mitigation blocks a specific attack, and does not break the feature it protects.** Every
   exercise asserts both, plus the case where the legitimate operation still succeeds.
 - **That a control is worth building.** Which is the point of a range.

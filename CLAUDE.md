@@ -59,6 +59,7 @@ make firmware-f01 # every satellite-0 image: COMM, OBC (both), EPS (both), ADCS 
 make firmware-sat1 # the same four roles as spacecraft 1
 make firmware-g01 # the hardened OBC and EPS that EX-G01 runs against
 make constellation # eight nodes, two spacecraft, and the bus isolation between them
+make golden       # rebuild the independent oracles and regenerate tests/golden (needs network)
 make demo-p0      # PUS 17 round trip, ground station to OBC and back
 make determinism  # rules G1/G2: three CI-profile runs, byte-identical UART capture     ~30 s
 make pair-gate    # every vulnerable/mitigated pair differs by exactly one build flag
@@ -205,5 +206,6 @@ firmware-matrix.yml             which vulnerable/mitigated pairs the gate checks
 tests/e2e/test_determinism.py   rules G1/G2, reproduced rather than asserted
 exercises/EX-*/                 five files each
 tests/golden/                   vectors from independent oracles, not from our own codecs
+tools/oracles/                  the oracles themselves - csp_oracle.c and the build script
 docs/superpowers/specs/         the design; section 3.2 defects, section 16 corrections
 ```
