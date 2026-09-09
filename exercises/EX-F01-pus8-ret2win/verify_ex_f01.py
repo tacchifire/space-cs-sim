@@ -27,7 +27,6 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cuberange.gs.link import SpaceLink                       # noqa: E402
 from cuberange.gs.station import GroundStation                # noqa: E402
@@ -38,8 +37,27 @@ from cuberange.renode.monitor import Monitor                  # noqa: E402
 from cuberange.renode.profile import profile_args             # noqa: E402
 from cuberange.renode.supervisor import RenodeSupervisor      # noqa: E402
 
-from solve import (ARG_BUF_LEN, RET_OFFSET, WIN_SYMBOL,       # noqa: E402
-                   build_payload, read_symbol)
+
+def _sibling_solve():
+    """Load THIS exercise's solve.py by path, not by name.
+
+    Every exercise has a module called `solve`, and `sys.path.insert` makes whichever was imported
+    first win for all of them: EX-G01's verification silently received EX-F01's module and failed
+    at collection with "cannot import name PLUGIN_FILE from solve". CONTRIBUTING.md already warns
+    that two `verify_*.py` files cannot share a basename; `solve.py` is the same hazard and every
+    exercise has one.
+    """
+    import importlib.util
+    path = Path(__file__).resolve().parent / "solve.py"
+    spec = importlib.util.spec_from_file_location(f"cuberange_solve_{path.parent.name}", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_solve = _sibling_solve()
+ARG_BUF_LEN, RET_OFFSET, WIN_SYMBOL = _solve.ARG_BUF_LEN, _solve.RET_OFFSET, _solve.WIN_SYMBOL
+build_payload, read_symbol = _solve.build_payload, _solve.read_symbol
 
 RENODE_DIR = Path(os.environ.get(
     "RENODE_DIR", Path.home() / "tools" / "renode_1.16.1-dotnet_portable"))

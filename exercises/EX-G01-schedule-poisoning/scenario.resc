@@ -1,0 +1,60 @@
+:name: EX-G01 - schedule poisoning
+:description: COMM, OBC and EPS. The attacker is not on the link at all - it is inside the ground segment
+
+# Execution profile (design 4.3; rules G1/G2 of section 9.2). Renode's Monitor has no conditionals,
+# so the profile is a file the harness swaps by overriding $profile - the same mechanism $injector
+# uses, and for the same reason: a relative include inside an included file resolves against
+# Renode's own working directory, not this file.
+#
+# This include is FIRST on purpose. A failing command aborts the rest of a .resc file, so a profile
+# that cannot be found takes the machines down with it and the failure is loud. Last, it would have
+# been silent in the worst way: every node built, running with no quantum set at all.
+$profile?=@~/space-cs-sim/scripts/profiles/interactive.resc
+include $profile
+
+$comm?=@/tmp/cuberange/build-comm/zephyr/zephyr.elf
+$obc?=@/tmp/cuberange/build-obc-hard/zephyr/zephyr.elf
+$eps?=@/tmp/cuberange/build-eps-hard/zephyr/zephyr.elf
+$commuart?=@/tmp/cuberange/comm.uart
+$obcuart?=@/tmp/cuberange/obc.uart
+$epsuart?=@/tmp/cuberange/eps.uart
+$linkport?=3777
+
+emulation CreateCANHub "canHub"
+
+mach create "COMM"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $comm
+sysbus.usart3 CreateFileBackend $commuart true
+emulation CreateServerSocketTerminal $linkport "spacelink" false
+connector Connect sysbus.usart2 spacelink
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "OBC"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $obc
+sysbus.usart3 CreateFileBackend $obcuart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+# The EPS runs its HARDENED image, and the OBC runs the one with the PUS 8 length check. Every
+# spacecraft-side fix from the previous exercises is in place, because EX-G01 is not about the
+# spacecraft. The command that arrives is authentic, correctly formed and correctly authorised at
+# every hop - it was simply put in the plan by somebody who should not have been able to.
+mach create "EPS"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $eps
+sysbus.usart3 CreateFileBackend $epsuart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+# No attacker machine, no CAN injector, and nothing on the space link either. EX-G01's attacker
+# holds none of those positions: it can write a file into a directory on the ground. Everything the
+# spacecraft sees is the operator's own transmission, and every control the previous three
+# exercises added works exactly as designed while it happens.
