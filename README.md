@@ -7,12 +7,20 @@ attacks you can actually land, and mitigations proven to stop them.
 It is the space analogue of Toyota's [RAMN](https://github.com/ToyotaInfoTech/RAMN) board, which
 made automotive security learnable by putting four MCUs and a CAN bus on one PCB.
 
-**Status: P0 done, first exercise landed.** A ground station sends a real ECSS PUS 17,1 and gets a
-real 17,2 back through CCSDS framing, an emulated UART link, and CSP over CAN between emulated
-STM32H753 nodes. Two exercises are playable and they chain: **EX-B01**, where an attacker with nothing but bus
-access silences the satellite, and **EX-L01**, where its mitigation is defeated by replaying a
-recording — no key, no parsing, from the space link. See
-[the design](docs/superpowers/specs/2026-08-28-cuberange-design.md) for where this is going.
+**Status: three exercises, four satellite nodes.** A ground station sends a real ECSS PUS 17,1 and
+gets a real 17,2 back through CCSDS framing, an emulated UART link, and CSP over CAN between
+emulated STM32H753 nodes. The exercises chain, and each one attacks a limit the previous one's
+mitigation admitted to:
+
+- **EX-B01** — an attacker with nothing but bus access silences the satellite. Fixed by
+  authenticating power commands, which the write-up notes is replayable.
+- **EX-L01** — that fix is defeated by replaying a recording from the space link. No key, no
+  parsing, no idea what any field means.
+- **EX-A01** — authentication was never the missing control. A torque command that is authentic,
+  well-formed and physically impossible spins the spacecraft up, and every subsystem keeps
+  reporting nominal while it does.
+
+See [the design](docs/superpowers/specs/2026-08-28-cuberange-design.md) for where this is going.
 
 ```
 $ make demo-p0
@@ -39,13 +47,16 @@ Needs Linux (WSL2 is fine), Python ≥ 3.10, ~8 GB of disk. No root, no Docker.
 
 On a minimal image, install these first. `bc` is not optional — the probe's arithmetic is six
 calls to it. `libicu` and OpenSSL 3 are dlopened by Renode's bundled .NET at startup, and a C
-compiler is needed because `make check` compiles the shared codec and because `crcmod` ships no
-wheels for any architecture.
+compiler is needed because `make check` compiles the shared codec.
 
 ```bash
 sudo apt install -y bc build-essential python3-dev libicu-dev libssl3
 pip install -r requirements.txt
 ```
+
+**No root?** [docs/host-setup-without-root.md](docs/host-setup-without-root.md) is the path that
+was walked on a host with no `sudo`, `gcc`, `pip` or `make`, with the numbers it produced. Nothing
+in this repository needs a package manager.
 
 GTK is *not* needed: every invocation here passes `--disable-xwt`, so Renode never builds a UI.
 
@@ -71,14 +82,21 @@ make demo-p0
 
 | Target | What it does |
 | --- | --- |
-| `make probe` | Verifies every Renode capability the design depends on. 34 checks, including five deliberate-failure self-tests |
+| `make probe` | Verifies every Renode capability the design depends on. 40 checks, including five deliberate-failure self-tests |
 | `make firmware-p0` | Builds the COMM and OBC images |
+| `make firmware-a01` | Every node image: COMM, OBC, both EPS profiles, both ADCS profiles |
 | `make demo-p0` | Runs the PUS round trip and asserts it |
 | `make demo` | The R0 smoke test: two nodes exchanging CSP pings over CAN |
+| `make determinism` | Runs one scenario three times under the CI profile and requires byte-identical guest output |
+| `make pair-gate` | Proves every vulnerable/mitigated pair differs by exactly one build flag, and nothing else |
 | `make spike` | Injects raw CAN frames from Python with no privileges, and drives virtual time over Renode's External Control API |
 | `make verify-all` | Every exercise, both directions: attacks land, mitigations block, features survive |
 | `make soak-p0` | Thirty consecutive round trips under a watchdog |
 | `make check` | All of the above plus the codec suites |
+
+`make probe` is sensitive to host contention — a clean run is about 6 minutes, and it took 35 with
+two other Renode workloads on the machine. Check the load before reading a slow probe as a
+regression.
 
 ## How it fits together
 
@@ -104,11 +122,19 @@ survive contact with Renode — including the MCU choice — and its central per
 out to be wrong by a factor of eight, an artifact of two Renode defaults rather than the workload.
 Section 16 of the design document is the record of every such correction.
 
-Twenty-one Renode and library defects found along the way are recorded, and the ones that can be
-asserted are pinned as negative tests, so a future release that fixes one makes CI fail rather than
-silently changing behaviour. Two of them cost a day each: a CAN frame that was structurally perfect
-and invisible because it was sent as a standard rather than an extended ID, and a protocol version
-that libcsp picks at runtime, so "we use CSP v1" was true in the design and false in the firmware.
+Twenty-two Renode and library defects found along the way are recorded, and the ones that can be
+asserted are pinned as negative tests in `probe.sh`, so a future release that fixes one makes the
+probe fail rather than silently changing behaviour. Two of them cost a day each: a CAN frame that
+was structurally perfect and invisible because it was sent as a standard rather than an extended
+ID, and a protocol version that libcsp picks at runtime, so "we use CSP v1" was true in the design
+and false in the firmware. The twenty-second was found on 2026-09-09 and is the same shape:
+`cpu TranslateAddress` caches by address and not by access type, so asking about a read before
+asking about an instruction fetch reports that SRAM is executable when it is not.
+
+**There is no CI.** `make check` is the gate and a human runs it. Several documents here used to
+describe these gates as CI-enforced; there has never been a `.github` directory. Saying so is
+cheaper than the alternative: an earlier revision of the design claimed a TTP-verification tool, an
+offline mode and an oracle requirement, and none of the three existed either.
 
 ## Before you use it
 

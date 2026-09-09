@@ -5,11 +5,17 @@ Read this before doing anything in this repository.
 ## What this is
 
 A hands-on range for space cybersecurity. Satellite firmware runs at instruction level in Renode:
-four emulated STM32H753 nodes on a CAN bus, a ground station on the host, and security exercises
-that are verified in CI in both directions — the attack lands, and the mitigation stops it.
+emulated STM32H753 nodes on a CAN bus, a ground station on the host, and security exercises that
+are verified in both directions — the attack lands, and the mitigation stops it.
 
-Two exercises work today. `docs/superpowers/specs/2026-08-28-cuberange-design.md` is the design and
-its section 16 is the record of every claim that turned out to be wrong.
+**There is no CI.** `make check` is the gate, and a human has to type it. Nine places in this
+repository used to describe gates as CI-enforced; there has never been a `.github` directory. The
+verification is real and the automation around it is not, and those are different claims — see
+section 16 of the design for why this project is careful about the difference.
+
+Three exercises work today: EX-B01 (internal bus), EX-L01 (space link), EX-A01 (ADCS command
+envelope). `docs/superpowers/specs/2026-08-28-cuberange-design.md` is the design and its section 16
+is the record of every claim that turned out to be wrong.
 
 ## The rule
 
@@ -36,13 +42,19 @@ Concretely:
 ## Commands
 
 ```bash
-make probe        # 34 Renode capability checks incl. 5 deliberate-failure self-tests   ~90 s
-make firmware-p1  # COMM, OBC, and both EPS profiles
+make probe        # 40 Renode capability checks incl. 5 deliberate-failure self-tests   ~6 min
+make firmware-a01 # COMM, OBC, both EPS profiles, both ADCS profiles
 make demo-p0      # PUS 17 round trip, ground station to OBC and back
-make verify-all   # both exercises, three assertions each                              ~2.5 min
-make check        # all of it                                                          ~8 min
+make determinism  # rules G1/G2: three CI-profile runs, byte-identical UART capture     ~30 s
+make pair-gate    # every vulnerable/mitigated pair differs by exactly one build flag
+make verify-all   # every exercise, three assertions each
+make check        # all of it
 make soak-p0      # 30 consecutive round trips under a watchdog                        ~3.5 min
 ```
+
+`make probe` is very sensitive to host contention: a clean run is about 6 minutes, and with two
+other Renode workloads on the box it took 35. Do not read a slow probe as a regression without
+checking the load first.
 
 Toolchain install is `./tools/setup-toolchain.sh` — read its header comment, it records two dead
 ends that cost real time.
@@ -86,6 +98,18 @@ This domain is full of them. These have all been hit here:
 - **Renode's Monitor emits the prompt and the command echo as separate chunks.** A client that
   waits for "a prompt" returns before the result arrives and finds it at the head of the next
   command's output. `src/cuberange/renode/monitor.py` anchors on the echo.
+- **`cpu TranslateAddress` caches by address and not by access type.** Ask about `Read` on an
+  address and the very next `InstructionFetch` on the SAME address returns a false success. A
+  different page, or flash, is unaffected. This matters because the natural way to check "SRAM is
+  readable but not executable" is to ask in exactly that order, and that order reports that
+  shellcode would work. Query `InstructionFetch` first, or in a fresh process. Pinned as a negative
+  assertion in probe.sh section G (D22).
+- **A failed command aborts the rest of the `-e` chain, including the trailing `quit`.** Renode
+  then never exits; it hangs until the supervisor's watchdog kills it, and the log is EMPTY because
+  the output is lost with the process group. A harness looking for an error string in the log finds
+  nothing and concludes nothing went wrong. This is why scenarios include their execution profile
+  as their FIRST command: a bad path takes the machines down with it instead of running every node
+  with no quantum set.
 - **Renode wedges on ~13% of launches in some conditions** and leaks RSS to 17 GB in 10 minutes.
   Always launch through `src/cuberange/renode/supervisor.py`. It did not reproduce once in 30
   supervised runs on a quiet host, so contention is the likely cause, but the cause is not known.
@@ -98,9 +122,23 @@ Five files each, and `verify_ex_*.py` must assert **three** things: the attack w
 mitigation blocks it, and **the mitigated build still does its job**. Without the third, a
 mitigation that simply broke the feature would pass.
 
-The two vulnerable/mitigated firmware pairs differ by exactly one build flag, and
-`diff`ing their Zephyr `.config` files prints nothing. That is the mechanical proof the
-vulnerability was not manufactured by weakening the platform. Keep it that way.
+Every vulnerable/mitigated firmware pair differs by exactly one build flag. That used to be
+proved by a `diff` a contributor was asked to remember to type; `tools/config_diff_gate.py` now
+proves it for every pair declared in `firmware-matrix.yml`, and it is part of `make check`. It
+checks five things, and the last three exist because the first two can pass while the flag does
+nothing at all:
+
+1. the two Kconfig outputs are identical (836 symbols, measured);
+2. no other `CUBERANGE_*` cache variable differs;
+3. the two ELFs are not byte-identical — a misspelled flag compiles the same image twice and
+   would otherwise "prove" a mitigation that was never built in;
+4. the flag is actually referenced by the application source;
+5. every translation unit is compiled with an identical command line apart from the declared `-D`,
+   which is what stops a vulnerability being manufactured through compiler options. Kconfig says
+   nothing about those.
+
+The gate carries `--self-test`, which feeds it six known-bad pairs and requires each to be
+rejected. A gate that cannot fail is not evidence.
 
 Every `mitigation.md` states what the fix does *not* solve, and the next exercise generally attacks
 one of those limits — EX-B01's token is defeated by EX-L01's replay, exactly as EX-B01 predicted.
@@ -124,6 +162,10 @@ src/cuberange/renode/           supervisor, Monitor client, External Control cli
 src/cuberange/gs/               ground station
 src/cuberange/channel/          the link proxy an attacker taps and replays through
 attacker/TcpCanInjector.cs      90 lines of C# Renode compiles at runtime; raw CAN from a socket
+scripts/profiles/               interactive and ci execution profiles; scenarios include one
+tools/config_diff_gate.py       the anti-strawman gate, with self-tests
+firmware-matrix.yml             which vulnerable/mitigated pairs the gate checks
+tests/e2e/test_determinism.py   rules G1/G2, reproduced rather than asserted
 exercises/EX-*/                 five files each
 tests/golden/                   vectors from independent oracles, not from our own codecs
 docs/superpowers/specs/         the design; section 3.2 defects, section 16 corrections

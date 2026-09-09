@@ -9,8 +9,21 @@ This document exists so that mistake has to be made deliberately.
   toolchain, running as instructions on a Cortex-M7 model. When an exploit works, the bug is in the
   code, not in a script pretending the bug exists.
 - **That a protocol behaviour is what the standard says**, to the extent stated in the design
-  document — and no further. The codecs are checked against independent implementations and, where
-  obtainable, against the standards text. Where they are not, the design says so.
+  document — and no further, and not uniformly across layers. Be precise about which:
+
+  | Layer | Independent oracle | Where |
+  | --- | --- | --- |
+  | Space Packet primary header | spacepackets | `tests/pytest/test_oracle_spacepacket.py` |
+  | FECF CRC-16 | crcmod, plus the CCSDS 132.0-B-3 text | `tests/pytest/test_crc.py` |
+  | CSP v1 header and CFP-over-CAN | libcsp itself, run to produce the vectors | `tests/golden/csp.json` |
+  | **PUS-C secondary headers** | **none** | — |
+  | **TM/TC transfer frames** | **none** | — |
+
+  The last two rows are checked only against this project's own second implementation, which the
+  design's own section 9.3 opens by saying is not evidence. PUS is also the layer whose primary
+  source could not be obtained, so it is the one resting on the least. `tools/gen_golden.py` can
+  generate both from independent oracles; the vectors have not been committed and no test consumes
+  them yet.
 - **That a mitigation blocks a specific attack, and does not break the feature it protects.** Every
   exercise asserts both, plus the case where the legitimate operation still succeeds.
 - **That a control is worth building.** Which is the point of a range.
