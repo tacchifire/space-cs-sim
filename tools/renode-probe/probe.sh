@@ -95,12 +95,24 @@ mkdir -p "$OUT" || { echo "cannot create output dir $OUT"; exit 2; }
 # fifteen minutes - an optional feature stalling the thing that decides whether anything works.
 # Probes that should answer in seconds are given seconds.
 # ---------------------------------------------------------------------------
+# `< /dev/null` is not decoration, and its absence cost 30 minutes of every `make check`.
+#
+# A failing Monitor command aborts the rest of the `-e` chain, INCLUDING the trailing `quit`, and
+# drops Renode into its interactive Monitor. What happens next depends entirely on stdin. Run the
+# probe straight from a shell whose stdin is closed and Renode reads EOF and exits in a second; run
+# it under `make`, where stdin is an inherited open pipe, and it blocks on the prompt until the
+# timeout fires. The section Z self-tests fail on purpose, so each of them burned its full 900 s.
+# Measured: `make probe` about 6 minutes standalone, the same probe inside `make check` still in
+# section Z after 41.
+#
+# The project's own rule L9 already says CI must redirect stdin. This is that rule, applied to the
+# harness that enforces the rules.
 renode_run() {
   local secs=900
   if [ "$1" = "-t" ]; then secs="$2"; shift 2; fi
   local name="$1"; shift
   ( cd "$RENODE_DIR" && timeout "$secs" ./renode --disable-xwt --console --plain \
-      --hide-analyzers --hide-log "$@" -e 'quit' ) >"$OUT/$name.log" 2>&1
+      --hide-analyzers --hide-log "$@" -e 'quit' ) >"$OUT/$name.log" 2>&1 </dev/null
   echo $? > "$OUT/$name.rc"
 }
 
@@ -491,6 +503,158 @@ else
   fail "space link downlink" "connected but received no recognisable firmware output ($(wc -c <"$OUT/link_rx.bin" 2>/dev/null || echo 0) bytes)"
 fi
 
+
+# ---------------------------------------------------------------------------
+head1 "G. Firmware-exercise primitives (EX-F01 / EX-F02 rest on these)"
+# ---------------------------------------------------------------------------
+# The design's table of "learner tools, all verified by measurement" (section 4.5) listed watchpoint
+# hooks, symbol hooks and MPU enforcement, and ASSURANCE.md states that Renode enforces MPU
+# execute-never. None of it was reproducible from this repository - the same shape as W23, W24 and
+# W26, where a verification mechanism was described and never built. These probes are that mechanism.
+#
+# A hook reports through cpu.Log, not print(): a hook's print() goes to Renode's own stdout and never
+# reaches a --port Monitor session. --hide-log would suppress the log lines too, so these probes use
+# renode_run_logged.
+renode_run_logged() {
+  local secs=900
+  if [ "$1" = "-t" ]; then secs="$2"; shift 2; fi
+  local name="$1"; shift
+  ( cd "$RENODE_DIR" && timeout "$secs" ./renode --disable-xwt --console --plain \
+      --hide-analyzers "$@" -e 'quit' ) >"$OUT/$name.log" 2>&1 </dev/null
+  echo $? > "$OUT/$name.rc"
+}
+
+# Resolve a data symbol with Renode itself, so this probe needs no cross toolchain. Checked against
+# arm-zephyr-eabi-nm on a locally built image: both report _kernel at 0x24000894.
+renode_run -t 120 g_symaddr \
+  -e 'mach create "G"' \
+  -e "machine LoadPlatformDescription $BOARD" \
+  -e "sysbus LoadELF $ZEPHYR_CAN_COUNTER" \
+  -e 'sysbus GetSymbolAddress "_kernel"' \
+  -e 'sysbus ReadDoubleWord 0x08000000'
+KERNEL_ADDR="$(grep -oE '0x[0-9a-fA-F]{16}' "$OUT/g_symaddr.log" | head -1)"
+if had_error g_symaddr || [ -z "$KERNEL_ADDR" ]; then
+  fail "sysbus GetSymbolAddress resolves a Zephyr symbol" "$(err_of g_symaddr)"
+else
+  pass "sysbus GetSymbolAddress resolves a Zephyr symbol (_kernel = $KERNEL_ADDR)"
+fi
+
+# The watchpoint target is the stack, not _kernel. A symbol in .bss is only written when the code
+# that owns it runs, and in this sample _kernel saw no write in two virtual seconds - the probe
+# reported a broken watchpoint when what was actually wrong was the address. The stack is written by
+# every function call, so it tests the mechanism rather than the workload. Renode prints the initial
+# SP while loading, which is where the address comes from.
+# The initial stack pointer is the first word of the Cortex-M vector table, which LoadELF has
+# already placed at 0x08000000. Renode also prints it as "SP = 0x..." - but only when the machine
+# STARTS, and this probe never runs the emulation, so an earlier version of this line grepped a
+# string that was never going to be in the log and skipped the watchpoint probe every time.
+# Reading the vector table needs no run and no toolchain.
+# GetSymbolAddress prints 16 hex digits and ReadDoubleWord prints 8, so the 8-digit form picks out
+# the stack pointer unambiguously.
+#
+# `tr -d '\r'` is required, not tidy-up. Renode's console writes CRLF, and its value lines end in
+# TWO carriage returns - measured with `cat -A`: `0x24002A00^M^M$`. An anchored regex therefore
+# matches nothing at all, and because a missing address makes the watchpoint probe SKIP rather than
+# FAIL, two earlier versions of this line reported a capability as untested while looking healthy.
+INIT_SP="$(tr -d '\r' < "$OUT/g_symaddr.log" | grep -oE '^0x[0-9A-Fa-f]{8}$' | tail -1)"
+if [ -n "$INIT_SP" ]; then
+  WATCH_ADDR="$(printf '0x%X' $(( INIT_SP - 0x40 )))"
+else
+  WATCH_ADDR=""
+fi
+
+# G1. The watchpoint hook - the design calls this the highest-value grading primitive, and EX-F01
+# uses it on the saved return-address slot to observe a control-flow hijack.
+if [ -n "$WATCH_ADDR" ]; then
+  renode_run_logged -t 180 g_watchpoint \
+    -e 'mach create "G"' \
+    -e "machine LoadPlatformDescription $BOARD" \
+    -e "sysbus LoadELF $ZEPHYR_CAN_COUNTER" \
+    -e "sysbus AddWatchpointHook $WATCH_ADDR DoubleWord Write \"cpu.Log(LogLevel.Error, 'PROBE_WP pc={0:X}'.format(cpu.PC.RawValue))\"" \
+    -e 'emulation SetGlobalQuantum "0.002"' \
+    -e 'emulation RunFor "2"'
+  WP_HITS="$(grep -c 'PROBE_WP pc=' "$OUT/g_watchpoint.log" 2>/dev/null || echo 0)"
+  if [ "$WP_HITS" -gt 0 ] && grep -qE 'PROBE_WP pc=[0-9A-F]+' "$OUT/g_watchpoint.log"; then
+    pass "sysbus AddWatchpointHook Write fires and exposes cpu.PC ($WP_HITS hits at $WATCH_ADDR)"
+  else
+    fail "sysbus AddWatchpointHook Write" "no hook output in $OUT/g_watchpoint.log"
+  fi
+else
+  skip "sysbus AddWatchpointHook Write" "could not read the initial SP, so there is no address to watch"
+fi
+
+# G2. The symbol hook - reaching a named function is how an exercise scores "you got there".
+renode_run_logged -t 180 g_symhook \
+  -e 'mach create "G"' \
+  -e "machine LoadPlatformDescription $BOARD" \
+  -e "sysbus LoadELF $ZEPHYR_CAN_COUNTER" \
+  -e "cpu AddSymbolHook \"main\" \"cpu.Log(LogLevel.Error, 'PROBE_SYM pc={0:X}'.format(cpu.PC.RawValue))\"" \
+  -e 'emulation SetGlobalQuantum "0.002"' \
+  -e 'emulation RunFor "2"'
+if grep -qE 'PROBE_SYM pc=[0-9A-F]+' "$OUT/g_symhook.log"; then
+  pass "cpu AddSymbolHook resolves and fires on a named function"
+else
+  fail "cpu AddSymbolHook" "hook never fired ($(err_of g_symhook))"
+fi
+
+# G3. MPU execute-never. This is the claim EX-F01's honesty rests on: shellcode in SRAM must fail
+# here exactly as it fails on the real part, which is why the exercise teaches code reuse instead.
+#
+# Query order matters - see G5. InstructionFetch must be the FIRST translation asked about this
+# address in the session, so it gets its own process.
+renode_run -t 120 g_mpu_xn \
+  -e 'mach create "G"' \
+  -e "machine LoadPlatformDescription $BOARD" \
+  -e "sysbus LoadELF $ZEPHYR_CAN_COUNTER" \
+  -e 'emulation SetGlobalQuantum "0.002"' \
+  -e 'emulation RunFor "1"' \
+  -e 'cpu TranslateAddress 0x24003000 InstructionFetch'
+if grep -q 'Failed to translate address' "$OUT/g_mpu_xn.log"; then
+  pass "MPU execute-never is enforced: SRAM refuses an instruction fetch"
+else
+  fail "MPU execute-never" "SRAM accepted an instruction fetch - EX-F01 must not teach shellcode if this is true"
+fi
+
+# G4. The control for G3. Without it, "the fetch failed" could just mean every query fails.
+renode_run -t 120 g_mpu_flash \
+  -e 'mach create "G"' \
+  -e "machine LoadPlatformDescription $BOARD" \
+  -e "sysbus LoadELF $ZEPHYR_CAN_COUNTER" \
+  -e 'emulation SetGlobalQuantum "0.002"' \
+  -e 'emulation RunFor "1"' \
+  -e 'cpu TranslateAddress 0x08001000 InstructionFetch'
+if had_error g_mpu_flash; then
+  fail "MPU control: flash is executable" "$(err_of g_mpu_flash)"
+else
+  pass "MPU control: flash accepts an instruction fetch, so G3 is not a blanket refusal"
+fi
+
+# G5. D22, pinned as a negative assertion.
+#
+# `TranslateAddress` caches by address and NOT by access type. Ask about Read first and the very
+# next InstructionFetch on the SAME address returns a false success - measured here: no prior query
+# refuses the fetch, a prior Read or Write on the same address allows it, and a prior query on a
+# different page or on flash changes nothing.
+#
+# This matters more than a curiosity. The natural way to verify "SRAM is readable but not
+# executable" is to ask about Read and then about InstructionFetch, and that order silently produces
+# the wrong answer - which would have told the design that shellcode works here. Pinned so that a
+# future Renode which fixes the cache makes this probe fail and the workaround gets removed.
+renode_run -t 120 g_xlat_cache \
+  -e 'mach create "G"' \
+  -e "machine LoadPlatformDescription $BOARD" \
+  -e "sysbus LoadELF $ZEPHYR_CAN_COUNTER" \
+  -e 'emulation SetGlobalQuantum "0.002"' \
+  -e 'emulation RunFor "1"' \
+  -e 'cpu TranslateAddress 0x24003000 Read' \
+  -e 'cpu TranslateAddress 0x24003000 InstructionFetch'
+if grep -q 'Failed to translate address' "$OUT/g_xlat_cache.log"; then
+  fail "known-bad D22: TranslateAddress cache is keyed by address only" \
+       "the fetch was refused after a prior Read - Renode appears fixed; drop the query-order workaround and this probe"
+else
+  pass "known-bad D22: a prior Read makes an SRAM instruction fetch falsely succeed (still broken, as documented)"
+fi
+
 # ---------------------------------------------------------------------------
 head1 "Z. Harness self-tests (these MUST fail)"
 # ---------------------------------------------------------------------------
@@ -498,11 +662,11 @@ head1 "Z. Harness self-tests (these MUST fail)"
 # does not flag it, this script is lying and the whole run is void.
 SELFTEST_OK=1
 
-renode_run st_badtype -e 'mach create "T"' -e "machine LoadPlatformDescription $BOARD" \
+renode_run -t 60 st_badtype -e 'mach create "T"' -e "machine LoadPlatformDescription $BOARD" \
   -e 'machine LoadPlatformDescriptionFromString "x: Sensors.ThisTypeDoesNotExist @ i2c1 0x10"'
 had_error st_badtype && pass "self-test: unresolvable type is detected" || { SELFTEST_OK=0; fail "SELF-TEST" "an unresolvable peripheral type was NOT detected"; }
 
-renode_run st_badcmd -e 'this is not a monitor command'
+renode_run -t 60 st_badcmd -e 'this is not a monitor command'
 had_error st_badcmd && pass "self-test: bad monitor command is detected" || { SELFTEST_OK=0; fail "SELF-TEST" "an invalid monitor command was NOT detected"; }
 
 : > "$OUT/st_emptylog.log"; echo 0 > "$OUT/st_emptylog.rc"
