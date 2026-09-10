@@ -20,6 +20,9 @@ CubeRange は意図的な脆弱性を同梱する。
 | `CUBERANGE_COMM_ANTIREPLAY=0` でビルドした `firmware/apps/comm` | テレコマンドをリプレイできる（EX-L01） |
 | `CUBERANGE_ADCS_TORQUE_LIMIT=0` でビルドした `firmware/apps/adcs` | トルク指令に範囲検査が無い（EX-A01） |
 | `CUBERANGE_OBC_PUS8_LENGTH_CHECK=0` でビルドした `firmware/apps/obc` | PUS 8 の引数コピーに境界が無い（EX-F01） |
+| `firmware/apps/obc/src/main.c` の `maintenance_inhibit_fdir` | 特権ハンドラを、削除ではなく無効化した状態でイメージ内に残してある——EX-F01 の標的 |
+| `src/cuberange/gs/import_policy.py` の `AcceptAnything` | 地上系が、出所・形式・権限のいずれも検査せずにスケジュールファイルを取り込む（EX-G01） |
+| `src/cuberange/gs/import_policy.py` の `IMPORT_KEY` | 計画への署名鍵。設計として平文でコミットしている |
 | `firmware/apps/eps/src/main.c` の `POWER_TOKEN` | 設計として、共有秘密を平文でコミットしている |
 | 演習シナリオ | 認証なしで待ち受ける。しかも**全インタフェース**で。後述する |
 

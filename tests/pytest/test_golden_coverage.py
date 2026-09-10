@@ -38,11 +38,12 @@ def test_the_golden_directory_is_not_empty():
         f"tools/gen_golden.py.")
     # The four gen_golden.py emits. A missing one is a layer with no outside opinion.
     names = {p.name for p in files}
-    assert names >= {"crc.json", "csp.json", "pus.json", "space_packet.json"}, (
-        f"missing golden files: {sorted({'crc.json', 'csp.json', 'pus.json', 'space_packet.json'} - names)}")
+    required = {"crc.json", "csp.json", "pus.json", "space_packet.json", "transfer_frame.json"}
+    assert names >= required, f"missing golden files: {sorted(required - names)}"
 
 
-@pytest.mark.parametrize("name", ["crc.json", "csp.json", "pus.json", "space_packet.json"])
+@pytest.mark.parametrize("name", ["crc.json", "csp.json", "pus.json", "space_packet.json",
+                                 "transfer_frame.json"])
 def test_each_golden_file_is_read_by_a_test(name):
     source = _all_test_source()
     assert name in source, (
@@ -51,7 +52,8 @@ def test_each_golden_file_is_read_by_a_test(name):
         f"and is not.")
 
 
-@pytest.mark.parametrize("name", ["crc.json", "csp.json", "pus.json", "space_packet.json"])
+@pytest.mark.parametrize("name", ["crc.json", "csp.json", "pus.json", "space_packet.json",
+                                 "transfer_frame.json"])
 def test_each_golden_file_records_who_produced_it(name):
     """A vector with no stated provenance cannot be told apart from our own output."""
     doc = json.loads((GOLDEN_DIR / name).read_text())
@@ -69,7 +71,8 @@ def test_no_conformance_test_can_skip_itself_out_of_existence():
     """
     import ast
 
-    for name in ("test_golden_frame.py", "test_oracle_pus.py", "test_golden_coverage.py"):
+    for name in ("test_golden_frame.py", "test_oracle_pus.py", "test_golden_coverage.py",
+                 "test_golden_transfer_frame.py"):
         tree = ast.parse((TEST_DIR / name).read_text())
         # Parsed rather than grepped. The first version searched the text and tripped on the word
         # appearing in a docstring that explains why it is banned.

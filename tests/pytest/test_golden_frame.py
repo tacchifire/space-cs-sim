@@ -17,9 +17,11 @@ WHAT THIS DOES AND DOES NOT ESTABLISH, stated because the distinction is the poi
   - The FECF is independently verified. Four implementations and the CCSDS 132.0-B-3 text agree on
     the parameters, one vector reproduces a value Yamcs publishes, and the residue property is a
     statement from the standard rather than from us.
-  - The HEADER FIELD PACKING is not. No second implementation of CubeRange's TC and TM primary
-    headers exists here, so their layout still rests on this project's reading of 232.0-B-4 and
-    132.0-B-3. ASSURANCE.md says so, and this file does not pretend otherwise.
+  - The HEADER FIELD PACKING is verified elsewhere, and was not when this file was written.
+    `test_golden_transfer_frame.py` now checks it against NASA CryptoLib for TC and spacepackets
+    for TM. This file stays about the FECF; the split matters because the CRC that covers a frame
+    and the layout of the fields inside it are separate claims, and conflating them is exactly the
+    over-reading ASSURANCE.md warns about.
 """
 import json
 import sys

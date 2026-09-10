@@ -1,0 +1,146 @@
+{
+  "tc": {
+    "spec": "CCSDS 232.0-B-4 4.1.2 TC transfer frame primary header, 5 octets",
+    "oracles": [
+      "hand-packed field by field from CCSDS 232.0-B-4 4.1.2",
+      "NASA CryptoLib Crypto_TC_ProcessSecurity (NOSA-1.3, separate process)"
+    ],
+    "header_len": 5,
+    "length_convention": "frame length field = total octets in the frame, minus 1",
+    "fecf": "CRC-16/IBM-3740 over header+data, from crcmod - see crc.json for its four oracles",
+    "note": "CryptoLib returns 103 = MANAGED_PARAMETERS_FOR_GVCID_NOT_FOUND for every vector. That is the lookup AFTER the header is parsed and the length is checked, so it is the expected status here; -82 would mean it disagreed about the length.",
+    "vectors": [
+      {
+        "scid": 169,
+        "vcid": 0,
+        "fsn": 0,
+        "payload": "",
+        "total_octets": 7,
+        "frame_length_field": 6,
+        "frame": "00A9000600A2AB",
+        "cryptolib": {
+          "tfvn": 0,
+          "bypass": 0,
+          "cc": 0,
+          "spare": 0,
+          "scid": 169,
+          "vcid": 0,
+          "frame_length_field": 6,
+          "fsn": 0,
+          "length_field_plus_one_equals_octets": true
+        }
+      },
+      {
+        "scid": 169,
+        "vcid": 1,
+        "fsn": 7,
+        "payload": "01",
+        "total_octets": 8,
+        "frame_length_field": 7,
+        "frame": "00A9040707014ADF",
+        "cryptolib": {
+          "tfvn": 0,
+          "bypass": 0,
+          "cc": 0,
+          "spare": 0,
+          "scid": 169,
+          "vcid": 1,
+          "frame_length_field": 7,
+          "fsn": 7,
+          "length_field_plus_one_equals_octets": true
+        }
+      },
+      {
+        "scid": 1023,
+        "vcid": 63,
+        "fsn": 255,
+        "payload": "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F",
+        "total_octets": 39,
+        "frame_length_field": 38,
+        "frame": "03FFFC26FF000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F63C7",
+        "cryptolib": {
+          "tfvn": 0,
+          "bypass": 0,
+          "cc": 0,
+          "spare": 0,
+          "scid": 1023,
+          "vcid": 63,
+          "frame_length_field": 38,
+          "fsn": 255,
+          "length_field_plus_one_equals_octets": true
+        }
+      },
+      {
+        "scid": 0,
+        "vcid": 0,
+        "fsn": 128,
+        "payload": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "total_octets": 107,
+        "frame_length_field": 106,
+        "frame": "0000006A80AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA5869",
+        "cryptolib": {
+          "tfvn": 0,
+          "bypass": 0,
+          "cc": 0,
+          "spare": 0,
+          "scid": 0,
+          "vcid": 0,
+          "frame_length_field": 106,
+          "fsn": 128,
+          "length_field_plus_one_equals_octets": true
+        }
+      }
+    ]
+  },
+  "tm": {
+    "spec": "CCSDS 132.0-B-3 4.1.2 TM transfer frame primary header, 6 octets",
+    "oracles": [
+      "spacepackets.ccsds.tm_frame.TmFramePrimaryHeader (Apache-2.0)"
+    ],
+    "header_len": 6,
+    "length_convention": "none - the TM primary header carries no frame length field",
+    "fecf": "CRC-16/IBM-3740 over header+data, from crcmod",
+    "vectors": [
+      {
+        "scid": 169,
+        "vcid": 0,
+        "mc_count": 0,
+        "vc_count": 0,
+        "payload": "",
+        "header": "0A9000000000",
+        "frame": "0A9000000000AE98",
+        "total_octets": 8
+      },
+      {
+        "scid": 169,
+        "vcid": 1,
+        "mc_count": 1,
+        "vc_count": 2,
+        "payload": "01",
+        "header": "0A9201020000",
+        "frame": "0A920102000001107C",
+        "total_octets": 9
+      },
+      {
+        "scid": 1023,
+        "vcid": 7,
+        "mc_count": 255,
+        "vc_count": 255,
+        "payload": "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F",
+        "header": "3FFEFFFF0000",
+        "frame": "3FFEFFFF0000000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F356E",
+        "total_octets": 40
+      },
+      {
+        "scid": 0,
+        "vcid": 0,
+        "mc_count": 128,
+        "vc_count": 64,
+        "payload": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "header": "000080400000",
+        "frame": "000080400000AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAF76E",
+        "total_octets": 108
+      }
+    ]
+  }
+}

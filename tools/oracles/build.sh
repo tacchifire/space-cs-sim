@@ -85,18 +85,51 @@ echo "    $WORK/csp_oracle"
 
 # --------------------------------------------------------------------------- NASA CryptoLib
 say "libcryptolib.so (NASA CryptoLib, NOSA 1.3 - external oracle, not vendored)"
-if [ ! -f "$WORK/cryptolib/build/libcryptolib.so" ]; then
+# Rebuild when the library is absent OR when it predates the options tc_oracle needs. A checkout
+# that already had a libcryptolib.so from before those options existed would otherwise be skipped
+# here and then segfault inside tc_oracle - the failure would look like a bug in the oracle rather
+# than a stale build, which is the same confusion the firmware pair gate's provenance check exists
+# to prevent.
+if [ ! -f "$WORK/cryptolib/build/libcryptolib.so" ] || \
+   ! nm -D --defined-only "$WORK/cryptolib/build/libcryptolib.so" 2>/dev/null \
+     | grep -q 'get_mc_interface_disabled'; then
+  rm -rf "$WORK/cryptolib/build"
   [ -d "$WORK/cryptolib" ] || git clone --depth 1 https://github.com/nasa/CryptoLib "$WORK/cryptolib"
   mkdir -p "$WORK/cryptolib/build"
   ( cd "$WORK/cryptolib/build"
     # -Wno-self-assign in the CONFIG-specific slot, because CryptoLib appends -Werror to
     # CMAKE_C_FLAGS after ours and its sources contain deliberate self-assignments that clang
     # rejects and gcc does not. CryptoLib's own ENABLE_FUZZING path does the same thing for afl.
+    #
+    # The four *_INTERNAL/_DISABLED options are what tc_oracle needs, and each was added because
+    # its absence produced a segfault rather than a message:
+    #
+    #   KEY_INTERNAL   - without it Crypto_Init leaves a stub key interface and dies.
+    #   SA_INTERNAL    - the Security Association store is walked after the header is parsed.
+    #   MC_DISABLED    - the interesting one. The INTERNAL monitoring interface logs through an
+    #                    fprintf to a FILE* that Crypto_Init opens; on the ordinary path where a
+    #                    frame has no managed parameters, mc_log fired with that handle still NULL
+    #                    and libc segfaulted. The disabled interface is a no-op, and logging is not
+    #                    part of what the oracle measures.
+    #   MC_INTERNAL    - kept so the choice above is a choice and not the only option compiled in.
+    #
+    # Not enabled: CRYPTO_LIBGCRYPT. Crypto_Init_TC_Unit_Test asks for it, gcrypt.h is not on this
+    # host and installing it needs root, and a cryptography backend has nothing to do with reading
+    # a primary header - so tc_oracle configures the parse path directly instead of using that
+    # helper. See its header comment.
     cmake .. -DCMAKE_C_COMPILER="$CC" -DCMAKE_BUILD_TYPE=Release \
+             -DKEY_INTERNAL=ON -DMC_INTERNAL=ON -DMC_DISABLED=ON -DSA_INTERNAL=ON \
              -DCMAKE_C_FLAGS_RELEASE="-O2 -Wno-self-assign -Wno-unused-but-set-variable" >/dev/null
     make -j"$(nproc)" >/dev/null )
 fi
 echo "    $WORK/cryptolib/build/libcryptolib.so"
+
+# --------------------------------------------------------------------------- TC header oracle
+say "tc_oracle (TC transfer frame primary header, parsed by CryptoLib)"
+"$CC" -O2 -I"$WORK/cryptolib/include" -I"$WORK/cryptolib/build/include" \
+      -o "$WORK/tc_oracle" "$REPO/tools/oracles/tc_oracle.c" \
+      -L"$WORK/cryptolib/build" -lcryptolib -Wl,-rpath,"$WORK/cryptolib/build"
+echo "    $WORK/tc_oracle"
 
 say "done"
 echo

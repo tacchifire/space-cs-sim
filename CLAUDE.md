@@ -166,6 +166,13 @@ This domain is full of them. These have all been hit here:
   (`$comm?=$out/build-comm/zephyr/zephyr.elf` resolves) — measured, not assumed. Launchers
   pass `-e "$out=@<OUT>"`; `test_paths.py` fails if a scenario hardcodes a path or a launcher
   forgets to pass it.
+- **A mutation test can silently check the OLD code.** Python validates `__pycache__` on
+  (mtime, size). A one-character mutation that keeps the size — `vcid_bits=3` to `vcid_bits=6`,
+  `0x7` to `0x3F` — followed by a restore within the same second leaves the stale `.pyc` looking
+  valid, so the run measures the code you just put back. It reported a mutation as "not caught"
+  here, and the conclusion was written into a docstring before the cache was cleared and the real
+  answer turned out to be different. Clear `__pycache__` between the mutation and the run, and
+  between the restore and the next one.
 - **Renode wedges on ~13% of launches in some conditions** and leaks RSS to 17 GB in 10 minutes.
   Always launch through `src/cuberange/renode/supervisor.py`. It did not reproduce once in 30
   supervised runs on a quiet host, so contention is the likely cause, but the cause is not known.
@@ -237,6 +244,6 @@ firmware-matrix.yml             which vulnerable/mitigated pairs the gate checks
 tests/e2e/test_determinism.py   rules G1/G2, reproduced rather than asserted
 exercises/EX-*/                 five files each
 tests/golden/                   vectors from independent oracles, not from our own codecs
-tools/oracles/                  the oracles themselves - csp_oracle.c and the build script
+tools/oracles/                  the oracles themselves - csp_oracle.c, tc_oracle.c, the build script
 docs/superpowers/specs/         the design; section 3.2 defects, section 16 corrections
 ```

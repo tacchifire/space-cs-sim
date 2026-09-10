@@ -10,6 +10,8 @@ Oracles used:
   crcmod / crc / fastcrc            -> CRC-16 CCITT-FALSE and CRC-32C, 3 ways
   NASA CryptoLib libcryptolib.so    -> Crypto_Calc_FECF (NOSA-1.3, external process, not vendored)
   libcsp csp_oracle (MIT)           -> CSPv1 header + CFP1-over-CAN frames
+  NASA CryptoLib tc_oracle          -> TC transfer frame primary header, parsed not reimplemented
+  spacepackets.ccsds.tm_frame       -> TM transfer frame primary header
 """
 import json, struct, subprocess, sys, ctypes, binascii, pathlib, re
 
@@ -175,6 +177,111 @@ csp = {"spec": "libcsp (MIT) CSP v1 32-bit header + CFP 1.x over CAN 2.0B 29-bit
                        "src_file_tx": "libcsp/src/interfaces/csp_if_can.c:192-196, 242-246"},
        "raw_oracle_output": out.splitlines()}
 (OUT / "csp.json").write_text(json.dumps(csp, indent=2))
+
+
+# ------------------------------------------------- TM/TC transfer frame primary headers
+#
+# The layer that had no outside opinion at all. crc.json gives the FECF four, space_packet.json
+# gives the Space Packet header two, and the TM and TC TRANSFER FRAME headers rested entirely on
+# this project's reading of CCSDS 232.0-B-4 and 132.0-B-3 - which ASSURANCE.md said plainly, and
+# which is the one place where two implementations sharing a misreading agree perfectly and are
+# both wrong on the wire.
+#
+# The chain here has two links, and neither end is CubeRange's encoder:
+#
+#   TC: these octets are packed BELOW from the field table in CCSDS 232.0-B-4 4.1.2, then handed
+#       to NASA CryptoLib, which parses them with its own code and reports the fields it found.
+#       Agreement means the hand packing and a flight implementation read the standard the same
+#       way. CryptoLib also checks `frame length field + 1 == octets`, so the length convention -
+#       the single easiest field here to get wrong - is confirmed by something other than us.
+#
+#   TM: spacepackets packs the header from named fields. That IS a second implementation, so no
+#       hand packing is needed on this side.
+#
+# tests/pytest/test_golden_transfer_frame.py then requires CubeRange's encoder to reproduce every
+# octet. This file never imports it.
+
+def _tc_header_by_hand(scid, vcid, total_octets, fsn):
+    """CCSDS 232.0-B-4 4.1.2, packed field by field rather than by a formula.
+
+    Written out longhand deliberately: a one-line struct.pack hides which bits went where, and
+    hiding that is how a header layout goes unchecked for the life of a project.
+    """
+    tfvn, bypass, ctrl, spare = 0, 0, 0, 0          # 4.1.2.1 / .2 / .3 - Type-A data frame
+    length_field = total_octets - 1                  # 4.1.2.7: total octets in the frame, minus one
+    b0 = (tfvn << 6) | (bypass << 5) | (ctrl << 4) | (spare << 2) | ((scid >> 8) & 0x03)
+    b1 = scid & 0xFF                                 # 4.1.2.4: SCID is 10 bits, split 2 + 8
+    b2 = ((vcid & 0x3F) << 2) | ((length_field >> 8) & 0x03)   # 4.1.2.5: VCID is 6 bits
+    b3 = length_field & 0xFF
+    b4 = fsn & 0xFF                                  # 4.1.2.8: frame sequence number
+    return bytes([b0, b1, b2, b3, b4])
+
+TC_CASES = [(0x0A9, 0, b"", 0), (0x0A9, 1, b"\x01", 7),
+            (0x3FF, 63, bytes(range(32)), 255), (0x000, 0, b"\xAA" * 100, 128)]
+
+tc_frames, tc_meta = [], []
+for scid, vcid, payload, fsn in TC_CASES:
+    total = 5 + len(payload) + 2                      # header + data + FECF
+    body = _tc_header_by_hand(scid, vcid, total, fsn) + payload
+    frame = body + crc16_a(body).to_bytes(2, "big")   # crcmod, not our CRC
+    tc_frames.append(H(frame))
+    tc_meta.append({"scid": scid, "vcid": vcid, "fsn": fsn, "payload": H(payload),
+                    "total_octets": total, "frame_length_field": total - 1})
+
+parsed = json.loads(subprocess.run(["./tc_oracle", *tc_frames],
+                                   capture_output=True, text=True, check=True).stdout)
+assert len(parsed) == len(tc_meta)
+for meta, got in zip(tc_meta, parsed):
+    meta["frame"] = got["frame"]
+    meta["cryptolib"] = {k: got[k] for k in ("tfvn", "bypass", "cc", "spare", "scid", "vcid",
+                                             "frame_length_field", "fsn",
+                                             "length_field_plus_one_equals_octets")}
+
+# --------------------------------------------------------------- TM via spacepackets
+from spacepackets.ccsds.tm_frame import (MasterChannelId, TmFramePrimaryHeader,
+                                         TransferFrameDataFieldStatus)
+
+TM_CASES = [(0x0A9, 0, 0, 0, b""), (0x0A9, 1, 1, 2, b"\x01"),
+            (0x3FF, 7, 255, 255, bytes(range(32))), (0x000, 0, 128, 64, b"\xAA" * 100)]
+
+tm_vectors = []
+for scid, vcid, mc, vc, payload in TM_CASES:
+    status = TransferFrameDataFieldStatus(secondary_header_flag=False, sync_flag=False,
+                                          packet_order_flag=False, segment_len_id=0,
+                                          first_header_pointer=0)
+    hdr = TmFramePrimaryHeader(
+        master_channel_id=MasterChannelId(transfer_frame_version=0, spacecraft_id=scid),
+        vc_id=vcid, ocf_flag=False, master_ch_frame_count=mc, vc_frame_count=vc,
+        frame_datafield_status=status).pack()
+    body = hdr + payload
+    tm_vectors.append({"scid": scid, "vcid": vcid, "mc_count": mc, "vc_count": vc,
+                       "payload": H(payload), "header": H(hdr),
+                       "frame": H(body + crc16_a(body).to_bytes(2, "big")),
+                       "total_octets": len(body) + 2})
+
+frames_doc = {
+    "tc": {
+        "spec": "CCSDS 232.0-B-4 4.1.2 TC transfer frame primary header, 5 octets",
+        "oracles": ["hand-packed field by field from CCSDS 232.0-B-4 4.1.2",
+                    "NASA CryptoLib Crypto_TC_ProcessSecurity (NOSA-1.3, separate process)"],
+        "header_len": 5,
+        "length_convention": "frame length field = total octets in the frame, minus 1",
+        "fecf": "CRC-16/IBM-3740 over header+data, from crcmod - see crc.json for its four oracles",
+        "note": ("CryptoLib returns 103 = MANAGED_PARAMETERS_FOR_GVCID_NOT_FOUND for every vector. "
+                 "That is the lookup AFTER the header is parsed and the length is checked, so it "
+                 "is the expected status here; -82 would mean it disagreed about the length."),
+        "vectors": tc_meta,
+    },
+    "tm": {
+        "spec": "CCSDS 132.0-B-3 4.1.2 TM transfer frame primary header, 6 octets",
+        "oracles": ["spacepackets.ccsds.tm_frame.TmFramePrimaryHeader (Apache-2.0)"],
+        "header_len": 6,
+        "length_convention": "none - the TM primary header carries no frame length field",
+        "fecf": "CRC-16/IBM-3740 over header+data, from crcmod",
+        "vectors": tm_vectors,
+    },
+}
+(OUT / "transfer_frame.json").write_text(json.dumps(frames_doc, indent=2))
 
 print("wrote:", *[p.name for p in sorted(OUT.iterdir())])
 print()

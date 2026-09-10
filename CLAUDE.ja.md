@@ -167,6 +167,12 @@ make soak-p0      # ウォッチドッグ下で 30 回連続の往復           
   Renode 1.16.1 が変数を連結できること（`$comm?=$out/build-comm/zephyr/zephyr.elf` が解決すること）は
   実測した。仮定ではない。起動側は `-e "$out=@<OUT>"` を渡す。シナリオがパスを直書きしたり、
   起動側が渡し忘れたりすれば `test_paths.py` が落ちる。
+- **変異テストが、黙って「元のコード」を検査していることがある。** Python は `__pycache__` を
+  (mtime, size) で有効性判定する。サイズの変わらない 1 文字の変異——`vcid_bits=3` を `=6` に、
+  `0x7` を `0x3F` に——を入れ、同じ秒のうちに元へ戻すと、古い `.pyc` が有効に見えたまま残り、
+  実行されるのは「戻した後のコード」になる。ここでは実際に、ある変異が「検出されない」と報告され、
+  その結論を docstring に書いた後でキャッシュを消したら**答えが違っていた**。
+  変異と実行の間、そして復元と次の実行の間で `__pycache__` を消すこと。
 - **Renode はある条件下で約 13% の起動で固まり**、10 分で RSS が 17 GB まで膨らむ。
   必ず `src/cuberange/renode/supervisor.py` 経由で起動すること。静かなホストでの監督付き 30 回では
   一度も再現しなかったので混雑が原因らしいが、原因は分かっていない。
@@ -238,6 +244,6 @@ firmware-matrix.yml             ゲートが検査する脆弱版／緩和版の
 tests/e2e/test_determinism.py   規則 G1/G2。主張ではなく再現
 exercises/EX-*/                 各 5 ファイル
 tests/golden/                   独立オラクル由来のベクタ。自前のコーデック由来ではない
-tools/oracles/                  そのオラクル自体——csp_oracle.c とビルドスクリプト
+tools/oracles/                  そのオラクル自体——csp_oracle.c、tc_oracle.c、ビルドスクリプト
 docs/superpowers/specs/         設計。3.2 節が欠陥、16 節が訂正
 ```

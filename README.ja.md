@@ -98,6 +98,7 @@ make demo-p0
 | `make probe` | 設計が依存する Renode の能力をすべて検証する。40項目、うち5件は意図的に失敗させる自己テスト |
 | `make firmware-p0` | COMM と OBC のイメージを作る |
 | `make firmware-f01` | 衛星0の全イメージ。COMM、OBC 両版、EPS 両版、ADCS 両版 |
+| `make firmware-g01` | EX-G01 が必要とする硬化版の OBC と EPS。この演習は「宇宙機側の対策がすべて効いている状態」を前提にするため |
 | `make firmware-sat1` | 同じ4役を宇宙機1として作る。CSP アドレスも SCID も別 |
 | `tools/ci.sh` | ゲートを1コマンドにしたもの。環境検査のあと `make check` を走らせる。CI が呼ぶのはこれ |
 | `make constellation` | 8ノード、宇宙機2機、1エミュレーション。両者のバス分離も検証する |

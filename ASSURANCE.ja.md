@@ -14,17 +14,34 @@
 
   | 層 | 独立オラクル | 場所 |
   | --- | --- | --- |
-  | Space Packet の一次ヘッダ | spacepackets | `tests/pytest/test_oracle_spacepacket.py` |
-  | FECF の CRC-16 | crcmod と CCSDS 132.0-B-3 の本文 | `tests/pytest/test_crc.py` |
+  | Space Packet の一次ヘッダ | spacepackets、ccsdspy、および 133.0-B-2 の表からの手作業デコード | `test_golden_spacepacket.py` |
+  | FECF の CRC-16 | crcmod、fastcrc、crc、NASA CryptoLib、および CCSDS 132.0-B-3 の本文 | `test_golden_frame.py` |
   | CSP v1 と CFP over CAN | libcsp 自身を動かして生成 | `tests/golden/csp.json` |
-  | **PUS-C の副ヘッダ** | **無し** | — |
-  | **TM/TC 転送フレーム** | **無し** | — |
+  | PUS-C の副ヘッダ | spacepackets | `test_oracle_pus.py` |
+  | TC 転送フレームの一次ヘッダ | NASA CryptoLib（再実装ではなく、octets を解析させる）と 232.0-B-4 からの手組み | `test_golden_transfer_frame.py` |
+  | TM 転送フレームの一次ヘッダ | `spacepackets.ccsds.tm_frame` | `test_golden_transfer_frame.py` |
 
-  下2行は、このプロジェクト自身の2つ目の実装としか突き合わせていない。
-  設計仕様書の 9.3 節が冒頭で「それは証明にならない」と書いているものである。
-  PUS はさらに厳しい。
-  一次資料が入手できなかった層でもあり、足場が最も薄い。
-  `tools/gen_golden.py` は両方を独立オラクルから生成できるが、ベクタはまだコミットされておらず、消費するテストも無い。
+  下 2 行は 2026-09-10 まで**「無し」**だった。そしてその上の行は読み違えやすかった——
+  転送フレームを**覆う** FECF には独立した意見が 4 つあるのに、
+  **ヘッダのフィールド配置**には 1 つも無かった。
+  ヘッダ内でフィールドが入れ替わっていても、このツリーのすべてのテストが通る状態だった。
+
+  新しい 2 行が何を示し、何を示さないか:
+
+  - TC: バージョン、bypass、制御指令、spare、SCID、VCID、フレーム長、フレーム順序番号のすべてを、
+    このプロジェクトが組んだのではない octets から CryptoLib が復元した。0 だけでなく各フィールドの
+    最大値でも確認している。CryptoLib は `フレーム長フィールド + 1 == octets 数` も強制するので、
+    ここで最も間違えやすいフィールド——自前のデコーダとは完璧に往復するのに実機の受信側には
+    ことごとく拒否される種類の誤り——が外部から確認されたことになる。
+  - TM: 6 オクテットの一次ヘッダを `spacepackets` が名前付きフィールドから組み、オクテット単位で比較する。
+    **ただし Transfer Frame Data Field Status は 1 つの状態でしか検査していない。**
+    このプロジェクトは first header pointer を常に 0、全フラグを 0 で出すため、
+    その他の値についてベクタは何も述べておらず、そこの誤りは何も捕まえない。
+  - どちらも TC のセグメントヘッダや TM の副ヘッダは覆わない。このプロジェクトはどちらも出さない。
+  - フィールドの**幅**を守っているのはマスクではなく範囲検査であり、テストが検査しているのもそちらである。
+    TM の VCID マスクを 3 ビットから 6 ビットに広げても、コミット済みのどのベクタも変わらない。
+    7 を超える VCID はマスクに届く前に拒否されるからである。
+    これは実測した——最初に書いたテストは逆のことを主張していた。
 
 - **ある対策が特定の攻撃を止め、かつ守るべき機能を壊さないこと。** どの演習も両方を assert する。
   加えて、正規操作が成功する場合も assert する。

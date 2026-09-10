@@ -7,6 +7,13 @@ absent from the assurance document, in the language most of its readers use.
 
 Headings are compared by LEVEL, not by text: the text is translated, the structure is not. A
 missing, added or re-nested section changes the sequence and fails here.
+
+Headings alone were not enough. With every heading matching, `ASSURANCE.ja.md` still claimed PUS-C
+had no independent oracle and that the golden vectors were not committed - both long since untrue -
+and `SECURITY.ja.md` was missing three of the nine deliberate weaknesses the English version
+discloses, including the privileged handler EX-F01 targets and the ground segment's unchecked
+import path. A security disclosure that discloses less in one language is not a translation
+problem. Table rows are compared too, because both drifts showed up there.
 """
 import re
 from pathlib import Path
@@ -100,3 +107,39 @@ def test_the_listed_exemptions_still_exist():
 def test_the_pairs_list_is_not_empty():
     """A glob that matches nothing would make every test above pass by vacuum."""
     assert len(_doc_pairs()) >= 15, f"only {len(_doc_pairs())} document pairs found"
+
+
+def _table_rows(text: str) -> int:
+    """Table rows outside fenced code blocks.
+
+    Fences matter here for the same reason they matter for headings: a code block full of pipe
+    characters would be counted as a table, and the two versions' code blocks legitimately differ.
+    """
+    count, fence = 0, None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if fence is None and re.match(r"^(```|~~~)", stripped):
+            fence = stripped[:3]
+            continue
+        if fence and stripped.startswith(fence):
+            fence = None
+            continue
+        if fence:
+            continue
+        if stripped.startswith("|") and stripped.endswith("|"):
+            count += 1
+    return count
+
+
+@pytest.mark.parametrize("en,ja", _doc_pairs(), ids=lambda p: p.name)
+def test_the_two_versions_have_the_same_table_rows(en: Path, ja: Path):
+    """Content parity where content happens to be structural.
+
+    This is not a general content check - it cannot be, the text is translated. It is the one
+    place where a dropped row is countable, and both of the real drifts found so far were rows: a
+    verification-status table that had gone stale, and three undisclosed weaknesses.
+    """
+    a, b = _table_rows(en.read_text()), _table_rows(ja.read_text())
+    assert a == b, (
+        f"{ja.relative_to(REPO)} has {b} table rows against {en.relative_to(REPO)}'s {a}. A row "
+        f"was dropped or added in one of them - check which, rather than padding the count.")

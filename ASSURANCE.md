@@ -19,14 +19,29 @@ This document exists so that mistake has to be made deliberately.
   | FECF CRC-16 | crcmod, fastcrc, crc, NASA CryptoLib, and the CCSDS 132.0-B-3 text | `test_golden_frame.py` |
   | CSP v1 header and CFP-over-CAN | libcsp itself, run to produce the vectors | `tests/golden/csp.json` |
   | PUS-C secondary headers | spacepackets | `test_oracle_pus.py` |
-  | **TM/TC transfer frame HEADERS** | **none** | — |
+  | TC transfer frame primary header | NASA CryptoLib, which parses the octets rather than reimplementing them, plus a hand pack from 232.0-B-4 | `test_golden_transfer_frame.py` |
+  | TM transfer frame primary header | `spacepackets.ccsds.tm_frame` | `test_golden_transfer_frame.py` |
 
-  Read the last row precisely, because the row above it is easy to over-read. The FECF that covers
-  a transfer frame is independently verified four ways, and one vector reproduces a value Yamcs
-  publishes for a real TM frame. The FIELD PACKING of the TC and TM primary headers is not: no
-  second implementation of them exists here, so their layout still rests on this project's reading
-  of CCSDS 232.0-B-4 and 132.0-B-3. A transposed field inside a header would satisfy every test in
-  the tree.
+  The last two rows said **none** until 2026-09-10, and the row above them was easy to over-read:
+  the FECF that *covers* a transfer frame had four independent opinions while the FIELD PACKING of
+  the headers had zero, so a transposed field inside a header satisfied every test in the tree.
+
+  What the new rows do and do not establish:
+
+  - TC: version, bypass, control-command, spare, SCID, VCID, frame length and frame sequence number
+    are all recovered by CryptoLib from octets this project did not pack, at their maxima as well as
+    at zero. CryptoLib also enforces `frame length field + 1 == octets`, so the length convention —
+    the easiest field here to get wrong, and one that round-trips perfectly against our own decoder
+    while being rejected by every real receiver — is confirmed from outside.
+  - TM: the six-octet primary header is packed by `spacepackets` from named fields and compared
+    octet for octet. **The Transfer Frame Data Field Status is only exercised in one state.** This
+    project always emits a first header pointer of 0 with every flag clear, so the vectors say
+    nothing about the other values of that field, and nothing here would catch a mistake in them.
+  - Neither covers a TC segment header or a TM secondary header. This project emits neither.
+  - The field WIDTHS are guarded by a range check rather than by a mask, and that check is what the
+    tests exercise: widening the TM VCID mask from three bits to six changes no committed vector,
+    because a VCID above 7 is refused before it reaches the mask. This was measured, after a first
+    version of the test claimed the opposite.
 
   All committed vectors are produced by `tools/gen_golden.py` from oracles that
   `tools/oracles/build.sh` builds — and until 2026-09-09 neither of those oracles was in the
