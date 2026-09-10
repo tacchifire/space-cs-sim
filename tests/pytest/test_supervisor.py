@@ -4,6 +4,7 @@ A watchdog that never trips is the same class of defect as a test harness that a
 each guard here is driven with input designed to breach it. No Renode involved - these use plain
 shell processes so they run in milliseconds and cannot be blamed on the emulator.
 """
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -181,3 +182,47 @@ def test_a_process_that_handles_sigterm_and_exits_143_is_still_our_stop(work):
         f"the shell did not report 128+SIGTERM (got {result.returncode}); this test no longer "
         f"models how Renode exits")
     assert result.outcome is Outcome.OK
+
+
+def test_the_rss_ceiling_sees_a_grandchild(work):
+    """The walk's depth, driven with memory only a full walk can find.
+
+    The accounting stopped one level down, with a comment asserting that Renode's work happens in
+    a child of the launcher. Measured on 1.16.1 portable-dotnet, `./renode` is a single native
+    process with no children at all, so one level and the whole tree agreed and the limit never
+    bit. It would bite the moment Renode is packaged as a wrapper again - and silently, because an
+    RSS ceiling that undercounts never fires.
+
+    Eighty megabytes, touched page by page so it is resident rather than merely mapped.
+    """
+    from cuberange.renode.supervisor import _rss_mb
+
+    script = work / "nest.py"
+    script.write_text(
+        "import subprocess, sys, time\n"
+        "depth, ready = int(sys.argv[1]), sys.argv[2]\n"
+        "if depth:\n"
+        "    subprocess.Popen([sys.executable, __file__, str(depth - 1), ready])\n"
+        "    time.sleep(120)\n"
+        "else:\n"
+        "    blob = bytearray(80 * 1024 * 1024)\n"
+        "    for i in range(0, len(blob), 4096):\n"
+        "        blob[i] = 1\n"
+        "    open(ready, 'w').close()\n"
+        "    time.sleep(120)\n")
+    ready = work / "grandchild-ready"
+
+    proc = subprocess.Popen([sys.executable, str(script), "2", str(ready)])
+    try:
+        deadline = time.time() + 60
+        while not ready.exists() and time.time() < deadline:
+            time.sleep(0.1)
+        assert ready.exists(), "the grandchild never finished allocating"
+
+        total = _rss_mb(proc.pid)
+        assert total > 80, (
+            f"the accounting saw {total:.1f} MB; the grandchild alone holds 80 MB, so the walk "
+            f"is not reaching it and an RSS ceiling would never fire on it")
+    finally:
+        proc.kill()
+        proc.wait(timeout=10)

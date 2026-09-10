@@ -81,34 +81,42 @@ class RunResult:
 
 
 def _rss_mb(pid: int) -> float:
-    """Resident set of a process group leader and its children, in MB. 0 if it is gone."""
-    total = 0
-    try:
-        with open(f"/proc/{pid}/status") as f:
-            for line in f:
-                if line.startswith("VmRSS:"):
-                    total += int(line.split()[1])
-                    break
-    except OSError:
-        return 0.0
-    # Renode's real work happens in a child of the launcher, so walk one level down.
-    try:
-        children = Path(f"/proc/{pid}/task").iterdir()
-        for task in children:
-            children_file = task / "children"
-            if not children_file.exists():
-                continue
-            for child in children_file.read_text().split():
-                try:
-                    with open(f"/proc/{int(child)}/status") as f:
-                        for line in f:
-                            if line.startswith("VmRSS:"):
-                                total += int(line.split()[1])
-                                break
-                except OSError:
-                    pass
-    except OSError:
-        pass
+    """Resident set of a process and every descendant, in MB. 0 if it is gone.
+
+    The walk used to stop one level down, with the comment "Renode's real work happens in a child
+    of the launcher". Measured on 1.16.1 portable-dotnet: `./renode` is a native ELF with NO
+    children at all, so one level and the whole tree came to the same 292.4 MB and the limitation
+    never bit. It would bite the moment Renode is packaged as a shell wrapper again, or run under
+    anything that forks - and the failure would be silent, because an RSS ceiling that undercounts
+    simply never fires. The full walk costs a few /proc reads on a one-second poll.
+
+    Cycles are impossible in a process tree, but `seen` guards the walk anyway: /proc is read
+    without a lock, so a pid reused between two reads could otherwise loop forever inside the
+    watchdog thread.
+    """
+    total = 0.0
+    seen: set[int] = set()
+    stack = [pid]
+    while stack:
+        current = stack.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        try:
+            with open(f"/proc/{current}/status") as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        total += int(line.split()[1])
+                        break
+        except OSError:
+            continue                      # exited between the readdir and the open
+        try:
+            for task in Path(f"/proc/{current}/task").iterdir():
+                children = task / "children"
+                if children.exists():
+                    stack += [int(c) for c in children.read_text().split()]
+        except OSError:
+            pass
     return total / 1024.0
 
 

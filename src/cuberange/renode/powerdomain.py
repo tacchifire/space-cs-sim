@@ -93,6 +93,19 @@ class PowerDomain:
             self.mon.command("cpu IsHalted false")
             self.mon.command("start")
 
+    def outage_applied(self) -> bool:
+        """Whether an outage THIS object applied is in effect.
+
+        `state is False` is not that question, and the difference is the whole reason
+        `latched_unpowered_at_start` exists. A rail already off at the first look leaves `state`
+        False with no machine halted, no event raised and nothing to restore - identical to an
+        applied outage if you only read `state`.
+
+        The flag recorded that distinction and nothing consulted it, which made it decoration.
+        This is its consumer.
+        """
+        return self.state is False and not self.latched_unpowered_at_start
+
     def poll(self) -> Optional[RailEvent]:
         """Apply any rail change since the last call. Returns the event, or None if unchanged.
 

@@ -176,6 +176,19 @@ This domain is full of them. These have all been hit here:
   `shutil.which`: on this host `unshare` is installed and refused by AppArmor
   (`kernel.apparmor_restrict_unprivileged_userns=1`), and `bwrap` is what works. Measured under
   isolation: probe 40/0/3, demo-p0, EX-B01 with the raw CAN injector.
+- **A watchdog that undercounts never fires, and looks identical to one that never trips.** The
+  supervisor's RSS accounting walked one level of the process tree, on the strength of a comment
+  saying Renode's work happens in a child of the launcher. Measured: `./renode` in 1.16.1
+  portable-dotnet is a single native process with no children, so one level and the whole tree
+  both came to 292 MB and the limit never bit. It would bite the moment Renode is packaged as a
+  wrapper. It walks the whole tree now, and `test_supervisor.py` drives it with 80 MB held by a
+  grandchild.
+- **State that nothing reads is decoration, however carefully it was set.**
+  `PowerDomain.latched_unpowered_at_start` recorded the one thing `state is False` cannot
+  express (a rail already dark at the first look, with no machine halted and nothing to restore)
+  and no caller consulted it. `outage_applied()` is its consumer now, and `test_powerdomain.py` is the
+  first unit test this class has ever had; it halts CPUs and reloads ELFs, and every path through
+  it used to run only inside an exercise, where a mistake here reads as a firmware fault.
 - **A mutation test can silently check the OLD code.** Python validates `__pycache__` on
   (mtime, size). A one-character mutation that keeps the size — `vcid_bits=3` to `vcid_bits=6`,
   `0x7` to `0x3F` — followed by a restore within the same second leaves the stale `.pyc` looking
