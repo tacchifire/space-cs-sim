@@ -62,7 +62,14 @@ jobs:
           python-version: '3.12'   # Zephyr v4.1.0's floor is 3.10; 3.12 is tested here
 
       - name: python dependencies
-        run: pip install -r requirements.txt cmake ninja
+        run: # west is installed here, not by setup-toolchain.sh, because that script only runs on a
+          # cache MISS. The cache holds ~/zephyrproject and ~/zephyr-sdk - the artifacts - and not
+          # the tool that drives them, which pip puts in the Python environment. Run 1 had a cold
+          # cache, installed west and built every image; run 2 restored the cache, skipped the
+          # installer, and failed at `west build` with the toolchain sitting right there. A cache
+          # that restores the inputs and not the tool is worse than no cache: it only fails the
+          # second time.
+          pip install -r requirements.txt cmake ninja west
 
       # Renode's URL convention embeds the artifact size and SHA1, so the URL is itself the
       # integrity pin - Renode refuses a download whose size or hash does not match.
@@ -134,7 +141,14 @@ jobs:
         with:
           python-version: '3.12'
 
-      - run: pip install -r requirements.txt cmake ninja
+      - run: # west is installed here, not by setup-toolchain.sh, because that script only runs on a
+          # cache MISS. The cache holds ~/zephyrproject and ~/zephyr-sdk - the artifacts - and not
+          # the tool that drives them, which pip puts in the Python environment. Run 1 had a cold
+          # cache, installed west and built every image; run 2 restored the cache, skipped the
+          # installer, and failed at `west build` with the toolchain sitting right there. A cache
+          # that restores the inputs and not the tool is worse than no cache: it only fails the
+          # second time.
+          pip install -r requirements.txt cmake ninja west
 
       - uses: actions/cache@v4
         with:
