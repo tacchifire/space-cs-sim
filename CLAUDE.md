@@ -268,7 +268,8 @@ firmware/apps/{comm,obc,eps,adcs}/  node roles; one source tree, one build per p
 src/cuberange/proto/            CCSDS, PUS, CSP codecs and the deframer
 src/cuberange/renode/           supervisor, Monitor client, External Control client, power domain
 src/cuberange/gs/               ground station
-src/cuberange/channel/          the link proxy an attacker taps and replays through
+src/cuberange/gs/node.py         a ground station you can run and sit at; two at once
+src/cuberange/channel/          the link proxy an attacker taps; several stations attach
 attacker/TcpCanInjector.cs      90 lines of C# Renode compiles at runtime; raw CAN from a socket
 src/cuberange/ports.py          the port map; one place, with a collision test
 src/cuberange/paths.py          the build directory, unique per checkout; make out prints it

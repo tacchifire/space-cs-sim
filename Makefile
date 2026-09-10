@@ -41,11 +41,13 @@ APP_CSP_PING := firmware/apps/csp_ping
 # them once. Running any target directly still rebuilds, which is the safe default.
 FWDEP = $(if $(NOFW),,$(1))
 
-.PHONY: help out syllabus probe firmware demo spike clean toolchain
+.PHONY: help out syllabus gs channel ground-stations probe firmware demo spike clean toolchain
 
 help:
 	@echo "make out        - print this checkout's build directory ($(OUT))"
 	@echo "make syllabus   - the order the exercises are meant to be taken in"
+	@echo "make ground-stations - two ground station nodes, one spacecraft, one channel"
+	@echo "make gs STATION=backup - a console to sit at (needs make channel running)"
 	@echo "make toolchain  - install Zephyr v4.1.0 + SDK (no root, ~7.6 GB on disk)"
 	@echo "make probe      - verify every Renode capability the design depends on"
 	@echo "make firmware   - build the two CSP nodes"
@@ -64,6 +66,34 @@ out:
 # nothing read them: a curriculum that is true and unreachable.
 syllabus:
 	@python3 tools/syllabus.py
+
+# Two ground station NODES against one spacecraft, through the channel. Renode's socket terminal
+# serves one client, so without the channel accepting several this cannot exist - the range had
+# two ground station identities and no second console for a second student.
+ground-stations: $(call FWDEP,firmware-g02)
+	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
+	    python3 -m pytest tests/e2e/test_ground_stations.py -v
+
+# A console to sit at, while a scenario is already running in another terminal:
+#   term 1:  make exercise EX=EX-G02-unauthorized-authority
+#   term 2:  make channel
+#   term 3:  make gs STATION=backup
+# The backup station refuses what its own matrix forbids; add OVERRIDE=1 to send it anyway and
+# watch a spacecraft that never checked obey.
+gs:
+	@test -n "$(STATION)" || { echo "usage: make gs STATION=primary|backup [OVERRIDE=1]"; exit 1; }
+	$(ISOLATE) env PYTHONPATH=src OUT=$(OUT) python3 -m cuberange.gs.node \
+	    --station $(STATION) --port $$(PYTHONPATH=src python3 -c \
+	      'from cuberange import ports; print(ports.channel(0))') \
+	    $(if $(OVERRIDE),--override,)
+
+# The channel a station attaches to, in front of satellite 0's link.
+channel:
+	$(ISOLATE) env PYTHONPATH=src OUT=$(OUT) python3 -c \
+	    'from cuberange.channel.link_channel import LinkChannel; from cuberange import ports; \
+	     import time; c = LinkChannel(ports.channel(0), sat_port=ports.link(0)).start(); \
+	     print("channel up on", ports.channel(0), "-> satellite", ports.link(0)); \
+	     time.sleep(86400)'
 
 toolchain:
 	./tools/setup-toolchain.sh $(ZEPHYR_WS) $(HOME)/zephyr-sdk
@@ -145,6 +175,7 @@ check: probe
 	$(MAKE) demo-p0     NOFW=1
 	$(MAKE) determinism NOFW=1
 	$(MAKE) constellation NOFW=1
+	$(MAKE) ground-stations NOFW=1
 	$(MAKE) verify-all  NOFW=1
 	$(MAKE) pair-gate   NOFW=1
 	@echo

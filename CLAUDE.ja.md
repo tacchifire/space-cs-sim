@@ -268,7 +268,8 @@ firmware/apps/{comm,obc,eps,adcs}/  ノードの役割。ソースツリーは 1
 src/cuberange/proto/            CCSDS, PUS, CSP のコーデックとデフレーマ
 src/cuberange/renode/           スーパーバイザ、Monitor クライアント、External Control、電源ドメイン
 src/cuberange/gs/               地上局
-src/cuberange/channel/          攻撃者が傍受し再送に使うリンクプロキシ
+src/cuberange/gs/node.py        走らせて座れる地上局。同時に 2 局
+src/cuberange/channel/          攻撃者が傍受するリンクプロキシ。複数局が接続できる
 attacker/TcpCanInjector.cs      Renode が実行時にコンパイルする 90 行の C#。ソケットから生 CAN
 src/cuberange/ports.py          ポート表。1 箇所にまとめ、衝突テスト付き
 src/cuberange/paths.py          ビルドディレクトリ。チェックアウトごとに一意。make out が表示する

@@ -39,6 +39,18 @@ All five attack origins are covered: the internal bus, the space link, the ADCS 
 the OBC's own command parser, and the ground segment that decides what to send. EX-G02 adds no
 sixth origin on purpose — its subject is a legitimate origin exceeding its authority.
 
+**Two ground stations, two consoles.** `make ground-stations` runs both as separate nodes
+against one spacecraft, and `make gs STATION=backup` is a console to sit at while a scenario runs
+elsewhere. They are nodes, not two integers in one process: each has its own identity on the wire,
+its own log, and its own view of what it may ask for. A Renode socket terminal serves exactly one
+client, so the channel in front of the spacecraft accepts several — every station's uplink reaches
+the satellite and every downlink is heard by all of them, which is what a radio does.
+
+The backup station refuses, on the ground, what its own authorisation matrix forbids. `OVERRIDE=1`
+sends it anyway, and a vulnerable spacecraft obeys — because the check the operator just stepped
+past was never on the spacecraft. That is EX-G02, as two people at two consoles rather than a
+flag in a script.
+
 **Where to start:** `make syllabus`. Each exercise declares its prerequisite in its own front
 matter, and that command reads them and prints the order — so the sequence cannot drift from the
 exercises the way a hand-written list would. `tests/pytest/test_syllabus.py` fails on a

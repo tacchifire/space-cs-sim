@@ -9,6 +9,14 @@ Capture is by frame rather than by byte because a replay attacker needs whole fr
 is the same one the ground station and the firmware use, so what the attacker captures is exactly
 what the satellite would have accepted.
 
+MORE THAN ONE GROUND STATION can attach. A spacecraft is talked to by several sites, and a
+socket terminal in Renode accepts exactly one client - so without this the range could have two
+ground station identities and never two ground station NODES. Every attached station's uplink is
+forwarded to the satellite; every downlink is broadcast to all of them, which is what a radio
+does. Two stations transmitting at once interleave, and that is not a defect: two transmitters on
+one channel collide. The transmit lock keeps a single write from being torn, and nothing pretends
+to more than that.
+
 Not modelled yet, and named here so nobody mistakes this for a channel model: propagation delay,
 bit errors, pass windows, and Doppler. EX-L01 needs none of them; EX-L02 will.
 """
@@ -37,7 +45,8 @@ class LinkChannel:
         self._up_deframer = Deframer()
         self._down_deframer = Deframer()
         self._sat: Optional[socket.socket] = None
-        self._client: Optional[socket.socket] = None
+        self._clients: List[socket.socket] = []
+        self._clients_lock = threading.Lock()
         self._server: Optional[socket.socket] = None
         self._stop = threading.Event()
         self._threads: List[threading.Thread] = []
@@ -60,7 +69,7 @@ class LinkChannel:
         self._server = socket.socket()
         self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._server.bind(self.listen_addr)
-        self._server.listen(1)
+        self._server.listen(8)
         self._server.settimeout(0.5)
 
         self._threads = [threading.Thread(target=self._accept_loop, daemon=True),
@@ -71,7 +80,10 @@ class LinkChannel:
 
     def stop(self) -> None:
         self._stop.set()
-        for sock in (self._client, self._sat, self._server):
+        with self._clients_lock:
+            closing = list(self._clients)
+            self._clients.clear()
+        for sock in closing + [self._sat, self._server]:
             if sock is not None:
                 try:
                     sock.close()
@@ -88,8 +100,13 @@ class LinkChannel:
             except (socket.timeout, OSError):
                 continue
             client.settimeout(0.2)
-            self._client = client
-            self._uplink_loop(client)
+            with self._clients_lock:
+                self._clients.append(client)
+            # Its own thread: serving one client inline meant the second ground station sat in
+            # the accept backlog until the first disconnected, which is not two stations.
+            t = threading.Thread(target=self._uplink_loop, args=(client,), daemon=True)
+            t.start()
+            self._threads.append(t)
 
     def _uplink_loop(self, client: socket.socket) -> None:
         while not self._stop.is_set():
@@ -104,7 +121,13 @@ class LinkChannel:
             self.uplink_bytes.extend(chunk)
             self.uplink_frames.extend(self._up_deframer.feed(chunk))
             self._to_satellite(chunk)
-        self._client = None
+        with self._clients_lock:
+            if client in self._clients:
+                self._clients.remove(client)
+        try:
+            client.close()
+        except OSError:
+            pass
 
     def _downlink_loop(self) -> None:
         while not self._stop.is_set():
@@ -118,8 +141,12 @@ class LinkChannel:
                 break
             self.downlink_bytes.extend(chunk)
             self.downlink_frames.extend(self._down_deframer.feed(chunk))
-            client = self._client
-            if client is not None:
+            # Broadcast. A downlink is a transmission, not a reply to whoever spoke last: every
+            # attached station hears it, which is how a second site takes telemetry from a pass it
+            # is not commanding.
+            with self._clients_lock:
+                attached = list(self._clients)
+            for client in attached:
                 try:
                     client.sendall(chunk)
                 except OSError:
@@ -129,6 +156,12 @@ class LinkChannel:
         with self._tx_lock:
             if self._sat is not None:
                 self._sat.sendall(raw)
+
+    @property
+    def attached(self) -> int:
+        """How many ground stations are on the channel right now."""
+        with self._clients_lock:
+            return len(self._clients)
 
     # ---------------------------------------------------------------- attacker
     def replay(self, frame: bytes) -> None:

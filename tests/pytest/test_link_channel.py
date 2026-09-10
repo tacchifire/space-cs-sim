@@ -256,3 +256,90 @@ def test_stop_leaves_no_threads_running():
     alive = [t.name for t in started if t.is_alive()]
     assert not alive, f"channel thread(s) survived stop(): {alive}"
     sat.close()
+
+
+# --------------------------------------------------------------------------- more than one station
+
+def test_two_ground_stations_attach_at_once(wired):
+    """Renode's socket terminal serves exactly one client, which is why this proxy has to serve
+    more. Without it the range can have two ground station identities and never two nodes."""
+    sat, chan, first = wired
+    port = chan._server.getsockname()[1]
+    second = socket.create_connection(("127.0.0.1", port), timeout=5)
+    second.settimeout(5)
+    try:
+        deadline = time.time() + 5
+        while chan.attached < 2 and time.time() < deadline:
+            time.sleep(0.02)
+        assert chan.attached == 2, (
+            f"only {chan.attached} station(s) attached; the second is sitting in the accept "
+            f"backlog, which is one station taking turns rather than two stations")
+    finally:
+        second.close()
+
+
+def test_both_stations_reach_the_satellite(wired):
+    sat, chan, first = wired
+    port = chan._server.getsockname()[1]
+    second = socket.create_connection(("127.0.0.1", port), timeout=5)
+    second.settimeout(5)
+    try:
+        a, b = b"\x11" * 6, b"\x22" * 6
+        first.sendall(wrap(a))
+        assert chan.wait_for_uplink(1, timeout=5)
+        second.sendall(wrap(b))
+        assert chan.wait_for_uplink(2, timeout=5), chan.uplink_frames
+        assert set(chan.uplink_frames) == {a, b}
+        assert sat.wait_for(len(wrap(a)) + len(wrap(b)))
+    finally:
+        second.close()
+
+
+def test_a_downlink_is_heard_by_every_attached_station(wired):
+    """A downlink is a transmission, not a reply to whoever spoke last.
+
+    A second site taking telemetry from a pass it is not commanding is ordinary operations, and a
+    channel that unicast to the last talker would make that impossible to teach.
+    """
+    sat, chan, first = wired
+    port = chan._server.getsockname()[1]
+    second = socket.create_connection(("127.0.0.1", port), timeout=5)
+    second.settimeout(5)
+    try:
+        deadline = time.time() + 5
+        while chan.attached < 2 and time.time() < deadline:
+            time.sleep(0.02)
+        frame = b"\x77\x88"
+        sat.send(wrap(frame))
+        for name, sock in (("first", first), ("second", second)):
+            got = bytearray()
+            end = time.time() + 5
+            while len(got) < len(wrap(frame)) and time.time() < end:
+                try:
+                    got.extend(sock.recv(4096))
+                except socket.timeout:
+                    break
+            assert bytes(got) == wrap(frame), f"the {name} station did not hear the downlink"
+    finally:
+        second.close()
+
+
+def test_one_station_leaving_does_not_take_the_other_with_it(wired):
+    sat, chan, first = wired
+    port = chan._server.getsockname()[1]
+    second = socket.create_connection(("127.0.0.1", port), timeout=5)
+    second.settimeout(5)
+    deadline = time.time() + 5
+    while chan.attached < 2 and time.time() < deadline:
+        time.sleep(0.02)
+    second.close()
+
+    deadline = time.time() + 5
+    while chan.attached > 1 and time.time() < deadline:
+        time.sleep(0.05)
+    assert chan.attached == 1, f"{chan.attached} attached after one left"
+
+    frame = b"\x33" * 4
+    first.sendall(wrap(frame))
+    assert chan.wait_for_uplink(1, timeout=5), (
+        "the surviving station's uplink stopped when the other disconnected")
