@@ -8,15 +8,19 @@
 # `flag` is the CMake cache variable that guards the flaw. `vuln` and `hard` are its two values,
 # and `build` names the directory west writes under $OUT.
 #
-# The gate asserts four things per pair, and the last two exist because the first two can both
-# pass while the flag does nothing at all:
+# The gate asserts six things per pair. The first establishes that the artifacts are ours at all,
+# and the last three exist because 2 and 3 can pass while the flag does nothing:
 #
+#   0. both halves were built from THIS source tree    - CMAKE_HOME_DIRECTORY. Two checkouts on
+#                                                        one machine used to share $OUT
 #   1. the two Kconfig outputs are identical           - the flaw is not manufactured by
 #                                                        weakening the platform
 #   2. no other CUBERANGE_* cache variable differs     - one flag, not two
 #   3. the two ELFs are NOT byte-identical             - the flag reached the compiler
 #   4. the guarded symbol appears in the source        - the flag is spelled the same in
 #                                                        CMakeLists.txt and in the C
+#   5. every translation unit shares a command line    - the flaw is not manufactured through
+#      apart from the declared -D                       compiler options, which Kconfig cannot see
 pairs:
   - id: EX-B01
     app: firmware/apps/eps
@@ -41,3 +45,14 @@ pairs:
     flag: CUBERANGE_OBC_PUS8_LENGTH_CHECK
     vuln: { value: "0", build: build-obc }
     hard: { value: "1", build: build-obc-hard }
+
+  # Two pairs over one application. EX-F01 holds CUBERANGE_OBC_REQUIRE_AUTHORITY equal across its
+  # halves and EX-G02 holds CUBERANGE_OBC_PUS8_LENGTH_CHECK equal across its own - which is what
+  # lets check 2 say "exactly one differs" about both of them. EX-G02's halves are built with the
+  # length check ON, deliberately: the point is that a memory-safe service 8 still executes for
+  # anyone, and leaving EX-F01's flaw in would let a reader think that was the problem.
+  - id: EX-G02
+    app: firmware/apps/obc
+    flag: CUBERANGE_OBC_REQUIRE_AUTHORITY
+    vuln: { value: "0", build: build-obc-g02-vuln }
+    hard: { value: "1", build: build-obc-g02-hard }

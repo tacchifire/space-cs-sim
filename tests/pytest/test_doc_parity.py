@@ -14,6 +14,13 @@ and `SECURITY.ja.md` was missing three of the nine deliberate weaknesses the Eng
 discloses, including the privileged handler EX-F01 targets and the ground segment's unchecked
 import path. A security disclosure that discloses less in one language is not a translation
 problem. Table rows are compared too, because both drifts showed up there.
+
+Then a third drift appeared that rows could not see either: `README.ja.md` was missing EX-G01
+from its exercise list entirely and still said four attack origins were covered when there were
+five. A list item is as countable as a table row, so those are compared as well. Between
+headings, table rows and list items, a section, a row or a bullet cannot go missing silently -
+which is not the same as the two versions saying the same thing, and this file does not claim it
+is.
 """
 import re
 from pathlib import Path
@@ -107,6 +114,44 @@ def test_the_listed_exemptions_still_exist():
 def test_the_pairs_list_is_not_empty():
     """A glob that matches nothing would make every test above pass by vacuum."""
     assert len(_doc_pairs()) >= 15, f"only {len(_doc_pairs())} document pairs found"
+
+
+def _countable(text: str, pattern: str) -> int:
+    """Count lines matching `pattern` outside fenced code blocks.
+
+    Fences matter for the same reason they matter for headings: a code block full of pipes or
+    dashes would be counted, and the two versions' code blocks legitimately differ.
+    """
+    count, fence = 0, None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if fence is None and re.match(r"^(```|~~~)", stripped):
+            fence = stripped[:3]
+            continue
+        if fence and stripped.startswith(fence):
+            fence = None
+            continue
+        if fence:
+            continue
+        if re.match(pattern, stripped):
+            count += 1
+    return count
+
+
+@pytest.mark.parametrize("en,ja", _doc_pairs(), ids=lambda p: p.name)
+def test_the_two_versions_have_the_same_list_items(en: Path, ja: Path):
+    """The drift that headings and table rows both missed.
+
+    README.ja.md had lost an entire exercise from its list - EX-G01, the one the next exercise
+    builds on - while every heading matched and every table matched.
+    """
+    pattern = r"^[-*] "
+    a = _countable(en.read_text(), pattern)
+    b = _countable(ja.read_text(), pattern)
+    assert a == b, (
+        f"{ja.relative_to(REPO)} has {b} top-level list items against "
+        f"{en.relative_to(REPO)}'s {a}. Something was dropped or added; find which rather than "
+        f"padding the count.")
 
 
 def _table_rows(text: str) -> int:

@@ -48,6 +48,7 @@ help:
 	@echo "make toolchain  - install Zephyr v4.1.0 + SDK (no root, ~7.6 GB on disk)"
 	@echo "make probe      - verify every Renode capability the design depends on"
 	@echo "make firmware   - build the two CSP nodes"
+	@echo "make firmware-g02 - EX-G02's pair: the OBC with and without the authority check"
 	@echo "make demo       - run the two nodes over a CAN hub and show the CSP pings"
 	@echo "make spike      - host-side proof: raw CAN injection + External Control"
 
@@ -167,7 +168,7 @@ verify:
 	    python3 -m pytest exercises/$(EX)/verify_*.py -v
 
 # Every exercise, both directions. This is the claim the product makes.
-verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01)
+verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02)
 	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest exercises/*/verify_*.py -v
 
@@ -219,7 +220,7 @@ firmware-f01: firmware-p1
 # prerequisite once per invocation, so this is one pristine build of each of the seven images
 # rather than the four rounds `check` used to do.
 .PHONY: firmware-all
-firmware-all: firmware-exl01 firmware-a01 firmware-f01
+firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02
 	@echo "all node images built:"
 	@ls -1 $(OUT)/build-*/zephyr/zephyr.elf
 
@@ -278,6 +279,19 @@ constellation: $(call FWDEP,firmware-all firmware-sat1)
 # control honours correctly, so the spacecraft-side controls all have to be present.
 firmware-g01: firmware-f01
 	@ls -l $(OUT)/build-obc-hard/zephyr/zephyr.elf $(OUT)/build-eps-hard/zephyr/zephyr.elf
+
+# EX-G02's pair. Both halves carry EX-F01's length check ON: the exercise is about a memory-safe
+# service 8 that still executes for anyone, and leaving the overflow in would let a reader
+# conclude the overflow was the problem. The two differ only in CUBERANGE_OBC_REQUIRE_AUTHORITY,
+# which is what tools/config_diff_gate.py checks.
+firmware-g02:
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-obc-g02-vuln firmware/apps/obc -- \
+	    -DCUBERANGE_OBC_PUS8_LENGTH_CHECK=1 -DCUBERANGE_OBC_REQUIRE_AUTHORITY=0
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-obc-g02-hard firmware/apps/obc -- \
+	    -DCUBERANGE_OBC_PUS8_LENGTH_CHECK=1 -DCUBERANGE_OBC_REQUIRE_AUTHORITY=1
+	@ls -l $(OUT)/build-obc-g02-vuln/zephyr/zephyr.elf $(OUT)/build-obc-g02-hard/zephyr/zephyr.elf
 
 # Rebuild the independent oracles and regenerate the golden vectors.
 #

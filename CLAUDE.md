@@ -22,9 +22,11 @@ a run has been observed and not before — nine places in this repository descri
 CI-enforced while there was no `.github` directory at all, and adding CI is a poor moment to repeat
 the mistake in a new form.
 
-Five exercises work today, one per attack origin: EX-B01 (internal bus), EX-L01 (space link),
-EX-A01 (ADCS command envelope), EX-F01 (the OBC's own PUS 8 parser) and EX-G01 (the ground segment
-that decides what to send). 17 assertions, all measured.
+Six exercises work today. Five cover an attack origin each: EX-B01 (internal bus), EX-L01 (space
+link), EX-A01 (ADCS command envelope), EX-F01 (the OBC's own PUS 8 parser) and EX-G01 (the ground
+segment that decides what to send). EX-G02 is the second ground-segment one and covers no new
+origin - its point is that the origin is legitimate: a real station sending a real command it has
+no authority for, differing from an authorised frame by one octet. 22 assertions, all measured.
 
 EX-G01 is the host-side one, so the "differ by one flag" proof works differently: one `Scheduler`,
 two `ImportPolicy` objects, and `test_schedule_policy.py` fails if `schedule.py` so much as names

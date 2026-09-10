@@ -28,6 +28,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
 from cuberange import ports  # noqa: E402
+from cuberange.identity import GROUND_SOURCE_ID              # noqa: E402
 from cuberange.paths import out_dir                          # noqa: E402
 from cuberange.gs.link import SpaceLink                       # noqa: E402
 from cuberange.proto.frame import encode_tc_frame             # noqa: E402
@@ -35,7 +36,7 @@ from cuberange.proto.pus import PusTc                         # noqa: E402
 from cuberange.proto.spacepacket import PacketType, SpacePacket  # noqa: E402
 
 OBC_APID = 0x0A9
-GROUND_SOURCE_ID = 0x0042
+
 SERVICE_FUNCTION, SUBTYPE_PERFORM = 8, 1
 FUNC_SET_COMM_RAIL = 1
 

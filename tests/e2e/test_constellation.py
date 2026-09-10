@@ -29,6 +29,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
 from cuberange import ports                                        # noqa: E402
+from cuberange.identity import GROUND_SOURCE_ID                  # noqa: E402
 from cuberange.paths import out_dir                             # noqa: E402
 from cuberange.gs.link import SpaceLink                            # noqa: E402
 from cuberange.gs.station import GroundStation                     # noqa: E402
@@ -169,7 +170,7 @@ def test_both_spacecraft_answer_on_their_own_link(constellation):
         link = SpaceLink(port=sat["link"])
         link.connect(retries=60)
         try:
-            station = GroundStation(link, station_id=0x0042 + sat["obc"],
+            station = GroundStation(link, station_id=GROUND_SOURCE_ID + sat["obc"],
                                     target_apid=sat["scid"], target_scid=sat["scid"])
             assert station.ping(timeout=15) is not None, (
                 f"satellite with SCID 0x{sat['scid']:03X} did not answer on port {sat['link']}")

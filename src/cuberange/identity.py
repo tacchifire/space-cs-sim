@@ -23,6 +23,20 @@ BASE_SCID = 0x0A9
 
 _OFFSETS = {"obc": 1, "eps": 2, "adcs": 4, "comm": 5}
 
+#: Ground stations, by name, as they appear in the PUS TC secondary header's source id.
+#:
+#: This lived as a bare `GROUND_SOURCE_ID = 0x0042` in `gs/station.py` and was copy-pasted into two
+#: exercise files - three spellings of one number, which is how `ports.py` and `paths.py` each
+#: started. It belongs here, beside the spacecraft identities, and `test_identity.py` compares it
+#: against identity.cmake the same way.
+#:
+#: Unlike spacecraft identity these do not vary by index: a ground station is a ground station
+#: whichever satellite it is talking to. The spacecraft is what decides whether it may.
+GROUND_STATIONS = {"primary": 0x0042, "backup": 0x0043}
+
+#: The one every existing scenario, exercise and write-up means when it says "the ground station".
+GROUND_SOURCE_ID = GROUND_STATIONS["primary"]
+
 
 @dataclass(frozen=True)
 class Spacecraft:

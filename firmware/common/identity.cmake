@@ -40,7 +40,17 @@ math(EXPR _cr_adcs "${_cr_base} + 4")
 math(EXPR _cr_comm "${_cr_base} + 5")
 math(EXPR _cr_scid "169 + ${CUBERANGE_SAT_INDEX}")     # 169 = 0x0A9
 
+# Ground stations. The PUS TC secondary header carries a 16-bit source id, and until EX-G02 the
+# spacecraft received it, logged it, echoed it into the report's destination id - and never used
+# it to decide anything. These are the two identities the on-board authority table is written
+# against. They do not vary per spacecraft: a ground station is a ground station whichever
+# satellite it is talking to.
+set(_cr_gs_primary 66)      # 0x0042, the id every existing scenario and write-up already uses
+set(_cr_gs_backup  67)      # 0x0043
+
 target_compile_definitions(app PRIVATE
+  GROUND_PRIMARY_ID=${_cr_gs_primary}
+  GROUND_BACKUP_ID=${_cr_gs_backup}
   OBC_ADDR=${_cr_obc}
   ADDR_EPS=${_cr_eps}
   EPS_ADDR=${_cr_eps}

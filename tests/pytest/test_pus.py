@@ -14,25 +14,29 @@ from cuberange.proto.pus import (PUS_VERSION, PusTc, PusTm, SERVICE_TEST,
 
 def test_tc_secondary_header_layout():
     tc = PusTc(service=SERVICE_TEST, subtype=SUBTYPE_CONNECTION_TEST,
-               source_id=0x0042, ack=0b1001, app_data=b"")
+               source_id=0x1234, ack=0b1001, app_data=b"")
     raw = tc.encode()
     assert len(raw) == 5
     assert raw[0] == (PUS_VERSION << 4) | 0b1001
     assert raw[1] == 17
     assert raw[2] == 1
-    assert raw[3:5] == b"\x00\x42"
+    # 0x1234 is deliberately nobody. This is a codec test and the value is arbitrary, so
+    # borrowing a real ground-station id read as a coupling that does not exist. It is also a
+    # better value than the one it replaced, whose high octet was zero - a codec that dropped
+    # that octet entirely would have passed.
+    assert raw[3:5] == b"\x12\x34"
 
 
 def test_tm_secondary_header_layout():
     tm = PusTm(service=SERVICE_TEST, subtype=SUBTYPE_CONNECTION_TEST_REPORT,
-               msg_counter=7, dest_id=0x0042, time=b"\x00\x00\x00\x01", app_data=b"")
+               msg_counter=7, dest_id=0x1234, time=b"\x00\x00\x00\x01", app_data=b"")
     raw = tm.encode()
     assert len(raw) == 7 + 4
     assert raw[0] == (PUS_VERSION << 4)
     assert raw[1] == 17
     assert raw[2] == 2
     assert raw[3:5] == b"\x00\x07"
-    assert raw[5:7] == b"\x00\x42"
+    assert raw[5:7] == b"\x12\x34"
     assert raw[7:11] == b"\x00\x00\x00\x01"
 
 

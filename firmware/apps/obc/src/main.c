@@ -135,6 +135,46 @@ static const struct pus8_function FUNCTION_TABLE[] = {
 	{ FUNC_MAINTENANCE,     false, maintenance_inhibit_fdir },
 };
 
+#if CUBERANGE_OBC_REQUIRE_AUTHORITY
+/* Which ground station may invoke which function - EX-G02's whole difference.
+ *
+ * The TC secondary header has carried a 16-bit source id since P0. The spacecraft read it, logged
+ * it and echoed it into the report's destination id, and used it to decide nothing. Authority
+ * lived only in the ground segment's own bookkeeping, where it governs what an operator is
+ * offered rather than what the spacecraft will do.
+ *
+ * `enabled` in FUNCTION_TABLE is an authorisation check too, and a coarser one: it says nobody may
+ * call function 9. This says who may call function 1. Both are needed, and only one existed.
+ *
+ * Not present at all in the vulnerable build. A table compiled in and never read would be a
+ * different defect - and a less honest one, because nobody writes an authority table and then
+ * forgets to call it. What happened here is that nobody wrote one.
+ */
+struct pus8_authority {
+	uint16_t source_id;
+	uint16_t function_id;
+};
+
+static const struct pus8_authority AUTHORITY_TABLE[] = {
+	{ GROUND_PRIMARY_ID, FUNC_SET_COMM_RAIL },
+	/* GROUND_BACKUP_ID is deliberately absent for FUNC_SET_COMM_RAIL. The backup station may
+	 * observe - service 17 is not gated here - and may not switch the spacecraft's own radio
+	 * off, which is what the ground segment's authorisation matrix already said and what the
+	 * spacecraft was not enforcing. */
+};
+
+static bool source_may_perform(uint16_t source_id, uint16_t function_id)
+{
+	for (size_t i = 0; i < ARRAY_SIZE(AUTHORITY_TABLE); i++) {
+		if (AUTHORITY_TABLE[i].source_id == source_id &&
+		    AUTHORITY_TABLE[i].function_id == function_id) {
+			return true;
+		}
+	}
+	return false;
+}
+#endif
+
 #define ROUTER_STACK 1024
 #define APP_STACK    2048
 
@@ -221,7 +261,7 @@ static void command_comm_rail(uint8_t state)
 /* noinline so the handler owns a frame with a saved return address. Inlining is not a security
  * control and this is set for both builds, so the pair stays identical apart from the flag. */
 __attribute__((noinline))
-static void handle_function(const uint8_t *app_data, size_t len)
+static void handle_function(const uint8_t *app_data, size_t len, uint16_t source_id)
 {
 	uint8_t args[PUS8_ARG_BUF_LEN];
 
@@ -231,6 +271,18 @@ static void handle_function(const uint8_t *app_data, size_t len)
 	}
 	uint16_t function_id = (uint16_t)((app_data[0] << 8) | app_data[1]);
 	size_t arg_len = len - 2;
+
+#if CUBERANGE_OBC_REQUIRE_AUTHORITY
+	/* Before the copy, not after. Deciding whether to act on a request is not a thing to do
+	 * once the request's data is already in a local buffer. */
+	if (!source_may_perform(source_id, function_id)) {
+		printk("OBC: REJECTED PUS 8 function %u from source %u - not authorised\n",
+		       (unsigned int)function_id, (unsigned int)source_id);
+		return;
+	}
+#else
+	ARG_UNUSED(source_id);
+#endif
 
 #if CUBERANGE_OBC_PUS8_LENGTH_CHECK
 	/* The whole mitigation. One line, and it is the difference between a range exercise and a
@@ -287,7 +339,8 @@ static void handle_space_packet(const uint8_t *raw, size_t len)
 	if (service == SERVICE_TEST && subtype == SUBTYPE_TEST) {
 		send_test_report(source_id);
 	} else if (service == SERVICE_FUNCTION && subtype == SUBTYPE_PERFORM) {
-		handle_function(sec + PUS_TC_SEC_LEN, len - SP_HEADER_LEN - PUS_TC_SEC_LEN);
+		handle_function(sec + PUS_TC_SEC_LEN, len - SP_HEADER_LEN - PUS_TC_SEC_LEN,
+				source_id);
 	} else {
 		printk("OBC: service %u,%u is not implemented in P0\n", service, subtype);
 	}

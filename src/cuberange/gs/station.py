@@ -20,7 +20,10 @@ from ..proto.pus import (PusTc, PusTm, SERVICE_TEST, SUBTYPE_CONNECTION_TEST,
 from ..proto.spacepacket import PacketType, SpacePacket
 from .link import SpaceLink
 
-GROUND_SOURCE_ID = 0x0042
+# Re-exported, not defined. The number lived here and was copy-pasted into two exercise
+# files; cuberange.identity is where identities live and where identity.cmake is compared
+# against them.
+from ..identity import GROUND_SOURCE_ID  # noqa: F401
 OBC_APID = 0x0A9
 PUS_TM_TIME_LEN = 4
 

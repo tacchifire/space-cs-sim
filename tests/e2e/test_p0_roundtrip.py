@@ -15,6 +15,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
 from cuberange import ports  # noqa: E402
+from cuberange.identity import GROUND_SOURCE_ID                  # noqa: E402
 from cuberange.paths import out_dir                             # noqa: E402
 from cuberange.gs.link import SpaceLink          # noqa: E402
 from cuberange.gs.station import GroundStation   # noqa: E402
@@ -115,7 +116,7 @@ def test_pus17_round_trip(renode):
         assert (report.service, report.subtype) == (SERVICE_TEST, SUBTYPE_CONNECTION_TEST_REPORT)
         # The OBC echoes the TC's source ID into the TM's destination ID, so a report that came
         # back for someone else's command would be caught here.
-        assert report.dest_id == 0x0042, f"report addressed to {report.dest_id:#x}, not the ground"
+        assert report.dest_id == GROUND_SOURCE_ID, f"report addressed to {report.dest_id:#x}, not the ground"
     finally:
         link.close()
 

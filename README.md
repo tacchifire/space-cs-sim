@@ -30,8 +30,14 @@ mitigation admitted to:
   plugin directory becomes a telecommand the operator's own station transmits, while every
   spacecraft-side control from the four exercises above works exactly as designed.
 
+- **EX-G02** — a ground station that may only watch switches the spacecraft's radio off, using a
+  telecommand that differs from an authorised one by a single octet: the source id it honestly
+  puts in its own header. The spacecraft had been reading that field, printing it, and echoing it
+  back down since P0, without ever deciding anything with it.
+
 All five attack origins are covered: the internal bus, the space link, the ADCS command envelope,
-the OBC's own command parser, and the ground segment that decides what to send.
+the OBC's own command parser, and the ground segment that decides what to send. EX-G02 adds no
+sixth origin on purpose — its subject is a legitimate origin exceeding its authority.
 
 There are two spacecraft. `make constellation` runs eight emulated nodes in one emulation — two
 satellites of four, on two CAN hubs, with two space links and their own CSP addresses and

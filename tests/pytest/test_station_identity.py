@@ -16,6 +16,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
+from cuberange.identity import GROUND_STATIONS                    # noqa: E402
 from cuberange.gs.station import GroundStation, OBC_APID          # noqa: E402
 from cuberange.proto.frame import (SCID, decode_tm_frame, encode_tm_frame,  # noqa: E402
                                    tc_frame_identity, tm_frame_identity)
@@ -24,7 +25,7 @@ from cuberange.proto.pus import (PusTm, SERVICE_TEST,             # noqa: E402
 from cuberange.proto.spacepacket import PacketType, SpacePacket   # noqa: E402
 
 SAT_A_SCID, SAT_B_SCID = SCID, 0x0AA
-STATION_1, STATION_2 = 0x0042, 0x0043
+STATION_1, STATION_2 = GROUND_STATIONS["primary"], GROUND_STATIONS["backup"]
 
 
 class FakeLink:

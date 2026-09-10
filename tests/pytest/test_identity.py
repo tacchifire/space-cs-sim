@@ -91,3 +91,68 @@ def test_no_two_spacecraft_collide_on_any_address():
 def test_an_unknown_role_is_refused():
     with pytest.raises(ValueError, match="unknown node role"):
         identity.spacecraft(0).address("payload")
+
+
+def cmake_ground_stations() -> dict[str, int]:
+    """The ground-station ids identity.cmake compiles in, read out of the file itself."""
+    text = CMAKE.read_text()
+    found = {}
+    for name, var in (("primary", "_cr_gs_primary"), ("backup", "_cr_gs_backup")):
+        m = re.search(rf"^set\({var}\s+(\d+)\)", text, re.M)
+        assert m, f"identity.cmake no longer sets {var}"
+        found[name] = int(m.group(1))
+    return found
+
+
+def test_the_two_ends_agree_on_who_the_ground_stations_are():
+    """The same comparison the spacecraft identities get, for the same reason.
+
+    EX-G02's on-board authority table is written against these numbers. If the firmware compiles
+    one set and the ground station transmits another, the mitigated build rejects the authorized
+    station and the exercise's third assertion - that the fix does not break the feature - fails
+    in a way that looks like a firmware bug.
+    """
+    assert cmake_ground_stations() == identity.GROUND_STATIONS, (
+        f"identity.cmake compiles {cmake_ground_stations()} while cuberange.identity says "
+        f"{identity.GROUND_STATIONS}. They are two spellings of one fact; change both or neither.")
+
+
+def test_the_primary_keeps_the_number_everything_else_already_names():
+    """0x0042 appears in write-ups, in EX-F01's solve.py and in every captured frame."""
+    assert identity.GROUND_SOURCE_ID == 0x0042
+    assert identity.GROUND_STATIONS["primary"] == 0x0042
+
+
+def test_the_two_stations_are_distinguishable():
+    """An authority table keyed on an id that two stations share authorises both."""
+    assert len(set(identity.GROUND_STATIONS.values())) == len(identity.GROUND_STATIONS)
+    assert identity.GROUND_STATIONS["backup"] != identity.GROUND_STATIONS["primary"]
+
+
+def test_a_ground_station_id_fits_the_field_that_carries_it():
+    """The PUS TC secondary header's source id is 16 bits (ECSS-E-ST-70-41C)."""
+    for name, value in identity.GROUND_STATIONS.items():
+        assert 0 <= value <= 0xFFFF, f"{name} = {value} does not fit a 16-bit source id"
+
+
+def test_nobody_hardcodes_a_ground_station_id():
+    """The third time this repository has had one number written in several places.
+
+    ports.py and paths.py each began as a constant that was correct in one file and copied into
+    the rest. Each copy is a place to miss when the number changes, and the failure it produces -
+    a station the spacecraft does not recognise - looks like a firmware bug.
+    """
+    offenders = []
+    for path in sorted(REPO.glob("**/*.py")):
+        if path.name == Path(__file__).name or ".git" in path.parts:
+            continue
+        if path == REPO / "src" / "cuberange" / "identity.py":
+            continue
+        for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+            for value in identity.GROUND_STATIONS.values():
+                if re.search(rf"(?<![\w.])0x0*{value:X}(?![\w])", line, re.I) or \
+                   re.search(rf"(?<![\w.]){value}(?![\w])", line):
+                    offenders.append(f"{path.relative_to(REPO)}:{n}  {line.strip()[:70]}")
+    assert not offenders, (
+        "these write a ground-station id by hand instead of importing cuberange.identity:\n  "
+        + "\n  ".join(offenders))

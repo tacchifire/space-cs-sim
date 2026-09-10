@@ -29,6 +29,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
 from cuberange import ports  # noqa: E402
+from cuberange.identity import GROUND_SOURCE_ID              # noqa: E402
 from cuberange.paths import out_dir                             # noqa: E402
 from cuberange.gs.link import SpaceLink                       # noqa: E402
 from cuberange.gs.station import GroundStation                # noqa: E402
@@ -70,7 +71,7 @@ LINK_PORT, MONITOR_PORT = ports.link(0), ports.monitor()
 BOOT_TIMEOUT_S = float(os.environ.get("CUBERANGE_BOOT_TIMEOUT_S", "45"))
 
 OBC_APID = 0x0A9
-GROUND_SOURCE_ID = 0x0042
+
 
 # gpioPortD base 0x58020C00 + ODR offset 0x14, pin 7. Read from the pin the firmware drove rather
 # than from telemetry: the whole exercise is about an attacker who reached privileged code, and
