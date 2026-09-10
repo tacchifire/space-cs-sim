@@ -60,6 +60,7 @@ Renode 能力の節を丸ごと主張していたが、一度も実行されて�
 
 ```bash
 make out          # このチェックアウトのビルドディレクトリ。以下のパスはすべてこの下にある
+python3 -m cuberange.safety.isolate --probe   # このホストで使えるネットワーク名前空間の機構
 make probe        # Renode 能力チェック 40 件。うち 5 件はわざと失敗させる自己テスト   約 6 分
 make firmware-f01 # 衛星 0 の全イメージ: COMM, OBC（両方）, EPS（両方）, ADCS（両方）
 make firmware-sat1 # 同じ 4 役を宇宙機 1 として
@@ -167,6 +168,13 @@ make soak-p0      # ウォッチドッグ下で 30 回連続の往復           
   Renode 1.16.1 が変数を連結できること（`$comm?=$out/build-comm/zephyr/zephyr.elf` が解決すること）は
   実測した。仮定ではない。起動側は `-e "$out=@<OUT>"` を渡す。シナリオがパスを直書きしたり、
   起動側が渡し忘れたりすれば `test_paths.py` が落ちる。
+- **Renode は `0.0.0.0` にバインドし、1.16.1 では変更する手段が無い。** そのため起動はすべて
+  `cuberange.safety.isolate` 経由で loopback だけの名前空間に入り、`RenodeSupervisor` はその外での
+  起動を拒否する。`make` は自動でそうする。`python3 exercises/.../verify_*.py` を直接叩くと拒否され、
+  使うべきコマンドが表示される。バックエンドは `shutil.which` ではなく**実際に走らせて**選ぶ。
+  このホストでは `unshare` はインストール済みなのに AppArmor
+  （`kernel.apparmor_restrict_unprivileged_userns=1`）に拒否され、動くのは `bwrap` の方だからである。
+  隔離下での実測: probe 40/0/3、demo-p0、生 CAN インジェクタを使う EX-B01。
 - **変異テストが、黙って「元のコード」を検査していることがある。** Python は `__pycache__` を
   (mtime, size) で有効性判定する。サイズの変わらない 1 文字の変異——`vcid_bits=3` を `=6` に、
   `0x7` を `0x3F` に——を入れ、同じ秒のうちに元へ戻すと、古い `.pyc` が有効に見えたまま残り、
@@ -233,6 +241,7 @@ src/cuberange/channel/          攻撃者が傍受し再送に使うリンクプ
 attacker/TcpCanInjector.cs      Renode が実行時にコンパイルする 90 行の C#。ソケットから生 CAN
 src/cuberange/ports.py          ポート表。1 箇所にまとめ、衝突テスト付き
 src/cuberange/paths.py          ビルドディレクトリ。チェックアウトごとに一意。make out が表示する
+src/cuberange/safety/           Renode の全起動が入る、loopback だけの名前空間
 src/cuberange/identity.py       誰が誰か。identity.cmake の写しで、一致をテストが検査する
 src/cuberange/gs/schedule.py    TC 計画と、EX-G01 が攻めるインポータ
 src/cuberange/gs/import_policy.py  EX-G01 の違いのすべてである 2 つのポリシー

@@ -42,11 +42,30 @@ That is not configurable. Renode 1.16.1 has no bind-address option — not on `-
 `emulation CreateServerSocketTerminal`, whose signature is
 `(Int32 port, String name, Boolean telnetMode, Boolean flushOnConnect)`.
 
-So the containment has to come from the host, and it is worth being blunt about what is exposed:
-the Monitor accepts arbitrary Renode commands with no authentication, which is control of the
-emulator and the machine it runs on to the extent Renode itself has it. Run this on a machine whose
-inbound ports are firewalled, or on a network you trust completely. Do not run it on a shared or
-public network, and do not run it on a bastion.
+So the containment has to come from the host — and since 2026-09-10 the range brings its own,
+because "run it somewhere safe" is advice, and advice is not a control.
+
+Every Renode launch now happens inside a network namespace that contains only loopback. Renode
+still binds `0.0.0.0`; there is simply nothing else there to bind. `make` does this for you, and
+`RenodeSupervisor` **refuses to start** outside such a namespace rather than starting and hoping:
+
+```
+python3 -m cuberange.safety.isolate --probe        # which mechanism works on this host, and why
+python3 -m cuberange.safety.isolate -- <command>   # run anything inside the namespace
+```
+
+Two mechanisms are tried, and the choice is made by running each one and looking at the result
+rather than by checking which binary exists. That distinction is not academic: on a current Ubuntu
+`unshare` is installed and refused by policy
+(`kernel.apparmor_restrict_unprivileged_userns=1`), and a check for the binary would have picked
+it. `bwrap` (bubblewrap) needs no root and no policy change, and is the one that works there.
+
+If neither works on your host the range will not start, which is the intended behaviour. To
+proceed anyway, set `CUBERANGE_ALLOW_UNISOLATED=1` — deliberately, on a machine whose inbound
+ports are firewalled or on a network you trust completely. Not on a shared or public network, and
+not on a bastion. What you are exposing is the Monitor, which accepts arbitrary Renode commands
+with no authentication: control of the emulator, and of the machine it runs on to the extent
+Renode itself has it.
 
 `LinkChannel`, the host-side proxy an attacker taps in EX-L01, does default to `127.0.0.1` — that
 part was accurate. It is the emulator's own listeners that are not.

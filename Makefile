@@ -15,6 +15,16 @@ ENV        ?= $(HOME)/cuberange-env.sh
 # gate compared one checkout's image against the other's. src/cuberange/paths.py explains the
 # incident and derives the identical string in Python; tests/pytest/test_paths.py parses this line
 # and fails if the two ever disagree.
+# Every Renode launch goes through here. Renode 1.16.1 binds the Monitor and every socket
+# terminal to 0.0.0.0 and offers no way to name an address, and what those sockets accept is the
+# exercise: unauthenticated telecommands and raw CAN frames. ISOLATE puts the run in a network
+# namespace holding only loopback, so 0.0.0.0 is a promise about interfaces that do not exist.
+#
+# `python3 -m cuberange.safety.isolate --probe` says which backend works here and why the others
+# do not. On a host where none does, set CUBERANGE_ALLOW_UNISOLATED=1 - deliberately, and knowing
+# what it means.
+ISOLATE = PYTHONPATH=src python3 -m cuberange.safety.isolate --
+
 CUBERANGE_REPO := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 OUT        ?= /tmp/cuberange-$(notdir $(CUBERANGE_REPO))-$(shell printf '%s' '$(CUBERANGE_REPO)' | md5sum | cut -c1-8)
 BOARD      ?= nucleo_h753zi
@@ -51,7 +61,7 @@ toolchain:
 	./tools/setup-toolchain.sh $(ZEPHYR_WS) $(HOME)/zephyr-sdk
 
 probe:
-	RENODE_DIR=$(RENODE_DIR) ./tools/renode-probe/probe.sh
+	$(ISOLATE) env RENODE_DIR=$(RENODE_DIR) ./tools/renode-probe/probe.sh
 
 # One source tree, one node role per build directory. The address is a CMake cache variable, so
 # adding a node means adding a build line, not a source file.
@@ -69,7 +79,8 @@ demo:
 	@test -f $(OUT)/build-n1/zephyr/zephyr.elf || { echo "run 'make firmware' first"; exit 1; }
 	@mkdir -p $(OUT)
 	@rm -f $(OUT)/n1.uart $(OUT)/n2.uart
-	cd $(RENODE_DIR) && ./renode --disable-xwt --console --plain --hide-analyzers --hide-log \
+	cd $(RENODE_DIR) && $(CURDIR:%=PYTHONPATH=%/src) python3 -m cuberange.safety.isolate -- \
+	  ./renode --disable-xwt --console --plain --hide-analyzers --hide-log \
 	  -e '$$out=@$(OUT)' \
 	  -e '$$n1=@$(OUT)/build-n1/zephyr/zephyr.elf' \
 	  -e '$$n2=@$(OUT)/build-n2/zephyr/zephyr.elf' \
@@ -100,7 +111,7 @@ firmware-p0:
 	@ls -l $(OUT)/build-comm/zephyr/zephyr.elf $(OUT)/build-obc/zephyr/zephyr.elf
 
 demo-p0: $(call FWDEP,firmware-p0)
-	PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
+	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest tests/e2e/test_p0_roundtrip.py -v
 
 # Everything that can be checked without a human looking at it.
@@ -136,7 +147,7 @@ check: probe
 # P0's last acceptance condition: thirty round trips in a row. Slow (~10 min) and excluded from
 # `make check`, because a soak belongs on a schedule rather than in the edit loop.
 soak-p0: firmware-p0
-	PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
+	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest tests/e2e/test_p0_soak.py -v -s
 
 # EX-B01 images: EPS in both profiles plus the P0 pair. The two EPS builds differ by exactly one
@@ -152,12 +163,12 @@ firmware-p1: firmware-p0
 #   make verify EX=EX-B01-eps-killswitch
 verify:
 	@test -n "$(EX)" || { echo "usage: make verify EX=<exercise-dir>"; exit 1; }
-	PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
+	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest exercises/$(EX)/verify_*.py -v
 
 # Every exercise, both directions. This is the claim the product makes.
 verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01)
-	PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
+	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest exercises/*/verify_*.py -v
 
 # EX-L01 adds a replay-hardened COMM alongside the P1 images.
@@ -183,7 +194,7 @@ pair-gate: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01)
 # byte-identical. Measured here: 3/3 identical in 27 s.
 .PHONY: determinism
 determinism: $(call FWDEP,firmware-p0)
-	PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
+	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest tests/e2e/test_determinism.py -q
 
 # EX-A01 images: the ADCS in both profiles. Needs the P0 pair and the hardened EPS as well, because
@@ -260,7 +271,7 @@ firmware-sat1:
 # comparison, and it is in line with the design's +50-120 MB per node.
 .PHONY: constellation
 constellation: $(call FWDEP,firmware-all firmware-sat1)
-	PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
+	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest tests/e2e/test_constellation.py -v
 
 # EX-G01 needs the HARDENED OBC and EPS: the exercise is about a command that every spacecraft-side

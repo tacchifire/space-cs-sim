@@ -44,9 +44,16 @@ non-loopback bind was reportable, while the scenarios were doing exactly that. M
 `emulation CreateServerSocketTerminal` takes a port, a name and two booleans.
 
 The Monitor is the part that matters: it accepts arbitrary Renode commands from anyone who can
-reach the port, with no authentication. Containment is the host's job here, and
-[SAFE_USE.md](SAFE_USE.md) says so. A report that Renode binds broadly is already known; a report
-that CubeRange's own host-side code does is not, and is wanted.
+reach the port, with no authentication.
+
+Since 2026-09-10 the range contains this itself. Every Renode launch happens inside a network
+namespace holding only loopback, and `RenodeSupervisor` refuses to start outside one — see
+`src/cuberange/safety/`. The bind is still `0.0.0.0`; there is nothing else present to reach it.
+`CUBERANGE_ALLOW_UNISOLATED=1` turns that off, and is meant to be a decision rather than a default.
+
+A report that Renode binds broadly is already known. A report that CubeRange's own host-side code
+binds broadly is not, and is wanted — and so is a way to defeat the containment above: a path that
+reaches a Renode socket from outside the namespace, or a launch that skips the check.
 - Anything that would let a malicious *exercise* — a contributed one — affect the host beyond its
   own scenario.
 

@@ -81,6 +81,18 @@ check_env() {
     missing=1
   fi
 
+  # A containment backend. Every Renode launch goes into a loopback-only network namespace and
+  # refuses to start without one, so its absence stops the gate before a single node boots - and
+  # the message it stops with is about namespaces, which reads like a defect if you do not know
+  # this is required. Name it here instead.
+  if PYTHONPATH="$REPO/src" python3 -m cuberange.safety.isolate --probe 2>/dev/null | grep -q '^  OK'; then
+    ok "network isolation ($(PYTHONPATH="$REPO/src" python3 -m cuberange.safety.isolate --probe \
+          2>/dev/null | awk '/^  OK/{print $2; exit}' | tr -d ':'))"
+  else
+    bad "network isolation" "no working backend; apt install bubblewrap, or see SAFE_USE.md"
+    missing=1
+  fi
+
   if python3 -c "import spacepackets, crcmod" 2>/dev/null; then
     ok "conformance oracles (spacepackets, crcmod)"
   else
@@ -91,10 +103,15 @@ check_env() {
   # The committed vectors, which the conformance layer reads directly. Without them that layer is
   # gone, and it went missing once before by exactly this route.
   local golden=0
-  for f in crc.json csp.json pus.json space_packet.json; do
+  local want="crc.json csp.json pus.json space_packet.json transfer_frame.json"
+  local n=0
+  for f in $want; do
+    n=$((n + 1))
     [ -f "$REPO/tests/golden/$f" ] || { bad "tests/golden/$f" "run make golden"; golden=1; }
   done
-  [ "$golden" = 0 ] && ok "golden vectors (4 files)"
+  # The count is derived from the list rather than written beside it. It said "4 files" while the
+  # list had grown to five, which is a small lie of exactly the kind this project keeps finding.
+  [ "$golden" = 0 ] && ok "golden vectors ($n files)"
   [ "$golden" = 0 ] || missing=1
 
   if [ -f "${ENV_FILE:-$HOME/cuberange-env.sh}" ]; then
@@ -129,6 +146,15 @@ self_test() {
     printf '  %sFAIL%s  a missing Zephyr environment was NOT detected\n' "$RED" "$RESET"; failures=1
   else
     printf '  %sPASS%s  rejected: Zephyr environment missing\n' "$GREEN" "$RESET"
+  fi
+
+  # A host with no containment backend. PATH is emptied so neither bwrap nor unshare is found;
+  # the probe then reports both as "not installed" and the check must refuse.
+  if ( PATH=/nonexistent check_env >/dev/null 2>&1 ); then
+    printf '  %sFAIL%s  a host with no isolation backend was NOT detected\n' "$RED" "$RESET"
+    failures=1
+  else
+    printf '  %sPASS%s  rejected: no network-isolation backend\n' "$GREEN" "$RESET"
   fi
 
   # And a good environment must still pass, or this is a rejector rather than a check.

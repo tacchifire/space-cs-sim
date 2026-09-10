@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Iterator, Optional, Sequence
+from ..safety.network import assert_isolated_network
 
 
 # Defaults, overridable from the environment so a smaller host is retuned in one place instead of
@@ -114,11 +115,27 @@ def _rss_mb(pid: int) -> float:
 class RenodeSupervisor:
     def __init__(self, cwd: Path, timeout_s: float = DEFAULT_TIMEOUT_S,
                  rss_ceiling_mb: float = DEFAULT_RSS_CEILING_MB,
-                 poll_s: float = DEFAULT_POLL_S):
+                 poll_s: float = DEFAULT_POLL_S, *, require_isolation: bool = True):
+        """`require_isolation` defaults to True, and that is a deliberate breaking default.
+
+        Renode 1.16.1 binds every socket terminal and the Monitor to 0.0.0.0 with no way to name an
+        address - measured, and not configurable in this version. What those sockets accept is the
+        exercise: unauthenticated telecommands, and raw CAN frames from anyone who connects. On a
+        laptop on a conference network that is not a range, it is an invitation.
+
+        So the default fails closed. Pass False only when what you are launching is not Renode -
+        tests/pytest/test_supervisor.py drives `sleep` and `true` through this class to exercise the
+        watchdogs, and containment is irrelevant to those.
+
+        See src/cuberange/safety/network.py for the escape hatch and why it is named in the error.
+        """
         self.cwd = Path(cwd)
         self.timeout_s = timeout_s
         self.rss_ceiling_mb = rss_ceiling_mb
         self.poll_s = poll_s
+        self.require_isolation = require_isolation
+        if require_isolation:
+            assert_isolated_network()
 
     @contextlib.contextmanager
     def launch(self, argv: Sequence[str], log_path: Path) -> Iterator["_Supervised"]:

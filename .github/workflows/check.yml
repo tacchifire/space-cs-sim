@@ -46,7 +46,10 @@ jobs:
           # bc is not optional: probe.sh's arithmetic is six calls to it. libicu and OpenSSL 3 are
           # dlopened by the .NET runtime Renode ships with, and a C compiler is needed because the
           # codec suite is built natively.
-          sudo apt-get install -y bc build-essential python3-dev libicu-dev libssl3
+          # bubblewrap: every Renode launch runs inside a loopback-only network namespace
+          # (src/cuberange/safety). Without a working backend the gate refuses to
+          # start, which is the intended behaviour and would fail this job.
+          sudo apt-get install -y bc build-essential python3-dev libicu-dev libssl3 bubblewrap
 
       - uses: actions/setup-python@v5
         with:
@@ -116,7 +119,10 @@ jobs:
       - name: apt prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc build-essential python3-dev libicu-dev libssl3
+          # bubblewrap: every Renode launch runs inside a loopback-only network namespace
+          # (src/cuberange/safety). Without a working backend the gate refuses to
+          # start, which is the intended behaviour and would fail this job.
+          sudo apt-get install -y bc build-essential python3-dev libicu-dev libssl3 bubblewrap
 
       - uses: actions/setup-python@v5
         with:
@@ -143,6 +149,11 @@ jobs:
       # the thing making this job's "no egress" claim mean something.
       - name: prime Renode's artifact cache
         run: ./tools/renode-probe/probe.sh --fetch-only
+
+      # Which containment mechanism this runner actually has, printed before the gate so a
+      # failure inside the namespace can be told apart from a failure to create one.
+      - name: isolation backends available here
+        run: PYTHONPATH=src python3 -m cuberange.safety.isolate --probe
 
       - name: the gate
         run: |

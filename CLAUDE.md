@@ -59,6 +59,7 @@ Concretely:
 
 ```bash
 make out          # this checkout's build directory; every path below lives under it
+python3 -m cuberange.safety.isolate --probe   # which network-namespace backend works here
 make probe        # 40 Renode capability checks incl. 5 deliberate-failure self-tests   ~6 min
 make firmware-f01 # every satellite-0 image: COMM, OBC (both), EPS (both), ADCS (both)
 make firmware-sat1 # the same four roles as spacecraft 1
@@ -166,6 +167,13 @@ This domain is full of them. These have all been hit here:
   (`$comm?=$out/build-comm/zephyr/zephyr.elf` resolves) — measured, not assumed. Launchers
   pass `-e "$out=@<OUT>"`; `test_paths.py` fails if a scenario hardcodes a path or a launcher
   forgets to pass it.
+- **Renode binds 0.0.0.0 and 1.16.1 gives you no say in it**, so every launch goes through
+  `cuberange.safety.isolate` into a namespace holding only loopback, and `RenodeSupervisor`
+  refuses to start outside one. `make` does it; a direct `python3 exercises/.../verify_*.py` will
+  refuse and tell you the command. The backend is chosen by RUNNING each candidate, not by
+  `shutil.which`: on this host `unshare` is installed and refused by AppArmor
+  (`kernel.apparmor_restrict_unprivileged_userns=1`), and `bwrap` is what works. Measured under
+  isolation: probe 40/0/3, demo-p0, EX-B01 with the raw CAN injector.
 - **A mutation test can silently check the OLD code.** Python validates `__pycache__` on
   (mtime, size). A one-character mutation that keeps the size — `vcid_bits=3` to `vcid_bits=6`,
   `0x7` to `0x3F` — followed by a restore within the same second leaves the stale `.pyc` looking
@@ -233,6 +241,7 @@ src/cuberange/channel/          the link proxy an attacker taps and replays thro
 attacker/TcpCanInjector.cs      90 lines of C# Renode compiles at runtime; raw CAN from a socket
 src/cuberange/ports.py          the port map; one place, with a collision test
 src/cuberange/paths.py          the build directory, unique per checkout; make out prints it
+src/cuberange/safety/           the loopback-only namespace every Renode launch runs in
 src/cuberange/identity.py       who is who, mirroring identity.cmake; a test asserts they agree
 src/cuberange/gs/schedule.py    the TC plan and the importer EX-G01 attacks
 src/cuberange/gs/import_policy.py  the two policies that are EX-G01's whole difference
