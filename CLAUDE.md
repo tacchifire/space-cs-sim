@@ -33,7 +33,7 @@ here the environment is always already installed:
 3. fixing `west` alone left Zephyr's own `requirements.txt` behind and the same failure came back.
    Cache the downloads; install the environment every time.
 
-What one green run does not establish is reliability. And the hypothesis that took longest was
+Four consecutive green runs now (8, 10, 11, 12), including warm-cache ones, which is what the second and third defects below needed to be ruled out. It is still a short record on one runner image. And the hypothesis that took longest was
 wrong: probe.sh's 1.5x four-node speed floor, which this eight-core machine clears at 4.3–5.1x,
 looked like the obvious thing to blame on a two-vCPU runner. The probe passes there in 110
 seconds. Blaming the host was the comfortable guess, and it was the wrong one.

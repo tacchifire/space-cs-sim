@@ -18,7 +18,8 @@
 #   3. Fixing west alone left Zephyr's own requirements.txt behind, and the same failure returned.
 #      Cache the downloads; install the environment every time.
 #
-# What this does NOT establish: that it is reliable. One run, one commit, one runner image. The
+# What this does NOT establish: that it is reliable. Four consecutive green runs (8, 10, 11,
+# 12) on one runner image is a short record, not a track record. The
 # floor I suspected - probe.sh's 1.5x four-node speed assertion, which this machine clears at
 # 4.3-5.1x on eight cores - turned out to be innocent: the probe passes on a two-vCPU runner in
 # 110 seconds. That hypothesis was wrong, and it was wrong in the direction of blaming the host.

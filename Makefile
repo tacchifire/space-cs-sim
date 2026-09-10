@@ -41,10 +41,11 @@ APP_CSP_PING := firmware/apps/csp_ping
 # them once. Running any target directly still rebuilds, which is the safe default.
 FWDEP = $(if $(NOFW),,$(1))
 
-.PHONY: help out probe firmware demo spike clean toolchain
+.PHONY: help out syllabus probe firmware demo spike clean toolchain
 
 help:
 	@echo "make out        - print this checkout's build directory ($(OUT))"
+	@echo "make syllabus   - the order the exercises are meant to be taken in"
 	@echo "make toolchain  - install Zephyr v4.1.0 + SDK (no root, ~7.6 GB on disk)"
 	@echo "make probe      - verify every Renode capability the design depends on"
 	@echo "make firmware   - build the two CSP nodes"
@@ -57,6 +58,12 @@ help:
 # any path.
 out:
 	@echo $(OUT)
+
+# The order the exercises were written to be taken in, derived from their own front matter
+# rather than written out beside them. Six correct prerequisite edges existed for weeks and
+# nothing read them: a curriculum that is true and unreachable.
+syllabus:
+	@python3 tools/syllabus.py
 
 toolchain:
 	./tools/setup-toolchain.sh $(ZEPHYR_WS) $(HOME)/zephyr-sdk

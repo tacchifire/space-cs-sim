@@ -39,6 +39,11 @@ All five attack origins are covered: the internal bus, the space link, the ADCS 
 the OBC's own command parser, and the ground segment that decides what to send. EX-G02 adds no
 sixth origin on purpose — its subject is a legitimate origin exceeding its authority.
 
+**Where to start:** `make syllabus`. Each exercise declares its prerequisite in its own front
+matter, and that command reads them and prints the order — so the sequence cannot drift from the
+exercises the way a hand-written list would. `tests/pytest/test_syllabus.py` fails on a
+prerequisite that names nothing, on a cycle, and on an exercise no path reaches.
+
 There are two spacecraft. `make constellation` runs eight emulated nodes in one emulation — two
 satellites of four, on two CAN hubs, with two space links and their own CSP addresses and
 spacecraft IDs — and asserts that the buses are isolated, using a command that is known to work on
@@ -179,7 +184,7 @@ the installer only runs on a cache miss — so cold runs worked and every warm r
 build`. And fixing `west` alone left Zephyr's own `requirements.txt` behind, which brought the
 same failure straight back.
 
-One green run is not reliability, and the hypothesis that took longest to test was wrong: probe.sh
+Four consecutive green runs now (8, 10, 11, 12), warm caches included. Still a short record. And the hypothesis that took longest to test was wrong: probe.sh
 asserts a 1.5x four-node speed floor, this eight-core machine clears it at 4.3–5.1x, and a
 two-vCPU runner looked like the obvious thing to blame. The probe passes there in 110 seconds.
 
