@@ -247,7 +247,7 @@ make soak-p0      # ウォッチドッグ下で 30 回連続の往復           
 tools/renode-probe/probe.sh     証拠のゲート
 tools/setup-toolchain.sh        Zephyr + SDK。root 不要、Docker 不要
 firmware/common/                C 側のワイヤコーデック。Python 側とバイト単位で照合済み
-firmware/apps/{comm,obc,eps}/   ノードの役割。ソースツリーは 1 つ、プロファイルごとに 1 ビルド
+firmware/apps/{comm,obc,eps,adcs}/  ノードの役割。ソースツリーは 1 つ、プロファイルごとに 1 ビルド
 src/cuberange/proto/            CCSDS, PUS, CSP のコーデックとデフレーマ
 src/cuberange/renode/           スーパーバイザ、Monitor クライアント、External Control、電源ドメイン
 src/cuberange/gs/               地上局

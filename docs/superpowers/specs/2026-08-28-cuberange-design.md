@@ -108,6 +108,7 @@ TrustZone を失うため、セキュアブートは TF-M ではなく MCUboot �
 | D19 | `machine Reset` は RAM をゼロ化しない。清浄状態は `LoadELF` と Zephyr の `.bss` ゼロ化に由来 | 古いヒープが電源断を生き延びる | 復電手順に `LoadELF` を必ず含める |
 | D20 | `CANMessageFrame(id, data)` の 2 引数版は**標準 11 bit フレーム**を作る | 拡張 ID でフィルタしている受信側が黙って落とす。フレームの中身は完全に正しいまま届かない | `extendedFormat: true` を明示する |
 | D21 | libcsp は `csp_conf.version` の既定が **2** で、ヘッダと CFP の配置を**実行時**に選ぶ | 「CSP v1 を使う」は firmware で設定しない限り真にならない。全ノードが v2 同士なら健全に見え、v1 のツールだけが無言で無視される | `csp_init()` の前に `csp_conf.version = 1` を明示 |
+| D22 | `cpu TranslateAddress` は**アクセス種別ではなくアドレスでキャッシュする**。同一アドレスに `Read` を問い合わせた直後の `InstructionFetch` が偽の成功を返す（別ページやフラッシュは影響を受けない） | 「SRAM は読めるが実行できない」を確かめる**自然な順序**が、まさにその順序である。その順序で問うと、シェルコードが動くという結果が返る。EX-F01 がコード再利用である根拠そのものが、逆に読めてしまう | `InstructionFetch` を先に問うか、新しいプロセスで問う。probe.sh の section G に否定アサーションとして固定してあるので、将来の Renode がキャッシュを直せば、意味が静かに変わるのではなくプローブが落ちる |
 
 いずれも `probe.sh` の否定アサーションとして固定し、将来の Renode が直したら CI が気付く。
 

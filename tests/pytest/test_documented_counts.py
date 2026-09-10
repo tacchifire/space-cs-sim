@@ -150,3 +150,65 @@ def test_the_counts_are_not_all_zero():
     """A guard whose inputs all return 0 agrees with any prose that says 0."""
     for label, fn in ACTUAL.items():
         assert fn() > 0, f"{label} counted 0, so every comparison above is vacuous"
+
+
+# --------------------------------------------------------------------------- pointers
+
+WHERE_BLOCK = re.compile(r"^## (?:Where things are|どこに何があるか)\n+```\n(.*?)```",
+                         re.S | re.M)
+
+
+def _expand(entry: str) -> list[Path]:
+    """A map entry to the paths it names.
+
+    Brace and glob forms are deliberate in the map - `firmware/apps/{comm,obc,eps,adcs}/` says
+    more to a reader than four lines would - so they are expanded rather than skipped. Skipping
+    them is how `adcs` stayed missing from that very entry after the role was added.
+    """
+    import itertools
+    forms = [entry]
+    while any("{" in f for f in forms):
+        out = []
+        for f in forms:
+            if "{" not in f:
+                out.append(f)
+                continue
+            head, rest = f.split("{", 1)
+            body, tail = rest.split("}", 1)
+            out += [head + choice + tail for choice in body.split(",")]
+        forms = out
+    paths = []
+    for f in forms:
+        f = f.rstrip("/")
+        paths += list(REPO.glob(f)) if any(c in f for c in "*?[") else [REPO / f]
+    return paths
+
+
+@pytest.mark.parametrize("doc", ["CLAUDE.md", "CLAUDE.ja.md"])
+def test_every_path_the_working_notes_name_exists(doc):
+    """A map that points at something that moved sends the next reader looking for it."""
+    text = (REPO / doc).read_text()
+    m = WHERE_BLOCK.search(text)
+    assert m, f"{doc} no longer has a 'where things are' block, or its heading changed"
+
+    entries = [line.split()[0] for line in m.group(1).splitlines() if line.strip()]
+    assert len(entries) >= 20, f"{doc}'s map has only {len(entries)} entries"
+
+    missing = []
+    for entry in entries:
+        found = _expand(entry)
+        if not found or not all(p.exists() for p in found):
+            missing.append(entry)
+    assert not missing, f"{doc} names paths that do not exist: {missing}"
+
+
+def test_the_two_maps_name_the_same_paths():
+    """The map is a fact, not prose. Its two copies drifting is the same defect as a lost row."""
+    def entries(doc):
+        m = WHERE_BLOCK.search((REPO / doc).read_text())
+        return [line.split()[0] for line in m.group(1).splitlines() if line.strip()]
+    en, ja = entries("CLAUDE.md"), entries("CLAUDE.ja.md")
+    assert en == ja, (
+        "the English and Japanese maps name different paths:\n"
+        f"  only in en: {[e for e in en if e not in ja]}\n"
+        f"  only in ja: {[e for e in ja if e not in en]}")

@@ -248,7 +248,7 @@ classified. Do not add real identifiers, frequencies, keys or endpoints to anyth
 tools/renode-probe/probe.sh     the evidence gate
 tools/setup-toolchain.sh        Zephyr + SDK, no root, no Docker
 firmware/common/                the C wire codec, byte-checked against the Python one
-firmware/apps/{comm,obc,eps}/   node roles; one source tree, one build per profile
+firmware/apps/{comm,obc,eps,adcs}/  node roles; one source tree, one build per profile
 src/cuberange/proto/            CCSDS, PUS, CSP codecs and the deframer
 src/cuberange/renode/           supervisor, Monitor client, External Control client, power domain
 src/cuberange/gs/               ground station
