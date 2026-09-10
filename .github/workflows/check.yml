@@ -106,6 +106,22 @@ jobs:
           ./tools/setup-toolchain.sh
           git clone --depth 1 --branch v2.1 https://github.com/libcsp/libcsp ~/libcsp
 
+
+      # A cache of artifacts cannot restore an environment, and this is the third time that has
+      # bitten. setup-toolchain.sh installs west AND Zephyr's own Python requirements
+      # (pyelftools, pykwalify, and the rest of zephyr/scripts/requirements.txt) with pip, into
+      # the interpreter - not into ~/zephyrproject, which is what actions/cache holds. And the
+      # installer only runs on a cache MISS.
+      #
+      # Run 1 (cold) installed everything and built. Run 2 (warm) skipped the installer and died
+      # at `west build`. I fixed west, and run 5 died at `west build` again 24 seconds in,
+      # because west was only the first of the packages that live in the interpreter.
+      #
+      # So: cache the downloads, install the environment every time. This step needs the
+      # workspace to exist, so it runs after the cache restore and after the conditional install.
+      - name: python packages the cache cannot hold
+        run: pip install -r "$HOME/zephyrproject/zephyr/scripts/requirements.txt"
+
       - name: build every node image
         run: |
           export PATH="$HOME/zephyr-sdk/sysroots/x86_64-pokysdk-linux/usr/bin:$PATH"
@@ -163,6 +179,21 @@ jobs:
             ~/libcsp
             ~/cuberange-env.sh
           key: zephyr-v4.1.0-sdk-v1.0.1-libcsp-v2.1
+
+# A cache of artifacts cannot restore an environment, and this is the third time that has
+      # bitten. setup-toolchain.sh installs west AND Zephyr's own Python requirements
+      # (pyelftools, pykwalify, and the rest of zephyr/scripts/requirements.txt) with pip, into
+      # the interpreter - not into ~/zephyrproject, which is what actions/cache holds. And the
+      # installer only runs on a cache MISS.
+      #
+      # Run 1 (cold) installed everything and built. Run 2 (warm) skipped the installer and died
+      # at `west build`. I fixed west, and run 5 died at `west build` again 24 seconds in,
+      # because west was only the first of the packages that live in the interpreter.
+      #
+      # So: cache the downloads, install the environment every time. This step needs the
+      # workspace to exist, so it runs after the cache restore and after the conditional install.
+      - name: python packages the cache cannot hold
+        run: pip install -r "$HOME/zephyrproject/zephyr/scripts/requirements.txt"
 
       # probe.sh --offline refuses to start on a cold artifact cache rather than fetching and
       # reporting success, which is what it used to do (design section 16, W24). That refusal is
