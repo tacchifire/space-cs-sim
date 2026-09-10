@@ -99,7 +99,17 @@ class Monitor:
                 _LIVE.pop(self._addr, None)
             raise MonitorError(f"Renode Monitor {self._addr} never came up") from last
         # Reconnects are silent, so never wait for an unprompted banner - ask for something.
-        self.command("version")
+        #
+        # And if that first command fails, hand the endpoint back. The registry above is claimed
+        # before the handshake, so a Renode that accepts the connection and then wedges used to
+        # leave the address marked as taken for the life of the process: every later connect()
+        # refused with "a Monitor session is already open in this process", which names the wrong
+        # cause and cannot be cleared. close() is the only thing that releases the claim.
+        try:
+            self.command("version")
+        except Exception:
+            self.close()
+            raise
         return self
 
     def _recv(self, buf: bytes, deadline: float) -> bytes:

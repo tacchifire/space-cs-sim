@@ -167,3 +167,57 @@ def test_a_second_session_to_one_endpoint_is_refused():
             Monitor(port=addr[1]).connect(retries=1)
     finally:
         _LIVE.pop(addr, None)
+
+
+def test_a_failed_handshake_does_not_leave_the_endpoint_claimed():
+    """The registry is claimed before the handshake, so the handshake must clean up after itself.
+
+    A Renode that accepts the TCP connection and then wedges - the ~13% launch failure this project
+    already records - would otherwise mark the address taken for the life of the process, and every
+    later connect() would refuse with a message naming a cause that is not the real one.
+    """
+    import socket as _socket
+    import threading as _threading
+
+    from cuberange.renode.monitor import _LIVE, Monitor, MonitorError
+
+    # A server that accepts and then says nothing, which is what a wedged Renode looks like.
+    srv = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    srv.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    held = []
+    stop = _threading.Event()
+
+    def accept_and_stall():
+        try:
+            conn, _ = srv.accept()
+            held.append(conn)          # keep it open; never reply
+            stop.wait(10)
+        except OSError:
+            pass
+
+    t = _threading.Thread(target=accept_and_stall, daemon=True)
+    t.start()
+    try:
+        with pytest.raises(Exception):
+            Monitor(port=port, timeout=1.0).connect(retries=1)
+
+        assert ("127.0.0.1", port) not in _LIVE, (
+            "the endpoint is still marked as taken after a failed handshake; a second Monitor to "
+            "it would be refused for a reason that is not true and cannot be cleared")
+
+        # And the proof that it matters: a second attempt must fail on the handshake again, not on
+        # the registry. Same exception type either way, so compare the message.
+        with pytest.raises(Exception) as exc:
+            Monitor(port=port, timeout=1.0).connect(retries=1)
+        assert "already open in this process" not in str(exc.value), (
+            f"the second attempt was refused by the registry rather than by the wedged peer: "
+            f"{exc.value}")
+    finally:
+        stop.set()
+        for c in held:
+            c.close()
+        srv.close()
+        t.join(timeout=5)

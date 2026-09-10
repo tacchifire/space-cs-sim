@@ -44,9 +44,26 @@ DEFAULT_POLL_S = float(os.environ.get("CUBERANGE_SUPERVISOR_POLL_S", "0.5"))
 
 class Outcome(str, Enum):
     OK = "ok"                       # exited on its own, or was stopped by us after the work finished
+    RUNNING = "running"             # still alive; result() was called mid-run
     TIMEOUT = "timeout"             # exceeded the wall-clock budget - retryable
     RSS_EXCEEDED = "rss_exceeded"   # tripped the memory ceiling - retryable
     CRASH = "crash"                 # exited non-zero without being asked to
+
+
+#: Exit codes that a stop THIS supervisor asked for can produce.
+#:
+#: Measured on Renode 1.16.1 portable-dotnet, with the process verified alive before signalling:
+#: SIGTERM comes back as 143 and SIGKILL as -9. The 128+n form is a process that handled the
+#: signal and exited; the negative form is Python reporting a death it could not handle.
+#:
+#: A first attempt at this measurement signalled a Renode launched with stdin=DEVNULL, which had
+#: already exited on EOF, and "measured" 0 for SIGKILL - a result that cannot happen. Keeping
+#: stdin open and asserting proc.poll() is None before the signal is what makes these numbers real.
+#:
+#: Note what this list did NOT contain before: 143. The supervisor sends SIGTERM first, so its own
+#: routine stop was landing in the CRASH branch, while an OOM kill from outside landed in OK.
+_REQUESTED_STOP_CODES = (128 + signal.SIGTERM, 128 + signal.SIGKILL,
+                         -signal.SIGTERM, -signal.SIGKILL)
 
 
 @dataclass
@@ -135,6 +152,11 @@ class _Supervised:
         self._stopping = threading.Event()
         self.peak_rss_mb = 0.0
         self.breach: Optional[Outcome] = None
+        # Whether the stop was ours. Without it a signal death is indistinguishable from a clean
+        # one, so an OOM kill or somebody else's pkill reported a healthy run - which is how the
+        # enum's own comment ("exited non-zero without being asked to") stopped being true of the
+        # code beneath it.
+        self._requested_stop = False
 
     def _watch(self) -> None:
         while not self._stopping.is_set():
@@ -153,6 +175,7 @@ class _Supervised:
             self._stopping.wait(self._sup.poll_s)
 
     def _kill_group(self) -> None:
+        self._requested_stop = True
         for sig in (signal.SIGTERM, signal.SIGKILL):
             try:
                 os.killpg(os.getpgid(self.proc.pid), sig)
@@ -166,6 +189,7 @@ class _Supervised:
 
     def _stop(self) -> None:
         self._stopping.set()
+        self._requested_stop = True
         if self.proc.poll() is None:
             self._kill_group()
 
@@ -174,8 +198,13 @@ class _Supervised:
         wall = time.time() - self._started
         if self.breach is not None:
             outcome = self.breach
-        elif rc is None or rc in (0, -signal.SIGTERM, -signal.SIGKILL):
-            # We stop Renode ourselves once the work is done, so a signal death is expected.
+        elif rc is None:
+            # Still running. test_p0_soak asks for a result mid-run to report alongside its own
+            # diagnosis, so this is a legitimate state and not a failure - but it is not OK either.
+            outcome = Outcome.RUNNING
+        elif rc == 0:
+            outcome = Outcome.OK
+        elif self._requested_stop and rc in _REQUESTED_STOP_CODES:
             outcome = Outcome.OK
         else:
             outcome = Outcome.CRASH
