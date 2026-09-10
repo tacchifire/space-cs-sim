@@ -231,16 +231,32 @@ firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02
 # Anything automated goes through src/cuberange/renode/supervisor.py instead, which is where the
 # watchdog and the RSS ceiling live.
 .PHONY: exercise
+# The one target a student runs by hand, and the one nothing in `make check` exercises. It was
+# broken and hung: the scenarios stopped defaulting $out and this recipe never passed it, so
+# Renode aborted the -e chain at the first LoadELF, never reached the trailing command, and sat at
+# its Monitor prompt with an EMPTY log - the exact failure mode CLAUDE.md documents, in the first
+# command anybody types. tests/pytest/test_paths.py now checks every Renode launch in this file.
+#
+# Not supervised, deliberately: a student watches this one and stops it with Ctrl-C, and a
+# watchdog that killed it after four minutes would be a defect rather than a guard. It IS
+# isolated, because a range whose containment depends on which target you ran is not contained.
 exercise:
 	@test -n "$(EX)" || { echo "usage: make exercise EX=<exercise-dir>"; exit 1; }
 	@test -d exercises/$(EX) || { echo "no such exercise: exercises/$(EX)"; \
 	    echo "available:"; ls -1 exercises; exit 1; }
+	@test -f $(OUT)/build-comm/zephyr/zephyr.elf || { \
+	    echo "no firmware in $(OUT) - run 'make firmware-all' first"; exit 1; }
 	@echo "starting exercises/$(EX) - Ctrl-C to stop"
-	@echo "  space link  localhost:3777"
-	@echo "  monitor     localhost:3778"
-	cd $(RENODE_DIR) && ./renode --disable-xwt --plain --hide-analyzers --port 3778 \
+	@echo "  space link  localhost:$(shell PYTHONPATH=src python3 -c 'from cuberange import ports; print(ports.link(0))')"
+	@echo "  monitor     localhost:$(shell PYTHONPATH=src python3 -c 'from cuberange import ports; print(ports.monitor())')"
+	@echo "  injector    localhost:$(shell PYTHONPATH=src python3 -c 'from cuberange import ports; print(ports.injector(0))')"
+	@echo "  images from $(OUT)"
+	cd $(RENODE_DIR) && $(CURDIR:%=PYTHONPATH=%/src) python3 -m cuberange.safety.isolate -- \
+	  ./renode --disable-xwt --plain --hide-analyzers \
+	  --port $(shell PYTHONPATH=src python3 -c 'from cuberange import ports; print(ports.monitor())') \
 	  -e '$$injector=@$(CURDIR)/attacker/TcpCanInjector.cs' \
 	  -e '$$profile=@$(CURDIR)/scripts/profiles/interactive.resc' \
+	  -e '$$out=@$(OUT)' \
 	  -e 'include @$(CURDIR)/exercises/$(EX)/scenario.resc' \
 	  -e 'start'
 

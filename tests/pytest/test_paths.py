@@ -13,6 +13,7 @@ artifacts belonged to somebody else.
 """
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -163,3 +164,76 @@ def test_the_launcher_list_is_not_empty():
     """A glob that matched nothing would make the check above pass for every file it never saw."""
     assert len(LAUNCHERS) >= 8, f"only {len(LAUNCHERS)} scenario launchers found: {LAUNCHERS}"
     assert len(RESC_FILES) >= 8, f"only {len(RESC_FILES)} scenarios found"
+
+
+# --------------------------------------------------------------------------- the Makefile too
+#
+# The Python launchers were checked above and the Makefile was not, so `make exercise` - the one
+# target a student runs by hand, and the only one `make check` never touches - kept launching
+# Renode directly with no $out and no containment. It hung at the Monitor prompt with an empty
+# log, which is the exact failure CLAUDE.md documents, in the first command anybody types.
+
+MAKEFILE_TEXT = (REPO / "Makefile").read_text()
+
+
+def _makefile_renode_launches() -> list[tuple[int, str]]:
+    """Recipe lines that start Renode, with their line numbers.
+
+    Matches the binary being invoked rather than the word "renode": $(RENODE_DIR) appears in
+    plenty of lines that only pass it to a child.
+    """
+    out = []
+    for n, line in enumerate(MAKEFILE_TEXT.splitlines(), 1):
+        if re.search(r"(?<![\w/])\./renode\b", line):
+            out.append((n, line.strip()))
+    return out
+
+
+def _recipe_containing(line_no: int) -> str:
+    """The whole recipe a line belongs to, so continuations are visible."""
+    lines = MAKEFILE_TEXT.splitlines()
+    start = line_no - 1
+    while start > 0 and (lines[start - 1].startswith("\t")
+                         or lines[start - 1].rstrip().endswith("\\")):
+        start -= 1
+    end = line_no
+    while end < len(lines) and (lines[end].startswith("\t") or lines[end - 1].rstrip().endswith("\\")):
+        end += 1
+    return "\n".join(lines[start:end])
+
+
+def test_the_makefile_launches_renode_somewhere():
+    assert _makefile_renode_launches(), (
+        "no Renode launch found in the Makefile; this guard is watching nothing")
+
+
+@pytest.mark.parametrize("line_no,text", _makefile_renode_launches(),
+                         ids=lambda v: str(v)[:40])
+def test_every_makefile_renode_launch_is_contained_and_told_where_to_look(line_no, text):
+    recipe = _recipe_containing(line_no)
+    assert "safety.isolate" in recipe or "$(ISOLATE)" in recipe, (
+        f"Makefile:{line_no} starts Renode outside the loopback-only namespace. A range whose "
+        f"containment depends on which target you ran is not contained.\n{recipe[:400]}")
+    assert "$$out=@" in recipe or "$(ISOLATE)" in recipe, (
+        f"Makefile:{line_no} starts Renode without setting $out. The scenarios have no default "
+        f"for it, so this aborts the -e chain at the first LoadELF and hangs at the Monitor "
+        f"prompt with an empty log.\n{recipe[:400]}")
+
+
+def test_the_student_facing_target_derives_its_ports_from_the_map():
+    """It printed the link and monitor ports as literals, which is right until the map moves.
+
+    The numbers are not repeated here either - test_port_literals.py forbids that, and it caught
+    this docstring on the way in.
+    """
+    recipe = re.search(r"^exercise:.*?(?=\n[a-zA-Z])", MAKEFILE_TEXT, re.S | re.M)
+    assert recipe, "the `exercise` target is gone"
+    body = recipe.group(0)
+    assert "cuberange import ports" in body, (
+        "`make exercise` prints port numbers that are not derived from cuberange.ports")
+    # Built from the map rather than written out. Writing them here would put three port
+    # literals in this file, which is the very thing test_port_literals.py forbids - and it
+    # caught exactly that on the first version of this test.
+    from cuberange import ports as _ports
+    for port in (_ports.link(0), _ports.monitor(), _ports.injector(0)):
+        assert f"localhost:{port}" not in body, f"`make exercise` hardcodes localhost:{port}"
