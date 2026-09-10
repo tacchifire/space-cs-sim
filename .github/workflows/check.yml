@@ -209,6 +209,32 @@ jobs:
           export PATH="$HOME/zephyr-sdk/sysroots/x86_64-pokysdk-linux/usr/bin:$PATH"
           ./tools/ci.sh --env-only
 
+      # TEMPORARY, and delete both once they have answered.
+      #
+      # Run 4 reached `make check` and failed 162 seconds in - which is where `make probe` runs,
+      # and the probe asserts a 4-node speed floor of 1.5x real time. That floor is a statement
+      # about the HOST: this development machine measures 4.3-5.1x on eight cores, and a two-vCPU
+      # runner is a different class of machine entirely. probe.sh's own comment anticipates it
+      # ("fail for host reasons rather than regression. Override with PERF_FLOOR=<n>").
+      #
+      # Guessing a floor for a runner would be putting a number in without measuring it, so
+      # instead: run the probe twice, once as configured and once with the floor removed, and let
+      # the two step conclusions say which it was. If the first fails and the second passes it is
+      # the floor; if both fail it is something else; if both pass the gate's failure is
+      # downstream of the probe. Job logs need a token even here, so a step's conclusion is the
+      # only thing that reaches an unauthenticated reader.
+      - name: 'probe: as configured'
+        continue-on-error: true
+        run: |
+          export PATH="$HOME/zephyr-sdk/sysroots/x86_64-pokysdk-linux/usr/bin:$PATH"
+          make probe
+
+      - name: 'probe: with the speed floor removed'
+        continue-on-error: true
+        run: |
+          export PATH="$HOME/zephyr-sdk/sysroots/x86_64-pokysdk-linux/usr/bin:$PATH"
+          PERF_FLOOR=0 make probe
+
       - name: the gate
         run: |
           export PATH="$HOME/zephyr-sdk/sysroots/x86_64-pokysdk-linux/usr/bin:$PATH"
