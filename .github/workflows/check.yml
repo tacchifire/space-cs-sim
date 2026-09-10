@@ -17,7 +17,13 @@ name: check
 
 on:
   push:
-    branches: [main]
+    # `main` and the working branch. Until the working branch was listed, GitHub had never
+    # registered this workflow at all - the API reported zero workflows and zero runs - because a
+    # workflow is registered when it first runs, `push` only matched main, no pull request
+    # existed, and `workflow_dispatch` only appears for workflows on the default branch. The file
+    # was pushed, reviewed, described in three documents, and inert. "Nobody has watched it run"
+    # was true in a stronger sense than intended: there was nothing to watch.
+    branches: [main, evidence-gates-and-adcs]
   pull_request:
   workflow_dispatch:
 
