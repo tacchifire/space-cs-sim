@@ -156,10 +156,44 @@ jobs:
       - name: prime Renode's artifact cache
         run: ./tools/renode-probe/probe.sh --fetch-only
 
-      # Which containment mechanism this runner actually has, printed before the gate so a
-      # failure inside the namespace can be told apart from a failure to create one.
-      - name: isolation backends available here
+      # Unprivileged user namespaces, which bwrap and unshare both need. Ubuntu 24.04 ships
+      # kernel.apparmor_restrict_unprivileged_userns=1 and that is why `unshare` fails on the
+      # development machine this was written on - there, without root, nothing can be done about
+      # it. A runner has sudo and is torn down after the job, so here it can simply be turned off.
+      # `|| true`: on an image where the knob does not exist, the probes below say so instead.
+      - name: allow unprivileged user namespaces
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sysctl kernel.apparmor_restrict_unprivileged_userns || true
+
+      # One step per backend, each of which FAILS when its backend does not work.
+      #
+      # The first version of this was a single informational step that printed the probe and
+      # always exited 0. It reported success on a run whose gate then died in under a second, and
+      # said nothing about why - job logs need a token even on a public repository, so a step's
+      # own conclusion is the only thing an unauthenticated reader can see. A step that cannot
+      # fail is not evidence here either.
+      #
+      # continue-on-error, because the useful outcome is knowing which backends work, not stopping
+      # at the first that does not.
+      - name: 'backend: bwrap'
+        continue-on-error: true
+        run: PYTHONPATH=src python3 -m cuberange.safety.isolate --probe | grep -q '^  OK   bwrap'
+
+      - name: 'backend: unshare'
+        continue-on-error: true
+        run: PYTHONPATH=src python3 -m cuberange.safety.isolate --probe | grep -q '^  OK   unshare'
+
+      - name: isolation probe, in full
         run: PYTHONPATH=src python3 -m cuberange.safety.isolate --probe
+
+      # Split from the gate so a public reader can tell an unusable environment from a failing
+      # test. The previous run failed "the gate" in zero seconds, which is the environment check
+      # refusing - but nothing outside the log said so.
+      - name: environment check
+        run: |
+          export PATH="$HOME/zephyr-sdk/sysroots/x86_64-pokysdk-linux/usr/bin:$PATH"
+          ./tools/ci.sh --env-only
 
       - name: the gate
         run: |
