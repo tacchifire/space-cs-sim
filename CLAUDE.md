@@ -75,7 +75,7 @@ make determinism  # rules G1/G2: three CI-profile runs, byte-identical UART capt
 make pair-gate    # every vulnerable/mitigated pair differs by exactly one build flag
 make verify-all   # every exercise, three assertions each
 make check        # all of it                                                          ~11 min
-make soak-p0      # 30 consecutive round trips under a watchdog                        ~3.5 min
+make soak-p0      # 30 consecutive round trips under a watchdog                        ~4 min
 ```
 
 `make probe` is very sensitive to host contention: a clean run is about 6 minutes, and with two

@@ -226,3 +226,66 @@ def test_the_rss_ceiling_sees_a_grandchild(work):
     finally:
         proc.kill()
         proc.wait(timeout=10)
+
+
+def test_nothing_launches_renode_without_this_class():
+    """CLAUDE.md: "Always launch through src/cuberange/renode/supervisor.py."
+
+    That was prose with an exception nobody had noticed. tests/manual/spike_inject_and_observe.py
+    held the last raw subprocess.Popen of ./renode - no wall-clock watchdog, no RSS ceiling -
+    which is design section 16's W25 exactly, found in test_p0_roundtrip.py and fixed there while
+    this one stayed. A manual spike is precisely where an unattended wedge or a 17 GB leak is left
+    behind, because nobody is watching a run they started by hand.
+
+    Read by AST, and that is the second version. The first checked whether the file MENTIONED
+    RenodeSupervisor anywhere, which the offending file did - in the comment explaining why it
+    now uses it. Restoring the raw Popen underneath left the comment in place and the guard
+    passed. A guard whose exemption is a substring exempts anyone who writes the substring.
+    """
+    import ast
+
+    repo = Path(__file__).resolve().parents[2]
+    EXEMPT = {"src/cuberange/renode/supervisor.py",     # the mechanism itself
+              "tests/pytest/test_supervisor.py"}        # this file, which names the pattern
+
+    def launches_renode(node: ast.AST) -> bool:
+        """A spawn whose argv literal starts with ./renode."""
+        if not isinstance(node, ast.Call):
+            return False
+        func = node.func
+        name = (f"{getattr(func.value, 'id', '')}.{func.attr}"
+                if isinstance(func, ast.Attribute) else getattr(func, "id", ""))
+        if name not in ("subprocess.Popen", "subprocess.run", "subprocess.call",
+                        "subprocess.check_call", "subprocess.check_output") \
+           and not name.startswith("os.exec"):
+            return False
+        for arg in node.args:
+            if isinstance(arg, ast.List) and arg.elts:
+                first = arg.elts[0]
+                if isinstance(first, ast.Constant) and first.value == "./renode":
+                    return True
+            if isinstance(arg, ast.Constant) and arg.value == "./renode":
+                return True
+        return False
+
+    offenders = []
+    for path in sorted(repo.glob("**/*.py")):
+        if ".git" in path.parts or "__pycache__" in path.parts:
+            continue
+        rel = str(path.relative_to(repo))
+        if rel in EXEMPT:
+            continue
+        try:
+            tree = ast.parse(path.read_text(errors="replace"))
+        except SyntaxError as exc:
+            # Not skipped. A file this guard cannot read is a file it is not guarding, and
+            # `except SyntaxError: continue` hid exactly that during its own mutation test - the
+            # mutation produced an unparseable file and the guard reported a pass.
+            offenders.append(f"{rel}: does not parse ({exc.msg} at line {exc.lineno})")
+            continue
+        for node in ast.walk(tree):
+            if launches_renode(node):
+                offenders.append(f"{rel}:{getattr(node, 'lineno', '?')}")
+    assert not offenders, (
+        "these spawn Renode directly instead of through RenodeSupervisor, so a wedged or leaking "
+        "run has nothing watching it: " + ", ".join(offenders))

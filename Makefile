@@ -97,7 +97,8 @@ demo:
 	  || { echo "FAIL: no successful ping"; exit 1; }
 
 spike:
-	RENODE_DIR=$(RENODE_DIR) python3 tests/manual/spike_inject_and_observe.py
+	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
+	    python3 tests/manual/spike_inject_and_observe.py
 
 clean:
 	rm -rf $(OUT)
@@ -147,9 +148,13 @@ check: probe
 
 # P0's last acceptance condition: thirty round trips in a row. Slow (~10 min) and excluded from
 # `make check`, because a soak belongs on a schedule rather than in the edit loop.
-soak-p0: firmware-p0
+# -m slow, because pytest.ini sets `addopts = -m "not slow"` and the only test in this file is
+# marked slow. Without the override the run deselects everything, exits 5 and reports "1
+# deselected" - which is what this target did for its whole existence, while CLAUDE.md advertised
+# it with a runtime. tests/pytest/test_paths.py now fails if a target selects nothing.
+soak-p0: $(call FWDEP,firmware-p0)
 	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
-	    python3 -m pytest tests/e2e/test_p0_soak.py -v -s
+	    python3 -m pytest tests/e2e/test_p0_soak.py -v -s -m slow
 
 # EX-B01 images: EPS in both profiles plus the P0 pair. The two EPS builds differ by exactly one
 # CMake cache variable, and a CI gate diffs their CONFIG_* symbol dumps to prove nothing else moved.

@@ -20,6 +20,7 @@ Usage:  python3 tests/manual/spike_inject_and_observe.py
 import os
 import socket
 import subprocess
+from pathlib import Path
 import sys
 import threading
 import time
@@ -27,6 +28,9 @@ import time
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(REPO, "src"))
+
+from cuberange.paths import out_dir                            # noqa: E402
+from cuberange.renode.supervisor import RenodeSupervisor       # noqa: E402
 
 from cuberange.renode.extctl import MS, Renode  # noqa: E402
 
@@ -40,7 +44,10 @@ ZEPHYR_CAN = ("@https://dl.antmicro.com/projects/renode/"
 EC_PORT = 3690        # External Control API
 INJ_PORT = 3691       # TcpCanInjector line protocol (transmitter)
 OBS_PORT = 3692       # second injector, used only as a bus observer
-WORK = os.environ.get("WORK", "/tmp/cuberange-spike")
+# Per checkout, not one path every clone of this repository shares. /tmp/cuberange-spike was the
+# same defect as the old $OUT default: two working copies on one machine writing the same
+# victim.uart and each reading the other's.
+WORK = os.environ.get("WORK") or str(out_dir() / "spike")
 
 INJECT_ID = 0x123     # arbitrary; chosen not to collide with the sample's own 0x10 / 0x12345
 
@@ -94,14 +101,17 @@ def main():
             os.remove(p)
     build_resc(resc, uart)
 
-    proc = subprocess.Popen(
-        ["./renode", "--disable-xwt", "--plain", "--hide-analyzers",
-         "--port", str(EC_PORT + 100), "-e", f"include @{resc}"],
-        cwd=RENODE_DIR, stdout=open(rlog, "w"), stderr=subprocess.STDOUT,
-        stdin=subprocess.DEVNULL, start_new_session=True)
+    # Through the supervisor, like every other launch. This file was the last raw Popen in the
+    # tree, which made CLAUDE.md's "always launch through supervisor.py" false - and false in the
+    # way that matters, since the ~13% wedge rate and the 17 GB leak are exactly what a manual
+    # spike run leaves behind unattended. Design section 16, W25 is the same finding in
+    # test_p0_roundtrip.py.
+    sup = RenodeSupervisor(cwd=RENODE_DIR, timeout_s=300, rss_ceiling_mb=4096)
 
     rc = 1
-    try:
+    with sup.launch(["./renode", "--disable-xwt", "--plain", "--hide-analyzers",
+                     "--port", str(EC_PORT + 100), "-e", f"include @{resc}"],
+                    Path(rlog)) as run:
         # --- connect the External Control client -------------------------------------------
         r = None
         for _ in range(60):
@@ -202,12 +212,6 @@ def main():
                   "firmware, no SocketCAN.")
             rc = 0
         r.close()
-    finally:
-        try:
-            os.killpg(os.getpgid(proc.pid), 15)
-        except OSError:
-            pass
-        proc.wait(timeout=10)
     return rc
 
 

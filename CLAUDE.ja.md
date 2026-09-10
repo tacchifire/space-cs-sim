@@ -76,7 +76,7 @@ make determinism  # 規則 G1/G2: CI プロファイルで 3 回走らせ、UART
 make pair-gate    # 脆弱版／緩和版の各ペアが、ちょうど 1 つのビルドフラグだけ違うこと
 make verify-all   # 全演習、各 3 アサーション
 make check        # 以上すべて                                                        約 11 分
-make soak-p0      # ウォッチドッグ下で 30 回連続の往復                                 約 3.5 分
+make soak-p0      # ウォッチドッグ下で 30 回連続の往復                                 約 4 分
 ```
 
 `make probe` はホストの混雑に非常に敏感である。空いていれば約 6 分、Renode の別作業が 2 つ

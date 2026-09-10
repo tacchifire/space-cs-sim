@@ -12,6 +12,7 @@ mitigated image. What it reported was four unexplained cache variables. What was
 artifacts belonged to somebody else.
 """
 import hashlib
+import ast
 import os
 import re
 import shutil
@@ -237,3 +238,77 @@ def test_the_student_facing_target_derives_its_ports_from_the_map():
     from cuberange import ports as _ports
     for port in (_ports.link(0), _ports.monitor(), _ports.injector(0)):
         assert f"localhost:{port}" not in body, f"`make exercise` hardcodes localhost:{port}"
+
+
+# --------------------------------------------------------------------------- targets that run nothing
+#
+# `make soak-p0` deselected its only test for its whole existence. pytest.ini sets
+# `addopts = -m "not slow"`, the one test in that file is marked slow, and the recipe did not
+# override the filter - so pytest reported "1 deselected", exited 5, and make reported an error
+# that reads like a broken test. CLAUDE.md advertised the target with a runtime.
+
+def _default_marker_filter() -> str:
+    ini = (REPO / "pytest.ini").read_text()
+    m = re.search(r'addopts\s*=.*?-m\s+"([^"]+)"', ini)
+    return m.group(1) if m else ""
+
+
+def _pytest_recipes() -> list[tuple[int, str, list[str]]]:
+    """(line, recipe, target paths) for every recipe that runs pytest."""
+    out = []
+    lines = MAKEFILE_TEXT.splitlines()
+    for n, line in enumerate(lines, 1):
+        if "-m pytest" not in line:
+            continue
+        recipe = line
+        i = n
+        while recipe.rstrip().endswith("\\") and i < len(lines):
+            recipe += "\n" + lines[i]
+            i += 1
+        after = recipe.split("-m pytest", 1)[1]
+        paths = [tok for tok in after.split()
+                 if tok.endswith(".py") or "/" in tok and not tok.startswith("-")]
+        out.append((n, recipe, paths))
+    return out
+
+
+def test_the_makefile_runs_pytest_somewhere():
+    assert _pytest_recipes(), "no pytest recipe found; this guard is watching nothing"
+
+
+@pytest.mark.parametrize("line_no,recipe,paths", _pytest_recipes(),
+                         ids=lambda v: str(v)[:30])
+def test_no_target_deselects_every_test_it_means_to_run(line_no, recipe, paths):
+    """A target that selects nothing exits 5 and looks like a failing test."""
+    marker = _default_marker_filter()
+    if not marker.startswith("not "):
+        pytest.fail(f"pytest.ini's default filter is {marker!r}; this guard only understands "
+                    f"'not <marker>' and must be updated rather than quietly passing")
+    excluded = marker[4:].strip()
+
+    # A recipe that names its own -m has taken responsibility for the selection.
+    if re.search(r"(?<!\.)\s-m\s+(?!pytest)", recipe):
+        return
+
+    files = []
+    for spec in paths:
+        files += sorted(REPO.glob(spec)) if any(c in spec for c in "*?[") else [REPO / spec]
+
+    for path in files:
+        if not path.is_file():
+            continue
+        tree = ast.parse(path.read_text())
+        tests = [n for n in tree.body
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 and n.name.startswith("test_")]
+        if not tests:
+            continue
+        selectable = [t for t in tests
+                      if not any(getattr(d, "attr", None) == excluded
+                                 or getattr(getattr(d, "func", None), "attr", None) == excluded
+                                 for d in t.decorator_list)]
+        assert selectable, (
+            f"Makefile:{line_no} runs pytest on {path.relative_to(REPO)}, every test in which is "
+            f"marked '{excluded}' and therefore deselected by pytest.ini. The run selects "
+            f"nothing, exits 5, and make reports an error that reads like a broken test. Pass "
+            f"-m {excluded} in the recipe.")
