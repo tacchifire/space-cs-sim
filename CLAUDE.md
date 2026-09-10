@@ -13,14 +13,30 @@ Two spacecraft, four nodes each, and they can run in one emulation. Identity is 
 so one source tree still produces every node of every spacecraft. Satellite 0 keeps the numbers
 every existing scenario and write-up names — do not renumber it.
 
-**CI exists as a mechanism and has not been observed running.** `.github/workflows/check.yml` calls
-`tools/ci.sh`, which has been run here: environment check, self-test, and `make check` end to end.
-Nobody has watched GitHub Actions execute the workflow itself.
+**CI has been observed passing: run 8, commit `eaf07ce`, on main, both jobs green, the gate to
+`CHECK PASSED` in 838 seconds on ubuntu-latest.** That sentence replaced "nobody has watched it
+run" on 2026-09-10 and not a day earlier, because until then it was not true.
 
-So the gate is still a command a human types, and the documents say that. Promote the sentence when
-a run has been observed and not before — nine places in this repository described gates as
-CI-enforced while there was no `.github` directory at all, and adding CI is a poor moment to repeat
-the mistake in a new form.
+It was truer than intended, too. The API reported zero workflows, not zero runs: GitHub registers
+a workflow the first time it runs, `push` matched only main, main had no `.github` directory, and
+`workflow_dispatch` only appears for workflows on the default branch. The file was pushed,
+described in three documents, and inert. Not a button nobody pressed — no button.
+
+Getting from there to green cost three defects, none of which this machine can produce, because
+here the environment is always already installed:
+
+1. the working branch was not in the push trigger, so nothing ever ran;
+2. the cache restored `~/zephyrproject` and `~/zephyr-sdk` and not the pip packages that drive
+   them, and `setup-toolchain.sh` only runs on a cache MISS — cold runs worked, warm runs died at
+   `west build`. A cache that restores the inputs and not the tool fails on the second run, and
+   the second run is every run after the first;
+3. fixing `west` alone left Zephyr's own `requirements.txt` behind and the same failure came back.
+   Cache the downloads; install the environment every time.
+
+What one green run does not establish is reliability. And the hypothesis that took longest was
+wrong: probe.sh's 1.5x four-node speed floor, which this eight-core machine clears at 4.3–5.1x,
+looked like the obvious thing to blame on a two-vCPU runner. The probe passes there in 110
+seconds. Blaming the host was the comfortable guess, and it was the wrong one.
 
 Six exercises work today. Five cover an attack origin each: EX-B01 (internal bus), EX-L01 (space
 link), EX-A01 (ADCS command envelope), EX-F01 (the OBC's own PUS 8 parser) and EX-G01 (the ground

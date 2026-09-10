@@ -163,11 +163,25 @@ asking about an instruction fetch reports that SRAM is executable when it is not
 described these gates as CI-enforced. There is now `.github/workflows/check.yml`, and it is worth
 being exact about what that does and does not mean.
 
-What has been run, on a real host: `tools/ci.sh` — an environment check, its own self-test, and
-`make check` end to end. What has NOT been run: the workflow. Nobody has watched GitHub Actions
-execute it. It is a thin caller of a verified command, so the untested part is the plumbing rather
-than the gate, but until a run has been observed the honest description is that **the gate is still
-a command a human types**, and this paragraph will say so until that changes.
+**Observed passing on 2026-09-10**: run 8, commit `eaf07ce`, on main. Both jobs green, and the
+gate step ran `tools/ci.sh` to `CHECK PASSED` in 838 seconds on ubuntu-latest. This paragraph said
+"nobody has watched it run" until that day, and not one day less.
+
+The sentence was truer than it meant. GitHub had never registered the workflow at all — a workflow
+is registered the first time it runs, `push` matched only main, main had no `.github` directory,
+and `workflow_dispatch` only appears for workflows on the default branch. The API reported zero
+workflows. Not a button nobody pressed: no button.
+
+Three defects stood between that and green, and none of them can happen on a developer's machine,
+where the environment is always already installed. The working branch was not in the push trigger.
+The cache restored the Zephyr workspace and SDK but not the pip packages that drive them, while
+the installer only runs on a cache miss — so cold runs worked and every warm run died at `west
+build`. And fixing `west` alone left Zephyr's own `requirements.txt` behind, which brought the
+same failure straight back.
+
+One green run is not reliability, and the hypothesis that took longest to test was wrong: probe.sh
+asserts a 1.5x four-node speed floor, this eight-core machine clears it at 4.3–5.1x, and a
+two-vCPU runner looked like the obvious thing to blame. The probe passes there in 110 seconds.
 
 That distinction is the whole discipline. An earlier revision of the design claimed a
 TTP-verification tool, an offline mode and an oracle requirement; none of the three existed, and

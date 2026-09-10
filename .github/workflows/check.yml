@@ -1,13 +1,27 @@
 # The gate, run by a machine.
 #
-# READ THIS BEFORE CITING IT. At the time this file was committed nobody had watched GitHub Actions
-# execute it. What HAS been run, on a real host, is `tools/ci.sh` - the environment check, its
-# self-test, and `make check` end to end in about sixteen minutes. This workflow is a thin caller,
-# so the untested part is the plumbing around a verified command, not the gate itself.
+# OBSERVED PASSING: run 8, commit eaf07ce, on main, 2026-09-10. Both jobs green; the gate step ran
+# tools/ci.sh to CHECK PASSED in 838 seconds on ubuntu-latest.
 #
-# Until a run of this file has been observed, the README and CLAUDE.md keep saying that the gate is
-# a command a human types. Do not promote that sentence because a YAML file exists; that is the
-# failure this project keeps recording, and adding CI is a poor moment to repeat it.
+# That sentence replaces "nobody has watched this run", which stood from the day this file landed
+# until the day it was true no longer. It cost three real defects to get here, none of which this
+# development machine could produce:
+#
+#   1. The workflow was never REGISTERED. GitHub registers a workflow the first time it runs;
+#      `push` matched only main, main had no .github, no pull request existed, and
+#      workflow_dispatch only appears for workflows on the default branch. The API reported zero
+#      workflows and zero runs. Not a button nobody pressed - no button.
+#   2. The cache restored ~/zephyrproject and ~/zephyr-sdk and not the pip packages that drive
+#      them, and setup-toolchain.sh only runs on a cache MISS. Cold runs worked; every warm run
+#      died at `west build`. A cache that restores the inputs and not the tool fails on the second
+#      run, and the second run is every run after the first.
+#   3. Fixing west alone left Zephyr's own requirements.txt behind, and the same failure returned.
+#      Cache the downloads; install the environment every time.
+#
+# What this does NOT establish: that it is reliable. One run, one commit, one runner image. The
+# floor I suspected - probe.sh's 1.5x four-node speed assertion, which this machine clears at
+# 4.3-5.1x on eight cores - turned out to be innocent: the probe passes on a two-vCPU runner in
+# 110 seconds. That hypothesis was wrong, and it was wrong in the direction of blaming the host.
 #
 # The two jobs are the split design section 9.4 asks for: fetching is allowed to reach the network,
 # and the stage that decides pass or fail is not. `probe.sh` downloads prebuilt Zephyr ELFs over
@@ -239,32 +253,6 @@ jobs:
         run: |
           export PATH="$HOME/zephyr-sdk/sysroots/x86_64-pokysdk-linux/usr/bin:$PATH"
           ./tools/ci.sh --env-only
-
-      # TEMPORARY, and delete both once they have answered.
-      #
-      # Run 4 reached `make check` and failed 162 seconds in - which is where `make probe` runs,
-      # and the probe asserts a 4-node speed floor of 1.5x real time. That floor is a statement
-      # about the HOST: this development machine measures 4.3-5.1x on eight cores, and a two-vCPU
-      # runner is a different class of machine entirely. probe.sh's own comment anticipates it
-      # ("fail for host reasons rather than regression. Override with PERF_FLOOR=<n>").
-      #
-      # Guessing a floor for a runner would be putting a number in without measuring it, so
-      # instead: run the probe twice, once as configured and once with the floor removed, and let
-      # the two step conclusions say which it was. If the first fails and the second passes it is
-      # the floor; if both fail it is something else; if both pass the gate's failure is
-      # downstream of the probe. Job logs need a token even here, so a step's conclusion is the
-      # only thing that reaches an unauthenticated reader.
-      - name: 'probe: as configured'
-        continue-on-error: true
-        run: |
-          export PATH="$HOME/zephyr-sdk/sysroots/x86_64-pokysdk-linux/usr/bin:$PATH"
-          make probe
-
-      - name: 'probe: with the speed floor removed'
-        continue-on-error: true
-        run: |
-          export PATH="$HOME/zephyr-sdk/sysroots/x86_64-pokysdk-linux/usr/bin:$PATH"
-          PERF_FLOOR=0 make probe
 
       - name: the gate
         run: |
