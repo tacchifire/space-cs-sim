@@ -88,6 +88,7 @@ make firmware-f01 # 衛星 0 の全イメージ: COMM, OBC（両方）, EPS（�
 make firmware-sat1 # 同じ 4 役を宇宙機 1 として
 make firmware-g01 # EX-G01 が相手にする硬化版 OBC と EPS
 make constellation # 8 ノード、2 宇宙機、そして両者のバス隔離
+make fleet SATS=4 # アドレス空間が許す全機。16 ノード、実測 1.66〜2.52x
 make golden       # 独立オラクルを再ビルドし tests/golden を再生成（ネットワークが要る）
 tools/ci.sh       # CI が走らせるもの: 環境チェック、そして make check
 tools/ci.sh --self-test   # 環境チェックが失敗できることを示す
@@ -282,6 +283,7 @@ src/cuberange/gs/schedule.py    TC 計画と、EX-G01 が攻めるインポー�
 src/cuberange/gs/import_policy.py  EX-G01 の違いのすべてである 2 つのポリシー
 firmware/common/identity.cmake  CUBERANGE_SAT_INDEX から導く CSP アドレスと SCID
 scripts/multi-node/constellation.resc  2 宇宙機、2 ハブ、2 リンク、1 Monitor
+tools/gen_constellation.py      そのシナリオの導出元。SATS=4 で 16 ノード
 scripts/profiles/               interactive と ci の実行プロファイル。シナリオはどちらかを include する
 tools/config_diff_gate.py       ストローマン対策ゲート。自己テスト付き
 firmware-matrix.yml             ゲートが検査する脆弱版／緩和版のペア

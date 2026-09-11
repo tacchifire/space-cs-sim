@@ -41,12 +41,13 @@ APP_CSP_PING := firmware/apps/csp_ping
 # them once. Running any target directly still rebuilds, which is the safe default.
 FWDEP = $(if $(NOFW),,$(1))
 
-.PHONY: help out syllabus gs channel ground-stations probe firmware demo spike clean toolchain
+.PHONY: help out syllabus gs channel ground-stations fleet probe firmware demo spike clean toolchain
 
 help:
 	@echo "make out        - print this checkout's build directory ($(OUT))"
 	@echo "make syllabus   - the order the exercises are meant to be taken in"
 	@echo "make ground-stations - two ground station nodes, one spacecraft, one channel"
+	@echo "make fleet SATS=4 - every spacecraft the addressing allows, 16 nodes"
 	@echo "make gs STATION=backup - a console to sit at (needs make channel running)"
 	@echo "make toolchain  - install Zephyr v4.1.0 + SDK (no root, ~7.6 GB on disk)"
 	@echo "make probe      - verify every Renode capability the design depends on"
@@ -176,6 +177,7 @@ check: probe
 	$(MAKE) demo-p0     NOFW=1
 	$(MAKE) determinism NOFW=1
 	$(MAKE) constellation NOFW=1
+	$(MAKE) fleet NOFW=1
 	$(MAKE) ground-stations NOFW=1
 	$(MAKE) verify-all  NOFW=1
 	$(MAKE) pair-gate   NOFW=1
@@ -316,12 +318,20 @@ exercise:
 # satellite would have nothing to show.
 .PHONY: firmware-sat1
 firmware-sat1:
+	@$(MAKE) firmware-sat SAT=1
+
+# Any spacecraft by index. identity.cmake refuses an index past 3 - CSP v1 addresses are five
+# bits, eight per spacecraft - so this cannot quietly build a satellite that collides with
+# another one's nodes.
+firmware-sat:
+	@test -n "$(SAT)" || { echo "usage: make firmware-sat SAT=<0..3>"; exit 1; }
 	@test -f $(ENV) || { echo "missing $(ENV) - run 'make toolchain' first"; exit 1; }
 	for role in comm obc eps adcs; do \
 	    . $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
-	        -d $(OUT)/build-$$role-sat1 firmware/apps/$$role -- -DCUBERANGE_SAT_INDEX=1 || exit 1; \
+	        -d $(OUT)/build-$$role-sat$(SAT) firmware/apps/$$role -- \
+	        -DCUBERANGE_SAT_INDEX=$(SAT) || exit 1; \
 	done
-	@ls -l $(OUT)/build-*-sat1/zephyr/zephyr.elf
+	@ls -l $(OUT)/build-*-sat$(SAT)/zephyr/zephyr.elf
 
 # Two spacecraft in one emulation: eight machines, two CAN hubs, two space links, one Monitor.
 #
@@ -331,6 +341,24 @@ firmware-sat1:
 # that measurement had CAN traffic, and the host was under load 8.9 at the time. RSS is the honest
 # comparison, and it is in line with the design's +50-120 MB per node.
 .PHONY: constellation
+# SATS=<n> runs more spacecraft, up to the four CSP v1's five-bit addressing allows. The
+# scenario for anything but the committed two is generated on the spot from cuberange.identity,
+# because sixteen nodes hand-written is 280 lines in which the only thing that varies is an index
+# - and the repetition is where a hub name gets reused and both spacecraft quietly share a bus.
+SATS ?= 2
+
+# The generated scenario, run. SATS=2 in the gate because that needs no images beyond the ones
+# `check` already builds, and what it adds over `make constellation` is coverage of the GENERATOR
+# - that what tools/gen_constellation.py emits actually boots.
+#
+# SATS=4 is the full fleet, sixteen nodes, and needs `make firmware-sat SAT=2` and SAT=3 first.
+# Measured on an eight-core x86-64 host: 16/16 booted in 10.0s at 1.66-2.52x real time, 907 MB
+# peak. That is recorded rather than gated - eight more images is eight more minutes on every
+# `make check`, and the design already carries measurements it does not gate.
+fleet: $(call FWDEP,firmware-all firmware-sat1)
+	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
+	    CUBERANGE_SATS=$(SATS) python3 -m pytest tests/e2e/test_constellation_full.py -v -s
+
 constellation: $(call FWDEP,firmware-all firmware-sat1)
 	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest tests/e2e/test_constellation.py -v

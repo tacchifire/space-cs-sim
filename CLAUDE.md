@@ -86,6 +86,7 @@ make firmware-f01 # every satellite-0 image: COMM, OBC (both), EPS (both), ADCS 
 make firmware-sat1 # the same four roles as spacecraft 1
 make firmware-g01 # the hardened OBC and EPS that EX-G01 runs against
 make constellation # eight nodes, two spacecraft, and the bus isolation between them
+make fleet SATS=4 # every spacecraft the addressing allows: 16 nodes, measured 1.66-2.52x
 make golden       # rebuild the independent oracles and regenerate tests/golden (needs network)
 tools/ci.sh       # what CI runs: environment check, then make check
 tools/ci.sh --self-test   # prove the environment check can fail
@@ -282,6 +283,7 @@ src/cuberange/gs/schedule.py    the TC plan and the importer EX-G01 attacks
 src/cuberange/gs/import_policy.py  the two policies that are EX-G01's whole difference
 firmware/common/identity.cmake  CSP addresses and SCID derived from CUBERANGE_SAT_INDEX
 scripts/multi-node/constellation.resc  two spacecraft, two hubs, two links, one Monitor
+tools/gen_constellation.py      that scenario, derived; SATS=4 is 16 nodes
 scripts/profiles/               interactive and ci execution profiles; scenarios include one
 tools/config_diff_gate.py       the anti-strawman gate, with self-tests
 firmware-matrix.yml             which vulnerable/mitigated pairs the gate checks
