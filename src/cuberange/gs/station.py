@@ -13,9 +13,12 @@ on that spacecraft. `ping()` requires all three to line up before it calls a rep
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 
 from ..proto.frame import SCID, decode_tm_frame, encode_tc_frame
-from ..proto.pus import (PusTc, PusTm, SERVICE_TEST, SUBTYPE_CONNECTION_TEST,
+from ..proto.pus import (FAILURE_NAMES, PusTc, PusTm, SERVICE_TEST, SERVICE_VERIFICATION,
+                         SUBTYPE_ACCEPTANCE_FAILURE, SUBTYPE_CONNECTION_TEST,
+                         parse_request_id,
                          SUBTYPE_CONNECTION_TEST_REPORT)
 from ..proto.spacepacket import PacketType, SpacePacket
 from .link import SpaceLink
@@ -30,6 +33,37 @@ PUS_TM_TIME_LEN = 4
 SERVICE_FUNCTION = 8
 SUBTYPE_PERFORM = 1
 FUNC_SET_COMM_RAIL = 1
+
+
+
+@dataclass(frozen=True)
+class Refusal:
+    """A PUS 1,2 the spacecraft sent because it would not accept something.
+
+    `apid` and `seq_count` come out of the request id, which is the refused packet's own first
+    four octets - so an operator can match this to the command in their own log without the
+    spacecraft having had to remember anything.
+    """
+
+    apid: int
+    seq_count: int
+    code: int
+    dest_id: int
+
+    @property
+    def reason(self) -> str:
+        return FAILURE_NAMES.get(self.code, f"code {self.code}")
+
+    def __str__(self) -> str:
+        return (f"refused APID 0x{self.apid:03X} seq {self.seq_count}: {self.reason} "
+                f"(to station 0x{self.dest_id:04X})")
+
+
+def decode_refusal(tm: PusTm) -> Refusal:
+    if len(tm.app_data) < 5:
+        raise ValueError(f"a PUS 1,2 carries a request id and a code; got {len(tm.app_data)}")
+    apid, seq = parse_request_id(tm.app_data[:4])
+    return Refusal(apid=apid, seq_count=seq, code=tm.app_data[4], dest_id=tm.dest_id)
 
 
 class GroundStation:
@@ -49,6 +83,10 @@ class GroundStation:
         # stations, "someone else's telemetry arrived here" is the observation the exercise is
         # about, and silently discarding it would hide exactly what a learner should see.
         self.not_for_us: list = []
+        #: PUS 1,2 acceptance failures the spacecraft sent us. A refusal the ground
+        #: cannot hear is indistinguishable from a command that never arrived, which
+        #: is where EX-G02 and EX-G03 both end.
+        self.refusals: list = []
 
     def _next_seq(self) -> int:
         seq = self._tc_seq
@@ -78,6 +116,47 @@ class GroundStation:
         return self._send(PusTc(service=SERVICE_FUNCTION, subtype=SUBTYPE_PERFORM,
                                 source_id=self.station_id, app_data=app_data))
 
+    def collect(self) -> list:
+        """Read whatever has arrived, classify it, and transmit nothing.
+
+        Returns the connection-test reports addressed to this station; refusals land in
+        `self.refusals` and anything else in `not_for_us` or `undecodable`. This exists because a
+        PUS 1,2 answers a PUS 8, and nothing was polling between those - so the report the
+        spacecraft sent so the ground would know was being dropped by the next ping's drain.
+        """
+        mine = []
+        for frame in self.link.poll():
+            try:
+                _mc, _vc, payload = decode_tm_frame(frame, expect_scid=self.target_scid)
+                packet = SpacePacket.decode(payload)
+                tm = PusTm.decode(packet.data, time_len=PUS_TM_TIME_LEN)
+            except ValueError as exc:
+                self.undecodable.append((frame, str(exc)))
+                continue
+            if (tm.service, tm.subtype) == (SERVICE_VERIFICATION, SUBTYPE_ACCEPTANCE_FAILURE):
+                if tm.dest_id == self.station_id:
+                    self.refusals.append(decode_refusal(tm))
+                else:
+                    self.not_for_us.append(tm)
+                continue
+            if (tm.service, tm.subtype) != (SERVICE_TEST, SUBTYPE_CONNECTION_TEST_REPORT):
+                continue
+            if packet.apid != self.target_apid or tm.dest_id != self.station_id:
+                self.not_for_us.append(tm)
+                continue
+            mine.append(tm)
+        return mine
+
+    def await_refusal(self, timeout: float = 10.0):
+        """Wait for the spacecraft to say it refused something. None if it never does."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            self.collect()
+            if self.refusals:
+                return self.refusals[-1]
+            time.sleep(0.1)
+        return None
+
     def ping(self, timeout: float = 10.0):
         """Send PUS 17,1 and return the report addressed to this station, or None on timeout.
 
@@ -100,9 +179,14 @@ class GroundStation:
         needs true request/response correlation needs a counter in the report, which is a firmware
         change and not a host one.
         """
-        # Discard the backlog first. Without this, a report that arrived between two pings answers
+        # Clear the backlog first. Without this, a report that arrived between two pings answers
         # the second one instantly and a dead satellite looks alive for exactly one call.
-        self.link.poll()
+        #
+        # Through collect(), not a bare poll(). The first version discarded the frames outright,
+        # which threw away any PUS 1,2 that had arrived since the last call - the refusal report
+        # the spacecraft sent precisely so the ground would know. A drain that drops evidence is
+        # not a drain.
+        self.collect()
         self.send_connection_test()
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -117,6 +201,11 @@ class GroundStation:
                     # not noise. A frame from the wrong spacecraft lands here too, which is the
                     # point - it is recorded rather than acted on.
                     self.undecodable.append((frame, str(exc)))
+                    continue
+                if (tm.service, tm.subtype) == (SERVICE_VERIFICATION,
+                                                SUBTYPE_ACCEPTANCE_FAILURE):
+                    if tm.dest_id == self.station_id:
+                        self.refusals.append(decode_refusal(tm))
                     continue
                 if (tm.service, tm.subtype) != (SERVICE_TEST, SUBTYPE_CONNECTION_TEST_REPORT):
                     continue

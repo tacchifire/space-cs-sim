@@ -66,3 +66,13 @@ pairs:
     flag: CUBERANGE_COMM_ANTIREPLAY_PER_VC
     vuln: { value: "0", build: build-comm-g03-vuln }
     hard: { value: "1", build: build-comm-g03-hard }
+
+  # EX-G02's authority check is ON in both halves; both also hold CUBERANGE_OBC_PUS8_LENGTH_CHECK
+  # equal. What differs is whether the refusal leaves the spacecraft. Three pairs now share
+  # firmware/apps/obc, and each holds the other two flags equal across its own halves - which is
+  # what lets the gate say "exactly one differs" about all three.
+  - id: EX-G04
+    app: firmware/apps/obc
+    flag: CUBERANGE_OBC_VERIFY_REPORTS
+    vuln: { value: "0", build: build-obc-g04-vuln }
+    hard: { value: "1", build: build-obc-g04-hard }

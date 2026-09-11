@@ -41,10 +41,15 @@ mitigation admitted to:
   rejected — as a *replay*, which sends them hunting an attacker who left thirty seconds ago. The
   same defect locks out a second legitimate ground station just by its existing.
 
+- **EX-G04** — nothing is broken. EX-G02's authority check is on and works, the spacecraft
+  refuses the command, and its console says so. The operator does not have the console. From the
+  ground, a refused command and a frame that was never received are the same observation, so the
+  pass is spent debugging the radio. Four octets of request id and one of reason end that.
+
 All five attack origins are covered: the internal bus, the space link, the ADCS command envelope,
-the OBC's own command parser, and the ground segment that decides what to send. EX-G02 and EX-G03
-add no sixth on purpose — one is a legitimate origin exceeding its authority, the other is a
-legitimate origin that is not exceeding anything.
+the OBC's own command parser, and the ground segment that decides what to send. EX-G02, EX-G03
+and EX-G04 add no sixth on purpose — a legitimate origin exceeding its authority, a legitimate
+origin exceeding nothing at all, and a control that works and cannot be heard working.
 
 **Two ground stations, two consoles.** `make ground-stations` runs both as separate nodes
 against one spacecraft, and `make gs STATION=backup` is a console to sit at while a scenario runs

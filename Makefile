@@ -54,6 +54,7 @@ help:
 	@echo "make firmware   - build the two CSP nodes"
 	@echo "make firmware-g02 - EX-G02's pair: the OBC with and without the authority check"
 	@echo "make firmware-g03 - EX-G03's pair: the replay counter per link or per channel"
+	@echo "make firmware-g04 - EX-G04's pair: a refusal the ground can hear, or cannot"
 	@echo "make demo       - run the two nodes over a CAN hub and show the CSP pings"
 	@echo "make spike      - host-side proof: raw CAN injection + External Control"
 
@@ -214,7 +215,7 @@ verify:
 	    python3 -m pytest exercises/$(EX)/verify_*.py -v
 
 # Every exercise, both directions. This is the claim the product makes.
-verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02 firmware-g03)
+verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02 firmware-g03 firmware-g04)
 	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest exercises/*/verify_*.py -v
 
@@ -266,7 +267,7 @@ firmware-f01: firmware-p1
 # prerequisite once per invocation, so this is one pristine build of each of the seven images
 # rather than the four rounds `check` used to do.
 .PHONY: firmware-all
-firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03
+firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03 firmware-g04
 	@echo "all node images built:"
 	@ls -1 $(OUT)/build-*/zephyr/zephyr.elf
 
@@ -374,6 +375,19 @@ firmware-g01: firmware-f01
 # which is what tools/config_diff_gate.py checks.
 # EX-G03's pair. The anti-replay is ON in both: what differs is whether its counter is per link
 # or per virtual channel.
+# EX-G04's pair. EX-G02's authority check is ON in both: what differs is whether the refusal
+# reaches the ground as PUS 1,2, or only the console nobody off the spacecraft can read.
+firmware-g04:
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-obc-g04-vuln firmware/apps/obc -- \
+	    -DCUBERANGE_OBC_PUS8_LENGTH_CHECK=1 -DCUBERANGE_OBC_REQUIRE_AUTHORITY=1 \
+	    -DCUBERANGE_OBC_VERIFY_REPORTS=0
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-obc-g04-hard firmware/apps/obc -- \
+	    -DCUBERANGE_OBC_PUS8_LENGTH_CHECK=1 -DCUBERANGE_OBC_REQUIRE_AUTHORITY=1 \
+	    -DCUBERANGE_OBC_VERIFY_REPORTS=1
+	@ls -l $(OUT)/build-obc-g04-vuln/zephyr/zephyr.elf $(OUT)/build-obc-g04-hard/zephyr/zephyr.elf
+
 firmware-g03:
 	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
 	    -d $(OUT)/build-comm-g03-vuln firmware/apps/comm -- \

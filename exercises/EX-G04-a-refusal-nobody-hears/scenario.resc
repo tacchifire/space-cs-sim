@@ -1,0 +1,81 @@
+:name: EX-G04 - a refusal nobody hears
+:description: The authority check works. Nothing tells the ground that it fired
+
+# Execution profile (design 4.3; rules G1/G2 of section 9.2). Renode's Monitor has no conditionals,
+# so the profile is a file the harness swaps by overriding $profile - the same mechanism $injector
+# uses, and for the same reason: a relative include inside an included file resolves against
+# Renode's own working directory, not this file.
+#
+# This include is FIRST on purpose. A failing command aborts the rest of a .resc file, so a profile
+# that cannot be found takes the machines down with it and the failure is loud. Last, it would have
+# been silent in the worst way: every node built, running with no quantum set at all.
+$profile?=@~/space-cs-sim/scripts/profiles/interactive.resc
+include $profile
+
+# Every path below hangs off $out, and $out has NO default on purpose.
+#
+# These lines used to read @/tmp/cuberange/build-comm/zephyr/zephyr.elf and so on - one absolute
+# path shared by every checkout of this repository. A second working copy on the same machine
+# built into it, and this scenario then loaded THAT checkout's firmware without a word. The
+# exercises made it worse by overriding only the one image under test, so the node being attacked
+# came from here and the nodes around it came from somebody else.
+#
+# Unset, $out resolves to nothing and LoadELF fails where you can see it. That is the intended
+# behaviour: refusing to start beats starting with the wrong firmware. The harness always passes
+# it; for a manual run, so must you:
+#
+#   renode -e '$out=@'"$(make -s out)" -e 'include @<this file>' -e start
+$comm?=$out/build-comm/zephyr/zephyr.elf
+$obc?=$out/build-obc-g04-vuln/zephyr/zephyr.elf
+$eps?=$out/build-eps-hard/zephyr/zephyr.elf
+$commuart?=$out/comm.uart
+$obcuart?=$out/obc.uart
+$epsuart?=$out/eps.uart
+$linkport?=3777
+
+emulation CreateCANHub "canHub"
+
+mach create "COMM"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $comm
+sysbus.usart3 CreateFileBackend $commuart true
+emulation CreateServerSocketTerminal $linkport "spacelink" false
+connector Connect sysbus.usart2 spacelink
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "OBC"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $obc
+sysbus.usart3 CreateFileBackend $obcuart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+# The EPS is present and HARDENED, and that matters more here than it did in EX-F01. This
+# exercise must not be winnable by forging a power command on the bus - that is EX-B01, and it is
+# already mitigated in this image. The only way to move the rail here is to ask the OBC, which
+# holds the token, and the question is whether the OBC checks WHO asked.
+mach create "EPS"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $eps
+sysbus.usart3 CreateFileBackend $epsuart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+# The OBC here has EX-G02's authority check ON. The control works. What is missing is any way
+# for the ground to learn that it worked - and this exercise is about what that costs.
+#
+# No attacker machine and no CAN injector. EX-G04's attacker does not need to be an attacker at
+# all. Everything it sends is a well-formed
+# telecommand from a real ground station that the range's own authorisation matrix lists - it is
+# simply an action that station is not granted. A second operator, a stale console, a backup site
+# that was never meant to command: the frames are indistinguishable from legitimate traffic
+# because they ARE legitimate traffic, sent by someone without the authority for it.
+#
+# That is why no injector appears here. If the exercise needed one, the lesson would be about the
+# bus again.

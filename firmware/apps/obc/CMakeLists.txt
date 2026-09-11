@@ -14,6 +14,12 @@ set(CUBERANGE_OBC_PUS8_LENGTH_CHECK 0 CACHE STRING "bound the PUS 8 argument cop
 set(CUBERANGE_OBC_REQUIRE_AUTHORITY 0 CACHE STRING
     "check the telecommand's source id against an on-board authority table")
 
+# EX-G04's only difference. A refusal the ground cannot hear is indistinguishable from a command
+# that never arrived, which is what EX-G02 and EX-G03 both end by saying.
+#   west build ... -- -DCUBERANGE_OBC_VERIFY_REPORTS=1
+set(CUBERANGE_OBC_VERIFY_REPORTS 0 CACHE STRING
+    "send PUS 1,2 acceptance failure reports when a telecommand is refused")
+
 include(${CMAKE_CURRENT_LIST_DIR}/../../common/identity.cmake)
 
 target_sources(app PRIVATE src/main.c ../../common/cuberange_proto.c)
@@ -21,4 +27,5 @@ target_include_directories(app PRIVATE ../../common)
 target_link_libraries(app PRIVATE csp)
 target_compile_definitions(app PRIVATE
   CUBERANGE_OBC_PUS8_LENGTH_CHECK=${CUBERANGE_OBC_PUS8_LENGTH_CHECK}
-  CUBERANGE_OBC_REQUIRE_AUTHORITY=${CUBERANGE_OBC_REQUIRE_AUTHORITY})
+  CUBERANGE_OBC_REQUIRE_AUTHORITY=${CUBERANGE_OBC_REQUIRE_AUTHORITY}
+  CUBERANGE_OBC_VERIFY_REPORTS=${CUBERANGE_OBC_VERIFY_REPORTS})

@@ -183,6 +183,74 @@ static uint16_t tm_seq_count;
 static uint16_t tm_msg_counter;
 
 /* Build a TM Space Packet carrying a PUS 17,2 report and send it to COMM. */
+#if CUBERANGE_OBC_VERIFY_REPORTS
+/* PUS 1,2 - acceptance failure (ECSS-E-ST-70-41C 6.1). The spacecraft saying out loud that it
+ * refused, and which request it refused.
+ *
+ * EX-G02 and EX-G03 both end by saying their refusals are printk on a console the ground never
+ * sees, so an operator locked out by a misconfigured table and an operator being attacked look
+ * identical from the downlink - which is to say invisible. This is the layer both of them named
+ * and neither built.
+ *
+ * The request id is the failed packet's OWN first four octets: version, type, secondary header
+ * flag and APID, then sequence flags and count. Nothing is invented and nothing is remembered -
+ * the ground matches the report against a request it already has a copy of. Verified against
+ * src/cuberange/proto/pus.py: request_id(apid, seq) equals the encoded packet's raw[0..4].
+ */
+static void send_acceptance_failure(uint16_t dest_id, const uint8_t *failed_packet,
+				    uint8_t failure_code)
+{
+	uint8_t body[SP_HEADER_LEN + PUS_TM_SEC_LEN + TIME_LEN + 5];
+	uint32_t now = (uint32_t)k_uptime_get();
+	size_t data_len = PUS_TM_SEC_LEN + TIME_LEN + 5;
+
+	uint16_t word0 = (0 << 12) | (1 << 11) | OBC_APID;
+	uint16_t word1 = (uint16_t)((0x3u << 14) | (tm_seq_count++ & 0x3FFF));
+	uint16_t word2 = (uint16_t)(data_len - 1);
+
+	body[0] = (uint8_t)(word0 >> 8);  body[1] = (uint8_t)(word0 & 0xFF);
+	body[2] = (uint8_t)(word1 >> 8);  body[3] = (uint8_t)(word1 & 0xFF);
+	body[4] = (uint8_t)(word2 >> 8);  body[5] = (uint8_t)(word2 & 0xFF);
+
+	uint8_t *sec = body + SP_HEADER_LEN;
+	uint16_t counter = tm_msg_counter++;
+
+	sec[0] = PUS_VERSION << 4;
+	sec[1] = 1;                                    /* service 1, request verification */
+	sec[2] = 2;                                    /* subtype 2, acceptance failure   */
+	sec[3] = (uint8_t)(counter >> 8);   sec[4] = (uint8_t)(counter & 0xFF);
+	sec[5] = (uint8_t)(dest_id >> 8);   sec[6] = (uint8_t)(dest_id & 0xFF);
+	sec[7] = (uint8_t)(now >> 24); sec[8] = (uint8_t)(now >> 16);
+	sec[9] = (uint8_t)(now >> 8);  sec[10] = (uint8_t)(now & 0xFF);
+
+	uint8_t *app = sec + PUS_TM_SEC_LEN + TIME_LEN;
+
+	memcpy(app, failed_packet, 4);                 /* the request id, verbatim */
+	app[4] = failure_code;
+
+	csp_packet_t *packet = csp_buffer_get(sizeof(body));
+
+	if (packet == NULL) {
+		printk("OBC: no CSP buffer for an acceptance failure report\n");
+		return;
+	}
+	memcpy(packet->data, body, sizeof(body));
+	packet->length = (uint16_t)sizeof(body);
+
+	csp_conn_t *conn = csp_connect(CSP_PRIO_NORM, COMM_ADDR, CSP_PORT_PUS, 1000, CSP_O_NONE);
+
+	if (conn == NULL) {
+		printk("OBC: no CSP connection to COMM for the failure report\n");
+		csp_buffer_free(packet);
+		return;
+	}
+	csp_send(conn, packet);
+	csp_close(conn);
+	printk("OBC: PUS 1,2 acceptance failure reported to source %u (code %u)\n",
+	       dest_id, failure_code);
+}
+#endif
+
 static void send_test_report(uint16_t source_id)
 {
 	uint8_t body[SP_HEADER_LEN + PUS_TM_SEC_LEN + TIME_LEN];
@@ -261,7 +329,8 @@ static void command_comm_rail(uint8_t state)
 /* noinline so the handler owns a frame with a saved return address. Inlining is not a security
  * control and this is set for both builds, so the pair stays identical apart from the flag. */
 __attribute__((noinline))
-static void handle_function(const uint8_t *app_data, size_t len, uint16_t source_id)
+static void handle_function(const uint8_t *app_data, size_t len, uint16_t source_id,
+			    const uint8_t *failed_request_id)
 {
 	uint8_t args[PUS8_ARG_BUF_LEN];
 
@@ -278,6 +347,9 @@ static void handle_function(const uint8_t *app_data, size_t len, uint16_t source
 	if (!source_may_perform(source_id, function_id)) {
 		printk("OBC: REJECTED PUS 8 function %u from source %u - not authorised\n",
 		       (unsigned int)function_id, (unsigned int)source_id);
+#if CUBERANGE_OBC_VERIFY_REPORTS
+		send_acceptance_failure(source_id, failed_request_id, 1 /* not authorised */);
+#endif
 		return;
 	}
 #else
@@ -339,8 +411,9 @@ static void handle_space_packet(const uint8_t *raw, size_t len)
 	if (service == SERVICE_TEST && subtype == SUBTYPE_TEST) {
 		send_test_report(source_id);
 	} else if (service == SERVICE_FUNCTION && subtype == SUBTYPE_PERFORM) {
+		/* `raw` is the Space Packet, and its first four octets ARE the request id. */
 		handle_function(sec + PUS_TC_SEC_LEN, len - SP_HEADER_LEN - PUS_TC_SEC_LEN,
-				source_id);
+				source_id, raw);
 	} else {
 		printk("OBC: service %u,%u is not implemented in P0\n", service, subtype);
 	}
