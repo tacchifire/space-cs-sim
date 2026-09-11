@@ -46,6 +46,9 @@
 #ifndef CUBERANGE_COMM_ANTIREPLAY
 #define CUBERANGE_COMM_ANTIREPLAY 0
 #endif
+#ifndef CUBERANGE_COMM_ANTIREPLAY_PER_VC
+#define CUBERANGE_COMM_ANTIREPLAY_PER_VC 0
+#endif
 
 #define RX_RING_SIZE  512
 #define ROUTER_STACK  1024
@@ -97,6 +100,36 @@ static void on_tc_frame(const uint8_t *frame, size_t len, void *ctx)
 		return;
 	}
 #if CUBERANGE_COMM_ANTIREPLAY
+#if CUBERANGE_COMM_ANTIREPLAY_PER_VC
+	/* One counter PER VIRTUAL CHANNEL, which is what CCSDS 232.0-B-4 specifies: COP-1's FARM
+	 * state is per VC, not per link. The single-counter version below is correct exactly as
+	 * long as there is one ground station, and locks the second one out completely the moment
+	 * there are two - its frames carry sequence numbers behind the first station's and are
+	 * logged as REPLAYS, so the operator goes looking for an attacker who is their colleague.
+	 *
+	 * Sixty-four entries because the VCID field is six bits. A fixed table and no eviction: a
+	 * cache with a policy is a policy an attacker can drive. 128 bytes.
+	 */
+	static uint8_t last_seq_vc[64];
+	static uint8_t have_vc[64];
+	uint8_t vc = cr_tc_frame_vcid(frame, len);
+
+	if (vc > 63) {
+		printk("COMM: REJECTED frame with no readable virtual channel\n");
+		return;
+	}
+	if (have_vc[vc]) {
+		int8_t ahead = (int8_t)(seq - last_seq_vc[vc]);
+
+		if (ahead <= 0) {
+			printk("COMM: REJECTED replayed frame seq=%u on VC %u (last accepted %u)\n",
+			       seq, vc, last_seq_vc[vc]);
+			return;
+		}
+	}
+	have_vc[vc] = 1;
+	last_seq_vc[vc] = seq;
+#else
 	static int have_last;
 	static uint8_t last_seq;
 
@@ -111,6 +144,7 @@ static void on_tc_frame(const uint8_t *frame, size_t len, void *ctx)
 	}
 	have_last = 1;
 	last_seq = seq;
+#endif
 #endif
 
 	printk("COMM: uplink frame seq=%u carrying %u octets -> OBC\n",

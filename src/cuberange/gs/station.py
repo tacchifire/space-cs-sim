@@ -33,10 +33,14 @@ FUNC_SET_COMM_RAIL = 1
 
 
 class GroundStation:
-    def __init__(self, link: SpaceLink, station_id: int = GROUND_SOURCE_ID,
+    def __init__(self, link: SpaceLink, station_id: int = GROUND_SOURCE_ID, *, vcid: int = 0,
                  target_apid: int = OBC_APID, target_scid: int = SCID):
         self.link = link
         self.station_id = station_id
+        # The virtual channel this station transmits on. Every station used VC 0, and a spacecraft
+        # keeping one sequence counter for the link then cannot tell two operators apart from one
+        # operator replaying itself. CCSDS keeps that counter per VC for exactly this reason.
+        self.vcid = vcid
         self.target_apid = target_apid
         self.target_scid = target_scid
         self._tc_seq = 0
@@ -56,7 +60,7 @@ class GroundStation:
         packet = SpacePacket(apid=self.target_apid, ptype=PacketType.TC, sec_hdr=True,
                              seq_count=seq, data=tc.encode())
         self.link.send_frame(encode_tc_frame(packet.encode(), seq & 0xFF,
-                                             scid=self.target_scid))
+                                             scid=self.target_scid, vcid=self.vcid))
         return seq
 
     def send_connection_test(self) -> int:

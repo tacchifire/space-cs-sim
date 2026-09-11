@@ -37,6 +37,20 @@ GROUND_STATIONS = {"primary": 0x0042, "backup": 0x0043}
 #: The one every existing scenario, exercise and write-up means when it says "the ground station".
 GROUND_SOURCE_ID = GROUND_STATIONS["primary"]
 
+#: The TC virtual channel each ground station transmits on.
+#:
+#: CCSDS 232.0-B-4 gives the TC transfer frame a six-bit VCID, and COP-1 maintains the frame
+#: sequence number PER VIRTUAL CHANNEL - the FARM state is per VC, not per link. This range kept
+#: one counter for the whole link, which is indistinguishable from correct while there is one
+#: ground station and locks the second one out entirely the moment there are two: its frames
+#: arrive with sequence numbers behind the first station's and are logged as REPLAYS. Measured,
+#: and it is EX-G03.
+#:
+#: Not mirrored in identity.cmake, deliberately. Nothing on the spacecraft is compiled against a
+#: particular station's VCID - COMM keys a table on whatever arrives, which is what lets a third
+#: station appear without a firmware build.
+GROUND_VCIDS = {"primary": 0, "backup": 1}
+
 
 @dataclass(frozen=True)
 class Spacecraft:

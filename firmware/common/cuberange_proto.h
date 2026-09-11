@@ -51,6 +51,17 @@ int cr_encode_tm_frame(uint8_t *out, size_t out_cap,
 /* Return 0 on success. `payload` points into `frame`; it is not copied. */
 int cr_decode_tc_frame(const uint8_t *frame, size_t len, uint8_t *seq,
 		       const uint8_t **payload, size_t *payload_len);
+
+/* The virtual channel a TC frame arrived on: CCSDS 232.0-B-4 4.1.2.5, six bits in octet 2.
+ *
+ * Additive rather than another out-parameter on cr_decode_tc_frame, whose signature is called
+ * from several places and byte-checked against the Python codec. Returns 0xFF for a frame too
+ * short to have the field, which is not a valid six-bit VCID and so cannot be mistaken for one.
+ *
+ * COMM needs this because the standard maintains the frame sequence number PER VIRTUAL CHANNEL
+ * (COP-1's FARM state is per VC), and this implementation kept one counter for the whole link -
+ * which works exactly as long as there is one ground station. */
+uint8_t cr_tc_frame_vcid(const uint8_t *frame, size_t len);
 int cr_decode_tm_frame(const uint8_t *frame, size_t len, uint8_t *mc, uint8_t *vc,
 		       const uint8_t **payload, size_t *payload_len);
 

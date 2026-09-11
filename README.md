@@ -35,9 +35,16 @@ mitigation admitted to:
   puts in its own header. The spacecraft had been reading that field, printing it, and echoing it
   back down since P0, without ever deciding anything with it.
 
+- **EX-G03** — the cheapest attack here, and the one that needs nothing: a single well-formed
+  frame with a sequence number ahead of the operator's, on any virtual channel. EX-L01's replay
+  defence keeps one counter for the whole link, so every later command from the real operator is
+  rejected — as a *replay*, which sends them hunting an attacker who left thirty seconds ago. The
+  same defect locks out a second legitimate ground station just by its existing.
+
 All five attack origins are covered: the internal bus, the space link, the ADCS command envelope,
-the OBC's own command parser, and the ground segment that decides what to send. EX-G02 adds no
-sixth origin on purpose — its subject is a legitimate origin exceeding its authority.
+the OBC's own command parser, and the ground segment that decides what to send. EX-G02 and EX-G03
+add no sixth on purpose — one is a legitimate origin exceeding its authority, the other is a
+legitimate origin that is not exceeding anything.
 
 **Two ground stations, two consoles.** `make ground-stations` runs both as separate nodes
 against one spacecraft, and `make gs STATION=backup` is a console to sit at while a scenario runs

@@ -56,3 +56,13 @@ pairs:
     flag: CUBERANGE_OBC_REQUIRE_AUTHORITY
     vuln: { value: "0", build: build-obc-g02-vuln }
     hard: { value: "1", build: build-obc-g02-hard }
+
+  # Both halves have the anti-replay ON. What differs is WHERE the counter lives - one for the
+  # link, or one per virtual channel as CCSDS 232.0-B-4 and COP-1 specify. EX-L01's pair holds
+  # CUBERANGE_COMM_ANTIREPLAY_PER_VC equal across its own halves, which is what lets the gate say
+  # "exactly one differs" about both pairs over one application.
+  - id: EX-G03
+    app: firmware/apps/comm
+    flag: CUBERANGE_COMM_ANTIREPLAY_PER_VC
+    vuln: { value: "0", build: build-comm-g03-vuln }
+    hard: { value: "1", build: build-comm-g03-hard }

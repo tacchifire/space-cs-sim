@@ -1,0 +1,76 @@
+:name: EX-G03 - one counter, two transmitters
+:description: COMM with the EX-L01 anti-replay on. A second transmitter is all it takes
+
+# Execution profile (design 4.3; rules G1/G2 of section 9.2). Renode's Monitor has no conditionals,
+# so the profile is a file the harness swaps by overriding $profile - the same mechanism $injector
+# uses, and for the same reason: a relative include inside an included file resolves against
+# Renode's own working directory, not this file.
+#
+# This include is FIRST on purpose. A failing command aborts the rest of a .resc file, so a profile
+# that cannot be found takes the machines down with it and the failure is loud. Last, it would have
+# been silent in the worst way: every node built, running with no quantum set at all.
+$profile?=@~/space-cs-sim/scripts/profiles/interactive.resc
+include $profile
+
+# Every path below hangs off $out, and $out has NO default on purpose.
+#
+# These lines used to read @/tmp/cuberange/build-comm/zephyr/zephyr.elf and so on - one absolute
+# path shared by every checkout of this repository. A second working copy on the same machine
+# built into it, and this scenario then loaded THAT checkout's firmware without a word. The
+# exercises made it worse by overriding only the one image under test, so the node being attacked
+# came from here and the nodes around it came from somebody else.
+#
+# Unset, $out resolves to nothing and LoadELF fails where you can see it. That is the intended
+# behaviour: refusing to start beats starting with the wrong firmware. The harness always passes
+# it; for a manual run, so must you:
+#
+#   renode -e '$out=@'"$(make -s out)" -e 'include @<this file>' -e start
+$comm?=$out/build-comm-g03-vuln/zephyr/zephyr.elf
+$obc?=$out/build-obc-g02-hard/zephyr/zephyr.elf
+$eps?=$out/build-eps-hard/zephyr/zephyr.elf
+$commuart?=$out/comm.uart
+$obcuart?=$out/obc.uart
+$epsuart?=$out/eps.uart
+$linkport?=3777
+
+emulation CreateCANHub "canHub"
+
+mach create "COMM"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $comm
+sysbus.usart3 CreateFileBackend $commuart true
+emulation CreateServerSocketTerminal $linkport "spacelink" false
+connector Connect sysbus.usart2 spacelink
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "OBC"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $obc
+sysbus.usart3 CreateFileBackend $obcuart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+# Everything except COMM is the HARDENED build, and that is the point. EX-B01's bus forgery is
+# fixed, EX-G02's missing authority check is fixed, EX-F01's overflow is fixed. The only thing
+# left in play is the EX-L01 anti-replay, which is ON - and this exercise is about what that
+# defence does when the link has more than one transmitter on it.
+mach create "EPS"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $eps
+sysbus.usart3 CreateFileBackend $epsuart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+# No attacker machine and no CAN injector. What the attacker needs here is smaller than in any
+# other exercise in this range: the ability to put ONE well-formed frame on the link. Not a
+# forged command, not a privileged one - a frame whose only remarkable property is a sequence
+# number ahead of the operator's.
+#
+# The second ground station in this scenario is not an attacker at all. It is a real site with
+# real business, and the defence cannot tell it apart from a replay.

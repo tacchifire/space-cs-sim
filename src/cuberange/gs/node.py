@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Optional
 
 from .. import ports
-from ..identity import spacecraft
+from ..identity import GROUND_VCIDS, spacecraft
 from ..paths import out_dir
 from . import authority
 from .link import SpaceLink
@@ -55,6 +55,7 @@ class GroundStationNode:
         self.satellite = satellite
         self.override = override
         self.source_id = authority.station_id(station)     # raises on an unknown station
+        self.vcid = GROUND_VCIDS[station]
         self.sat = spacecraft(satellite)
         self.link_port = link_port if link_port is not None else ports.link(satellite)
         self.log_path = log_path or (out_dir() / f"gs-{station}.log")
@@ -75,10 +76,10 @@ class GroundStationNode:
     def connect(self, retries: int = 60) -> "GroundStationNode":
         self._link = SpaceLink(port=self.link_port)
         self._link.connect(retries=retries)
-        self._station = GroundStation(self._link, station_id=self.source_id,
+        self._station = GroundStation(self._link, station_id=self.source_id, vcid=self.vcid,
                                       target_apid=self.sat.apid, target_scid=self.sat.scid)
         self.log(f"up on port {self.link_port}, talking to satellite {self.satellite} "
-                 f"(SCID 0x{self.sat.scid:03X})")
+                 f"(SCID 0x{self.sat.scid:03X}, VC {self.vcid})")
         return self
 
     def close(self) -> None:

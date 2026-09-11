@@ -52,6 +52,7 @@ help:
 	@echo "make probe      - verify every Renode capability the design depends on"
 	@echo "make firmware   - build the two CSP nodes"
 	@echo "make firmware-g02 - EX-G02's pair: the OBC with and without the authority check"
+	@echo "make firmware-g03 - EX-G03's pair: the replay counter per link or per channel"
 	@echo "make demo       - run the two nodes over a CAN hub and show the CSP pings"
 	@echo "make spike      - host-side proof: raw CAN injection + External Control"
 
@@ -211,7 +212,7 @@ verify:
 	    python3 -m pytest exercises/$(EX)/verify_*.py -v
 
 # Every exercise, both directions. This is the claim the product makes.
-verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02)
+verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02 firmware-g03)
 	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest exercises/*/verify_*.py -v
 
@@ -263,7 +264,7 @@ firmware-f01: firmware-p1
 # prerequisite once per invocation, so this is one pristine build of each of the seven images
 # rather than the four rounds `check` used to do.
 .PHONY: firmware-all
-firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02
+firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03
 	@echo "all node images built:"
 	@ls -1 $(OUT)/build-*/zephyr/zephyr.elf
 
@@ -343,6 +344,17 @@ firmware-g01: firmware-f01
 # service 8 that still executes for anyone, and leaving the overflow in would let a reader
 # conclude the overflow was the problem. The two differ only in CUBERANGE_OBC_REQUIRE_AUTHORITY,
 # which is what tools/config_diff_gate.py checks.
+# EX-G03's pair. The anti-replay is ON in both: what differs is whether its counter is per link
+# or per virtual channel.
+firmware-g03:
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-comm-g03-vuln firmware/apps/comm -- \
+	    -DCUBERANGE_COMM_ANTIREPLAY=1 -DCUBERANGE_COMM_ANTIREPLAY_PER_VC=0
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-comm-g03-hard firmware/apps/comm -- \
+	    -DCUBERANGE_COMM_ANTIREPLAY=1 -DCUBERANGE_COMM_ANTIREPLAY_PER_VC=1
+	@ls -l $(OUT)/build-comm-g03-vuln/zephyr/zephyr.elf $(OUT)/build-comm-g03-hard/zephyr/zephyr.elf
+
 firmware-g02:
 	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
 	    -d $(OUT)/build-obc-g02-vuln firmware/apps/obc -- \

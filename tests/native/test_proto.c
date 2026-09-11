@@ -134,6 +134,31 @@ static void test_deframer_resynchronises_after_garbage(void)
 	      "the frame after the garbage was intact");
 }
 
+
+/* The virtual channel field, which COMM needs because CCSDS keeps the frame sequence number per
+ * virtual channel and this implementation kept one counter for the whole link. Compared against
+ * hand-built headers rather than against our own encoder: cr_encode_tc_frame only ever emits
+ * CR_VCID, so a round trip through it would agree with itself about a field it never varies. */
+static void test_tc_frame_vcid_is_read_from_octet_two(void)
+{
+	/* CCSDS 232.0-B-4 4.1.2.5: six bits, octet 2 bits 7..2. Built here, not encoded. */
+	static const struct { uint8_t octet2; uint8_t vcid; } cases[] = {
+		{ 0x00, 0 }, { 0x04, 1 }, { 0xFC, 63 }, { 0x80, 32 }, { 0x7C, 31 },
+	};
+	for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		uint8_t frame[8] = { 0x00, 0xA9, cases[i].octet2, 0x07, 0x00, 0x00, 0x00, 0x00 };
+		CHECK(cr_tc_frame_vcid(frame, sizeof(frame)) == cases[i].vcid,
+		      "VCID read from octet 2 bits 7..2");
+	}
+	/* The length field shares octet 2's low two bits and must not leak into the VCID. */
+	uint8_t shared[8] = { 0x00, 0xA9, 0x03, 0xFF, 0, 0, 0, 0 };
+	CHECK(cr_tc_frame_vcid(shared, sizeof(shared)) == 0, "the frame length bits are not VCID");
+
+	uint8_t stub[3] = { 0, 0, 0 };
+	CHECK(cr_tc_frame_vcid(stub, sizeof(stub)) == 0xFF,
+	      "a frame too short to hold the field reports a value no VCID can take");
+}
+
 int main(void)
 {
 	test_crc_check_vector();
@@ -142,6 +167,7 @@ int main(void)
 	test_decode_rejects_corruption();
 	test_deframer_across_chunk_boundaries();
 	test_deframer_resynchronises_after_garbage();
+	test_tc_frame_vcid_is_read_from_octet_two();
 
 	if (failures) {
 		printf("%d FAILURES\n", failures);

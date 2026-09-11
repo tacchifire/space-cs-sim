@@ -72,6 +72,14 @@ int cr_encode_tm_frame(uint8_t *out, size_t out_cap,
 	return (int)total;
 }
 
+uint8_t cr_tc_frame_vcid(const uint8_t *frame, size_t len)
+{
+	if (len < CR_TC_HEADER_LEN) {
+		return 0xFF;
+	}
+	return (uint8_t)((frame[2] >> 2) & 0x3F);
+}
+
 int cr_decode_tc_frame(const uint8_t *frame, size_t len, uint8_t *seq,
 		       const uint8_t **payload, size_t *payload_len)
 {

@@ -38,11 +38,14 @@ wrong: probe.sh's 1.5x four-node speed floor, which this eight-core machine clea
 looked like the obvious thing to blame on a two-vCPU runner. The probe passes there in 110
 seconds. Blaming the host was the comfortable guess, and it was the wrong one.
 
-Six exercises work today. Five cover an attack origin each: EX-B01 (internal bus), EX-L01 (space
-link), EX-A01 (ADCS command envelope), EX-F01 (the OBC's own PUS 8 parser) and EX-G01 (the ground
-segment that decides what to send). EX-G02 is the second ground-segment one and covers no new
-origin - its point is that the origin is legitimate: a real station sending a real command it has
-no authority for, differing from an authorised frame by one octet. 22 assertions, all measured.
+Seven exercises work today. Five cover an attack origin each: EX-B01 (internal bus), EX-L01
+(space link), EX-A01 (ADCS command envelope), EX-F01 (the OBC's own PUS 8 parser) and EX-G01 (the
+ground segment that decides what to send). Two add no new origin on purpose. EX-G02's point is
+that the origin is legitimate: a real station sending a real command it has no authority for,
+differing from an authorised frame by one octet. EX-G03's is that the origin need not be an
+attacker at all - EX-L01's own mitigation keeps one replay counter for the whole link, so a
+second legitimate ground station locks the first one out and the console calls it a replay.
+26 assertions, all measured.
 
 EX-G01 is the host-side one, so the "differ by one flag" proof works differently: one `Scheduler`,
 two `ImportPolicy` objects, and `test_schedule_policy.py` fails if `schedule.py` so much as names
