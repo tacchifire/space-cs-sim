@@ -273,6 +273,7 @@ make soak-p0      # ウォッチドッグ下で 30 回連続の往復           
 
 ```
 tools/renode-probe/probe.sh     証拠のゲート
+tests/native/fuzz_proto.c       コーデックの契約。ASan/UBSan 下。5 変異を検出
 tools/setup-toolchain.sh        Zephyr + SDK。root 不要、Docker 不要
 firmware/common/                C 側のワイヤコーデック。Python 側とバイト単位で照合済み
 firmware/apps/{comm,obc,eps,adcs}/  ノードの役割。ソースツリーは 1 つ、プロファイルごとに 1 ビルド

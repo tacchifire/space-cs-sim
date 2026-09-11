@@ -31,8 +31,13 @@ Currently intended, and not vulnerabilities:
   the Renode clients — that is exploitable by data arriving over a socket. These parse
   attacker-controlled bytes and are *not* intended to be vulnerable.
 - A defect in `firmware/common/cuberange_proto.c`. It is the shared codec, compiled into every
-  node including the mitigated builds, and it is fuzzed and sanitised precisely because it is not
-  supposed to have any.
+  node including the mitigated builds. `make check` runs it under ASan and UBSan and through a
+  seeded random fuzzer that asserts the decoder's contract — a frame it accepts must have a
+  declared length equal to its actual length and a zero FECF residue, and a reported payload must
+  lie inside the frame it came from. That fuzzer is not coverage-guided; libFuzzer is unavailable
+  in this toolchain and no other fuzzer is installed, both checked. Until 2026-09-12 this sentence
+  said the codec "is fuzzed and sanitised" while there was no fuzzer and `make check` ran the
+  un-sanitised build.
 - Anything in a mitigated build (`*-hard`) that the corresponding exercise claims is blocked.
 - Anything that executes downloaded content, or reaches the network outside the artifact-fetch
   step.

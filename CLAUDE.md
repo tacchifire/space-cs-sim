@@ -275,6 +275,7 @@ classified. Do not add real identifiers, frequencies, keys or endpoints to anyth
 
 ```
 tools/renode-probe/probe.sh     the evidence gate
+tests/native/fuzz_proto.c       the codec's contract, under ASan and UBSan; 5 mutations caught
 tools/setup-toolchain.sh        Zephyr + SDK, no root, no Docker
 firmware/common/                the C wire codec, byte-checked against the Python one
 firmware/apps/{comm,obc,eps,adcs}/  node roles; one source tree, one build per profile
