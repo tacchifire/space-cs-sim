@@ -32,9 +32,16 @@ WHAT IS SIMPLIFIED, stated rather than buried:
   - One Security Association, one key, compiled in. That is not key management. EX-X01's
     mitigation already says a fixed shared secret is a thing you have rather than a thing you
     prove, and moving it under a MAC does not change that.
-  - The anti-replay sequence number is carried and compared, but the window is a single counter.
-    EX-G03 is about what one counter does when there are two transmitters, and putting the same
-    counter inside a security header does not fix it - it moves it.
+  - The anti-replay window is a single high-water mark, not a window. 355.0-B-2 provides for one
+    (the SA's arsnw) and a real receiver needs it, because frames arrive out of order. A
+    high-water mark is the degenerate window of size one.
+
+    And EX-G03's problem is still here, one layer up: two ground stations transmitting on ONE
+    Security Association lock each other out exactly as they did on one virtual channel. The
+    difference is that SDLS has somewhere to put the fix - anti-replay state belongs to the SA,
+    so two stations get two SAs and two counters - whereas EX-G03 had to move the counter onto
+    the virtual channel and hope those lined up with the stations. That fix is not implemented
+    here either: one SA, one counter, and the limit is written down rather than discovered.
 
 AES-GCM comes from `cryptography` (OpenSSL). `tests/golden/sdls.json` checks it against libsodium
 through PyNaCl, which is a different implementation and not a different spelling of the same one,
