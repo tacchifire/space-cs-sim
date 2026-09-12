@@ -283,6 +283,96 @@ frames_doc = {
 }
 (OUT / "transfer_frame.json").write_text(json.dumps(frames_doc, indent=2))
 
+# ------------------------------------------------------- SDLS: layout by CryptoLib, tag by libsodium
+#
+# Two oracles for two different questions, because they are different questions.
+#
+#   WHERE the fields are: sdls_oracle, which is CryptoLib parsing octets it did not produce. Its
+#   own unit tests use frames with a segment header, which puts the SPI at 8; this range emits
+#   none, so it should be at 5, and that is the difference worth an outside opinion.
+#
+#   WHAT the MAC is: libsodium via PyNaCl, which is a different AES-GCM implementation from the
+#   OpenSSL one `cryptography` wraps and the codec uses. Plus the NIST GCM vectors below, which
+#   are not an implementation at all.
+import nacl.bindings as _sodium
+
+def _tag_libsodium(key, iv, aad):
+    """The GCM tag over aad with no plaintext - libsodium's answer, not OpenSSL's."""
+    return _sodium.crypto_aead_aes256gcm_encrypt(b"", aad, iv, key)
+
+#: NIST SP 800-38D / CAVP AES-256-GCM, the published vectors. Authentication-only cases: empty
+#: plaintext, AAD covered, tag checked. These are the floor under both implementations.
+NIST_AES256_GCM = [
+    # (key, iv, aad, expected tag) - from the NIST GCM test vectors, 256-bit key, 96-bit IV.
+    ("0000000000000000000000000000000000000000000000000000000000000000",
+     "000000000000000000000000", "", "530f8afbc74536b9a963b4f1c4cb738b"),
+    ("b52c505a37d78eda5dd34f20c22540ea1b58963cf8e5bf8ffa85f9f2492505b4",
+     "516c33929df5a3284ff463d7", "", "bdc1ac884d332457a1d2664f168c76f0"),
+]
+
+_sdls_key = bytes(range(32))
+SDLS_CASES = [
+    # (spi, iv, sn, frame_seq, scid, vcid, payload)
+    (9, bytes(range(0xA0, 0xAC)), 0x01020304, 0, 0x0A9, 0, bytes.fromhex("08a9c00000000a")),
+    (62, bytes(12), 0, 0, 0x0A9, 0, b""),      # the top SPI CryptoLib will hold
+    (0xFFFE, b"\xFF" * 12, 0xFFFFFFFF, 255, 0x3FF, 63, bytes(range(40))),
+    (2, bytes(range(0x10, 0x1C)), 7, 3, 0x0AA, 1, b"\xAA" * 64),
+]
+
+sdls_vectors = []
+sdls_frames = []
+for spi, iv, sn, fseq, scid, vcid, payload in SDLS_CASES:
+    total = 5 + 2 + 12 + 4 + len(payload) + 16 + 2
+    header = bytes([(scid >> 8) & 0x03, scid & 0xFF,
+                    ((vcid & 0x3F) << 2) | (((total - 1) >> 8) & 0x03),
+                    (total - 1) & 0xFF, fseq & 0xFF])
+    aad = header + spi.to_bytes(2, "big") + iv + sn.to_bytes(4, "big") + payload
+    tag = _tag_libsodium(_sdls_key, iv, aad)      # libsodium, not the codec's OpenSSL
+    body = aad + tag
+    frame = body + crc16_a(body).to_bytes(2, "big")   # crcmod, not our CRC
+    sdls_frames.append(H(frame))
+    sdls_vectors.append({"spi": spi, "iv": H(iv), "seq_num": sn, "frame_seq": fseq,
+                         "scid": scid, "vcid": vcid, "payload": H(payload),
+                         "mac": H(tag), "frame": H(frame), "total_octets": total})
+
+parsed_sdls = json.loads(subprocess.run(["./sdls_oracle", "12", "4", "16", *sdls_frames],
+                                        capture_output=True, text=True, check=True).stdout)
+assert len(parsed_sdls) == len(sdls_vectors)
+for meta, got in zip(sdls_vectors, parsed_sdls):
+    #: A declined record has no fields to copy, and saying so is the point: CryptoLib's in-memory
+    #: SA store holds 64 associations and refuses the first and last, while the SDLS SPI field is
+    #: sixteen bits. A vector outside that range is still a vector - it exercises the codec - and
+    #: what it must not do is look like agreement.
+    if "declined" in got:
+        meta["cryptolib"] = {"declined": got["declined"]}
+        continue
+    meta["cryptolib"] = {k: got[k] for k in ("spi", "spi_at", "iv_len", "iv_at", "iv",
+                                             "sn_len", "sn_at", "sn", "pad_len",
+                                             "pdu_at", "pdu_len", "mac_len", "mac_at",
+                                             "mac_at_from_frame_end")}
+
+sdls_doc = {
+    "spec": "CCSDS 355.0-B-2 4.2 TC security header and trailer, AUTHENTICATION service only",
+    "oracles": [
+        "NASA CryptoLib Crypto_TC_ProcessSecurity for the field offsets (NOSA-1.3, separate process)",
+        "libsodium via PyNaCl for the AES-256-GCM tag - a different implementation from the "
+        "OpenSSL one the codec uses",
+        "NIST SP 800-38D / CAVP AES-256-GCM vectors for the primitive itself",
+    ],
+    "layout": "primary(5) | SPI(2) | IV(12) | SN(4) | PDU | MAC(16) | FECF(2)",
+    "segment_header": ("none. CryptoLib's own tests carry one, which puts the SPI at 8; this "
+                       "range emits none, so it is at 5. That is what the oracle is pointed at."),
+    "aad": ("the whole frame from octet 0 through the payload. The FECF is outside it - it covers "
+            "the finished frame including the MAC, and a receiver checks it first."),
+    "status_note": ("sdls_oracle returns -61 = CRYPTO_LIB_ERR_KEY_STATE_INVALID for every vector. "
+                    "That is deliberate: the parse is stopped at the last point before "
+                    "Crypto_TC_Do_Decrypt, which needs a cryptography backend this host cannot "
+                    "build. Everything below is populated by then."),
+    "nist_aes256_gcm": [{"key": k, "iv": i, "aad": a, "tag": t} for k, i, a, t in NIST_AES256_GCM],
+    "vectors": sdls_vectors,
+}
+(OUT / "sdls.json").write_text(json.dumps(sdls_doc, indent=2))
+
 print("wrote:", *[p.name for p in sorted(OUT.iterdir())])
 print()
 print("CRC-16 vectors (4 oracles agree, incl. NASA CryptoLib):")
