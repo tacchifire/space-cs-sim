@@ -52,10 +52,29 @@
 #ifndef CUBERANGE_COMM_CROSSLINK
 #define CUBERANGE_COMM_CROSSLINK 0
 #endif
+#ifndef CUBERANGE_COMM_SDLS
+#define CUBERANGE_COMM_SDLS 0
+#endif
+
+/* Included after the default above, not beside the other headers. A `#if` on a macro that has not
+ * been defaulted yet is 0 whatever the build says, and the symptom would be a build with SDLS on
+ * whose verifier was compiled out. */
+#if CUBERANGE_COMM_SDLS
+#include "cuberange_sdls.h"
+#include "cuberange_keys.h"
+#include <mbedtls/gcm.h>
+#endif
 
 #define RX_RING_SIZE  512
 #define ROUTER_STACK  1024
+/* link_task keeps a cr_deframer_t on its stack - 1032 octets of frame buffer - and the SDLS build
+ * calls sdls_verify from inside on_tc_frame, whose frame carries a 424-octet mbedtls_gcm_context.
+ * 2048 held the first and not both. */
+#if CUBERANGE_COMM_SDLS
+#define LINK_STACK    3072
+#else
 #define LINK_STACK    2048
+#endif
 #define DOWN_STACK    2048
 
 static const struct device *link_dev;
@@ -92,6 +111,86 @@ static void link_write(const uint8_t *buf, size_t len)
 	}
 }
 
+#if CUBERANGE_COMM_SDLS
+/* Verify one authenticated TC frame, and answer only whether it verified.
+ *
+ * The order is the order a spacecraft must use and is not a preference: shape, then the declared
+ * length, then the FECF, then the MAC. cr_sdls_split does the first three and touches no key;
+ * running a cipher first would mean running it over octet counts an attacker chose.
+ *
+ * mbedtls_gcm_auth_decrypt with a zero-length input is what authentication-only means: the
+ * payload is additional authenticated data, there is no ciphertext, and the MAC is the GCM tag.
+ */
+static bool sdls_verify(const uint8_t *frame, size_t len, struct cr_sdls_parts *parts)
+{
+	if (cr_sdls_split(frame, len, CR_SDLS_IV_LEN, CR_SDLS_SN_LEN, CR_SDLS_MAC_LEN, parts) != 0) {
+		return false;
+	}
+	if (parts->spi != CR_SDLS_SPI) {
+		/* Logged by the caller. One association is all this range has, and a frame for
+		 * another one is not an error in the frame - it is a frame for somebody else. */
+		return false;
+	}
+
+	mbedtls_gcm_context gcm;
+	mbedtls_gcm_init(&gcm);
+	bool ok = false;
+
+	if (mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, cr_sdls_key,
+			       8 * sizeof(cr_sdls_key)) == 0) {
+		ok = mbedtls_gcm_auth_decrypt(&gcm, 0, parts->iv, parts->iv_len,
+					      parts->aad, parts->aad_len,
+					      parts->mac, parts->mac_len, NULL, NULL) == 0;
+	}
+	mbedtls_gcm_free(&gcm);
+	return ok;
+}
+
+/* One published NIST AES-256-GCM vector, at boot, before anything depends on the answer.
+ *
+ * Renode models registers rather than physics, and mbedTLS here is software - but "the crypto
+ * library built" and "the crypto library computes the right tag on this target" are different
+ * claims, and only one of them is checked by the build succeeding. A wrong answer would show up
+ * as every telecommand being refused, which is indistinguishable from a wrong key, a wrong
+ * layout, or a link that dropped the frame. That is EX-G04's problem again, so it gets an answer
+ * that is printed once and is either right or loudly not.
+ *
+ * Key and IV all zero, no AAD, empty plaintext; tag 530f8afb... The same vector is in
+ * tests/golden/sdls.json, checked there against OpenSSL.
+ */
+static void sdls_selftest(void)
+{
+	static const uint8_t zero_key[32] = {0};
+	static const uint8_t zero_iv[12] = {0};
+	static const uint8_t expect[16] = {
+		0x53, 0x0F, 0x8A, 0xFB, 0xC7, 0x45, 0x36, 0xB9,
+		0xA9, 0x63, 0xB4, 0xF1, 0xC4, 0xCB, 0x73, 0x8B,
+	};
+	uint8_t tag[16] = {0};
+	mbedtls_gcm_context gcm;
+
+	mbedtls_gcm_init(&gcm);
+	int rc = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, zero_key, 256);
+
+	if (rc == 0) {
+		rc = mbedtls_gcm_crypt_and_tag(&gcm, MBEDTLS_GCM_ENCRYPT, 0, zero_iv,
+					       sizeof(zero_iv), NULL, 0, NULL, NULL,
+					       sizeof(tag), tag);
+	}
+	mbedtls_gcm_free(&gcm);
+
+	if (rc != 0) {
+		printk("COMM: SDLS SELFTEST FAILED - mbedTLS returned %d\n", rc);
+		return;
+	}
+	if (memcmp(tag, expect, sizeof(expect)) != 0) {
+		printk("COMM: SDLS SELFTEST FAILED - wrong tag\n");
+		return;
+	}
+	printk("COMM: SDLS self-test passed (NIST AES-256-GCM vector)\n");
+}
+#endif /* CUBERANGE_COMM_SDLS */
+
 /* One deframed TC frame: strip the frame header and hand the Space Packet to the OBC. */
 static void on_tc_frame(const uint8_t *frame, size_t len, void *ctx)
 {
@@ -101,10 +200,37 @@ static void on_tc_frame(const uint8_t *frame, size_t len, void *ctx)
 	const uint8_t *packet;
 	size_t packet_len;
 
+#if CUBERANGE_COMM_SDLS
+	/* FIRST, and instead of cr_decode_tc_frame - not after it.
+	 *
+	 * An authenticated frame is not a plain one with something appended: its payload starts
+	 * after the security header, so cr_decode_tc_frame would hand the OBC the SPI and the IV as
+	 * if they were the first octets of a Space Packet. Authenticated and plain framing are two
+	 * formats and this build speaks one of them.
+	 *
+	 * Nothing below this point runs on an unverified frame. The anti-replay counter in
+	 * particular: EX-L01's counter reads the frame sequence number out of the primary header,
+	 * which an attacker writes, and SDLS carries its own sequence number INSIDE the
+	 * authenticated portion. Checking the outer one first would be checking the attacker's copy.
+	 */
+	struct cr_sdls_parts parts;
+
+	if (!sdls_verify(frame, len, &parts)) {
+		printk("COMM: dropping a TC frame that did not authenticate\n");
+		return;
+	}
+	seq = frame[4];
+	packet = parts.payload;
+	packet_len = parts.payload_len;
+	printk("COMM: authenticated frame, SPI %u seq %u, %u octets of payload\n",
+	       (unsigned int)parts.spi, (unsigned int)parts.seq_num,
+	       (unsigned int)parts.payload_len);
+#else
 	if (cr_decode_tc_frame(frame, len, &seq, &packet, &packet_len) != 0) {
 		printk("COMM: dropping a TC frame that failed its FECF or length check\n");
 		return;
 	}
+#endif
 #if CUBERANGE_COMM_ANTIREPLAY
 #if CUBERANGE_COMM_ANTIREPLAY_PER_VC
 	/* One counter PER VIRTUAL CHANNEL, which is what CCSDS 232.0-B-4 specifies: COP-1's FARM
@@ -412,6 +538,9 @@ int main(void)
 	k_thread_start(link_id);
 	k_thread_start(down_id);
 
+#if CUBERANGE_COMM_SDLS
+	sdls_selftest();
+#endif
 	printk("CUBERANGE: COMM ready, link on %s\n", link_dev->name);
 
 #if CUBERANGE_COMM_CROSSLINK

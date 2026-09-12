@@ -217,3 +217,37 @@ class GroundStation:
                     continue
                 return tm
         return None
+
+    def alive(self, timeout: float = 20.0, per_ping_s: float = 8.0) -> bool:
+        """Whether the spacecraft answers, given more than one chance to.
+
+        WHY THIS IS NOT ONE PING. Five exercise verifiers each had their own three-line
+
+            return self.station.ping(timeout=...) is not None
+
+        used as a PRECONDITION - `assert r.alive(), "the satellite was not answering before the
+        attack"` - and asserted more than ten times across them. One unanswered ping therefore
+        failed the whole test, before the attack under test had been sent. It happened in CI on
+        2026-09-12, in EX-G01, and three re-runs of the same test passed: a gate that reports
+        link luck as a mitigation failure is worse than no gate, because somebody will start
+        re-running it until it is green and stop reading what it says.
+
+        A spacecraft that answers the second ping is alive. A spacecraft that answers none of
+        them inside the deadline is not, and this still says so - the deadline is the claim, and
+        it is longer than one round trip because the claim is about the spacecraft rather than
+        about one frame.
+
+        `timeout` is how long to keep TRYING, which is what the callers already meant by it.
+
+        AND NOTE THE NEGATIVE USE, which is the half that matters more. Several tests assert
+        `not alive(timeout=8)` - "the satellite stopped answering after the attack". As one ping
+        that was cheap and wrong: a single lost frame proved the attack worked. Retrying makes it
+        cost the whole budget and makes it true, because "it did not answer" is a stronger claim
+        than "it answered" and needs more patience, not less.
+        """
+        deadline = time.time() + timeout
+        while True:
+            if self.ping(timeout=min(per_ping_s, max(0.5, deadline - time.time()))) is not None:
+                return True
+            if time.time() >= deadline:
+                return False

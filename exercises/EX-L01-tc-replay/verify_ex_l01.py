@@ -107,8 +107,14 @@ class Range:
                 closer.stop() if hasattr(closer, "stop") else closer.close()
         self._ctx.__exit__(*exc)
 
-    def alive(self, timeout: float = 8.0) -> bool:
-        return self.station.ping(timeout=timeout) is not None
+    def alive(self, timeout: float = 20.0) -> bool:
+        """One ping is link luck, not liveness - see GroundStation.alive.
+
+        `timeout` is how long to keep trying, which is what every caller here already
+        meant. The negative uses - `assert not r.alive(timeout=8)` - are why it has to
+        spend the budget rather than give up after one frame.
+        """
+        return self.station.alive(timeout=timeout)
 
     def wait_console(self, name: str, needle: str, seconds: float) -> bool:
         """Poll a node's console until it prints `needle`."""

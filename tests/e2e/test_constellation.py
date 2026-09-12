@@ -172,7 +172,10 @@ def test_both_spacecraft_answer_on_their_own_link(constellation):
         try:
             station = GroundStation(link, station_id=GROUND_SOURCE_ID + sat["obc"],
                                     target_apid=sat["scid"], target_scid=sat["scid"])
-            assert station.ping(timeout=15) is not None, (
+            #: alive(), not one ping. This asserts the spacecraft answers, and one unanswered
+            #: frame is not the same claim - see GroundStation.alive for the CI failure that
+            #: taught the difference.
+            assert station.alive(timeout=20.0, per_ping_s=8.0), (
                 f"satellite with SCID 0x{sat['scid']:03X} did not answer on port {sat['link']}")
         finally:
             link.close()

@@ -1,0 +1,57 @@
+:name: CubeRange - an authenticated uplink
+:description: COMM verifies a CCSDS 355.0-B-2 MAC on every frame before anything else reads it
+
+# Execution profile FIRST, so a profile that cannot be found takes the machines down loudly rather
+# than leaving every node running with no quantum set.
+$profile?=@~/space-cs-sim/scripts/profiles/interactive.resc
+include $profile
+
+# $out has NO default, on purpose - see any scenario in this repository for the incident that
+# taught it. Unset, LoadELF fails where you can see it.
+#
+#   renode -e '$out=@'"$(make -s out)" -e 'include @<this file>' -e start
+$comm?=$out/build-comm-sdls/zephyr/zephyr.elf
+$obc?=$out/build-obc-hard/zephyr/zephyr.elf
+$eps?=$out/build-eps-hard/zephyr/zephyr.elf
+$commuart?=$out/sdls-comm.uart
+$obcuart?=$out/sdls-obc.uart
+$epsuart?=$out/sdls-eps.uart
+$linkport?=3777
+
+emulation CreateCANHub "canHub"
+
+# COMM speaks AUTHENTICATED framing and only that. There is no "SDLS off" half of this: an
+# authenticated frame and a plain one are two formats, not one format with a flag - the payload
+# starts in a different place. Point a plain ground station at this and every frame is dropped,
+# which is the correct behaviour and is what test_sdls_uplink.py asserts.
+mach create "COMM"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $comm
+sysbus.usart3 CreateFileBackend $commuart true
+emulation CreateServerSocketTerminal $linkport "spacelink" false
+connector Connect sysbus.usart2 spacelink
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "OBC"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $obc
+sysbus.usart3 CreateFileBackend $obcuart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "EPS"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $eps
+sysbus.usart3 CreateFileBackend $epsuart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+# No attacker machine and no injector. What this scenario demonstrates needs neither: the
+# interesting frames are ones a ground station could send, differing from a valid one by a bit.

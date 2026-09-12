@@ -289,3 +289,109 @@ def test_nothing_launches_renode_without_this_class():
     assert not offenders, (
         "these spawn Renode directly instead of through RenodeSupervisor, so a wedged or leaking "
         "run has nothing watching it: " + ", ".join(offenders))
+
+
+# --------------------------------------------------------------------------------------------
+# Liveness preconditions
+#
+# Five exercise verifiers each carried their own
+#
+#     return self.station.ping(timeout=...) is not None
+#
+# and asserted it as a PRECONDITION more than ten times: `assert r.alive(), "the satellite was
+# not answering before the attack"`. One unanswered ping failed the whole test before the attack
+# under test had been sent. That happened in CI on 2026-09-12 in EX-G01, and three re-runs of the
+# same test passed - which is the worst outcome, because the next person re-runs it until it is
+# green and stops reading what it says.
+#
+# They now delegate to GroundStation.alive, which retries to a deadline. This is what stops a
+# sixth one from re-implementing it.
+
+def test_no_verifier_decides_liveness_on_a_single_ping():
+    import re
+
+    REPO = Path(__file__).resolve().parents[2]
+
+    offenders = []
+    for f in sorted(REPO.glob("exercises/*/verify_*.py")) + sorted(REPO.glob("tests/e2e/*.py")):
+        text = f.read_text()
+        for m in re.finditer(r"^.*\.ping\([^)]*\)\s*is not None.*$", text, re.M):
+            line = m.group(0)
+            #: A retry loop around a ping is the correct shape and reads the same way; what this
+            #: forbids is one ping standing for "the spacecraft is up".
+            if "while" in line or "def alive" in line:
+                continue
+            offenders.append(f"{f.relative_to(REPO)}: {line.strip()[:70]}")
+    assert not offenders, (
+        "these decide whether a spacecraft is alive on one round trip; use "
+        "GroundStation.alive, which retries to a deadline:\n  " + "\n  ".join(offenders))
+
+
+def test_the_shared_liveness_check_actually_retries():
+    """A helper that only pings once would satisfy the test above and fix nothing."""
+    import inspect
+
+    from cuberange.gs.station import GroundStation
+
+    src = inspect.getsource(GroundStation.alive)
+    assert "while" in src, "GroundStation.alive does not loop"
+    assert "deadline" in src, "GroundStation.alive has no deadline to loop until"
+
+
+def test_the_shared_liveness_check_gives_up():
+    """And it must return False rather than hang, or a dead spacecraft becomes a test timeout."""
+    import time as _time
+
+    from cuberange.gs.station import GroundStation
+
+    calls = []
+
+    class NeverAnswers(GroundStation):
+        def __init__(self):
+            pass
+
+        def ping(self, timeout=10.0):
+            calls.append(timeout)
+            return None
+
+    started = _time.time()
+    assert NeverAnswers().alive(timeout=1.0, per_ping_s=0.2) is False
+    assert _time.time() - started < 10, "alive() took far longer than its deadline"
+    assert len(calls) >= 2, f"it gave up after {len(calls)} ping(s); that is the old behaviour"
+
+
+def test_every_alive_call_in_the_repository_matches_the_signature():
+    """The mistake this catches was made while fixing W48, and it broke three tests in CI.
+
+    GroundStation.alive was added with a `deadline_s` parameter. Five verifiers already called
+    their own `alive(timeout=15)` and `not alive(timeout=8)`, so every one of those became a
+    TypeError - and pytest reports a TypeError in a precondition exactly the way it reports a
+    mitigation that stopped working. The signature is checked against its callers here because
+    the callers are in files this repository's other gates do not import.
+    """
+    import inspect
+    import re
+
+    from cuberange.gs.station import GroundStation
+
+    REPO = Path(__file__).resolve().parents[2]
+    accepted = set(inspect.signature(GroundStation.alive).parameters) - {"self"}
+    assert accepted, "GroundStation.alive takes no parameters; this test has nothing to check"
+
+    offenders = []
+    for f in sorted(REPO.glob("exercises/*/verify_*.py")) + sorted(REPO.glob("tests/e2e/*.py")):
+        text = f.read_text()
+        #: The per-file shims delegate, so their own signature has to accept what they are passed
+        #: too. Both are collected and compared against the shared one.
+        local = set()
+        m = re.search(r"def alive\(self,([^)]*)\)", text)
+        if m:
+            local = {k.strip() for k in re.findall(r"(\w+)\s*:", m.group(1))}
+        for call in re.finditer(r"\.alive\(([^)]*)\)", text):
+            for kw in re.findall(r"(\w+)\s*=", call.group(1)):
+                if kw not in accepted and kw not in local:
+                    offenders.append(f"{f.relative_to(REPO)}: .alive({kw}=...)")
+    assert not offenders, (
+        "these pass a keyword neither GroundStation.alive nor the local shim accepts, which "
+        "raises TypeError inside a precondition and reads like a broken mitigation:\n  "
+        + "\n  ".join(sorted(set(offenders))))
