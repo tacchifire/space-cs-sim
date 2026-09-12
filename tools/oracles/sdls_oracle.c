@@ -62,6 +62,20 @@ static int unhex(const char *hex, uint8_t *out, size_t cap)
     return (int)(n / 2);
 }
 
+static int unhex_prefix(const char *hex, uint8_t *out, size_t n)
+{
+    if (strlen(hex) < n * 2)
+        return -1;
+    for (size_t i = 0; i < n; i++)
+    {
+        unsigned v;
+        if (sscanf(hex + i * 2, "%2x", &v) != 1)
+            return -1;
+        out[i] = (uint8_t)v;
+    }
+    return 0;
+}
+
 static void print_hex(const char *name, const uint8_t *p, unsigned len, const char *tail)
 {
     printf("   \"%s\": \"", name);
@@ -72,15 +86,14 @@ static void print_hex(const char *name, const uint8_t *p, unsigned len, const ch
 
 int main(int argc, char **argv)
 {
-    if (argc < 6)
+    if (argc < 5)
     {
-        fprintf(stderr, "usage: %s <spi> <iv-len> <sn-len> <mac-len> <hex-frame> [...]\n", argv[0]);
+        fprintf(stderr, "usage: %s <iv-len> <sn-len> <mac-len> <hex-frame> [...]\n", argv[0]);
         return 2;
     }
-    uint16_t spi = (uint16_t)strtoul(argv[1], NULL, 0);
-    uint8_t iv_len = (uint8_t)strtoul(argv[2], NULL, 0);
-    uint8_t sn_len = (uint8_t)strtoul(argv[3], NULL, 0);
-    uint8_t mac_len = (uint8_t)strtoul(argv[4], NULL, 0);
+    uint8_t iv_len = (uint8_t)strtoul(argv[1], NULL, 0);
+    uint8_t sn_len = (uint8_t)strtoul(argv[2], NULL, 0);
+    uint8_t mac_len = (uint8_t)strtoul(argv[3], NULL, 0);
 
     Crypto_Config_CryptoLib(KEY_TYPE_INTERNAL, MC_TYPE_INTERNAL, SA_TYPE_INMEMORY,
                             CRYPTOGRAPHY_TYPE_LIBGCRYPT, IV_INTERNAL);
@@ -101,88 +114,56 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* Every SCID and VCID this range uses. Declared rather than wildcarded: CryptoLib looks the
-     * GVCID up exactly, and a frame from an undeclared spacecraft must fail here rather than be
-     * parsed against somebody else's parameters. */
-    for (uint16_t scid = 0x0A9; scid <= 0x0AC; scid++)
+    /* Register the GVCID of each frame this run was given, read out of the frame itself.
+     *
+     * Declared rather than wildcarded, because CryptoLib looks the GVCID up exactly and a frame
+     * from an undeclared spacecraft must fail here rather than be parsed against somebody else's
+     * parameters. Read from the frames rather than written out, because the first version listed
+     * SCIDs 0x0A9..0x0AC by hand and the golden vector for SCID 0x3FF - the extreme, which is
+     * precisely where a layout bug shows - came back unparsed with every field zero. A hardcoded
+     * list and a vector set drift apart silently; this cannot.
+     *
+     * This is also where has_segmentation_hdr is stated out loud rather than assumed. */
+    for (int a = 4; a < argc; a++)
     {
-        for (uint8_t vcid = 0; vcid < 4; vcid++)
+        uint8_t head[5];
+        if (unhex_prefix(argv[a], head, sizeof head) < 0)
         {
-            TCGvcidManagedParameters_t mp;
-            memset(&mp, 0, sizeof mp);
-            mp.tfvn = 0;
-            mp.scid = scid;
-            mp.vcid = vcid;
-            mp.has_fecf = TC_HAS_FECF;
-            mp.has_segmentation_hdr = TC_NO_SEGMENT_HDRS;
-            mp.max_frame_size = 1024;
-            mp.set_flag = 1;
-            if (Crypto_Config_Add_TC_Gvcid_Managed_Parameters(mp) != CRYPTO_LIB_SUCCESS)
-            {
-                fprintf(stderr, "CryptoLib refused managed parameters for SCID 0x%03X VC %u\n",
-                        scid, vcid);
-                return 1;
-            }
+            fprintf(stderr, "argument %d is too short to carry a TC primary header\n", a);
+            return 2;
+        }
+        TCGvcidManagedParameters_t mp;
+        memset(&mp, 0, sizeof mp);
+        mp.tfvn = (head[0] >> 6) & 0x03;
+        mp.scid = (uint16_t)(((head[0] & 0x03) << 8) | head[1]);
+        mp.vcid = (uint8_t)((head[2] >> 2) & 0x3F);
+        mp.has_fecf = TC_HAS_FECF;
+        mp.has_segmentation_hdr = TC_NO_SEGMENT_HDRS;
+        mp.max_frame_size = 1024;
+        mp.set_flag = 1;
+        if (Crypto_Config_Add_TC_Gvcid_Managed_Parameters(mp) != CRYPTO_LIB_SUCCESS)
+        {
+            /* Duplicates are expected when two vectors share a GVCID and are not an error; a
+             * genuine refusal shows up as an unparsed frame below, with spi_at still printed and
+             * every CryptoLib field zero, which is loud enough to see. */
         }
     }
 
-    SecurityAssociation_t *sa = NULL;
-    if (sa_if->sa_get_from_spi(spi, &sa) != CRYPTO_LIB_SUCCESS || sa == NULL)
-    {
-        fprintf(stderr, "no SA slot at SPI %u in CryptoLib's in-memory store\n", spi);
-        return 1;
-    }
-    sa->sa_state = SA_OPERATIONAL;
-    sa->est = 0;                        /* no encryption */
-    sa->ast = 1;                        /* authentication only */
-    sa->shivf_len = iv_len;
-    sa->iv_len = iv_len;
-    sa->shsnf_len = sn_len;
-    sa->arsn_len = sn_len;
-    sa->shplf_len = 0;
-    sa->stmacf_len = mac_len;
-    sa->acs_len = 1;
-    sa->acs = CRYPTO_MAC_CMAC_AES256;   /* the MAC is not verified here; see the header comment */
-    sa->abm_len = ABM_SIZE;
-    memset(sa->abm, 0xFF, ABM_SIZE);
-    sa->arsnw_len = 1;
-    sa->arsnw = 5;
-    /* A key that EXISTS and is not ACTIVE, on purpose. Two hazards had to be steered between:
-     *
-     *   A key id the store does not hold segfaults CryptoLib. Crypto_TC_Get_Keys detects
-     *   `*akp == NULL`, sets CRYPTO_LIB_ERR_KEY_ID_ERROR, and then the NEXT statement evaluates
-     *   `(*akp)->key_state` - the `&&` short-circuits on the right operand, not the left, so the
-     *   NULL is dereferenced whatever the status says (crypto_tc.c:1785). Measured under gdb.
-     *
-     *   A key that is active carries the parse on into Crypto_TC_Do_Decrypt, which calls through
-     *   `cryptography_if`. No cryptography backend is compiled in here - libgcrypt's headers need
-     *   root - so that pointer is NULL too.
-     *
-     *   Between them: an existing key in a non-ACTIVE state returns CRYPTO_LIB_ERR_KEY_STATE_INVALID
-     *   cleanly, at a point where the security header is fully parsed and Prep_AAD has already set
-     *   tc_pdu_len. Everything this oracle measures is populated; the MAC bytes are not, because
-     *   Do_Decrypt copies those, and this oracle does not print them.
-     *
-     * Key 130 is one the internal store holds; the state is what stops the parse. */
-    sa->akid = 130;
-    sa->ekid = 130;
-
+    /* CryptoLib's in-memory SA store holds NUM_SA = 64 associations and Crypto_TC_ProcessSecurity
+     * refuses SPI_MIN (0) and SPI_MAX (63) outright (crypto.c:1046), so it can only speak about
+     * SPIs 1..62. The SDLS SPI field is sixteen bits. That is CryptoLib's limit and not the
+     * standard's, and a frame outside it is reported as declined rather than printed with every
+     * field zero - which is what the first version of this did, and what made a golden vector for
+     * SCID 0x3FF look like a layout disagreement instead of an unconfigured store. */
     key_if = get_key_interface_internal();
     if (key_if == NULL)
     {
         fprintf(stderr, "rebuild CryptoLib with -DKEY_INTERNAL=ON\n");
         return 1;
     }
-    crypto_key_t *k = key_if->get_key(sa->akid);
-    if (k == NULL)
-    {
-        fprintf(stderr, "CryptoLib's internal key store has no key %u\n", sa->akid);
-        return 1;
-    }
-    k->key_state = KEY_PREACTIVE;
 
     printf("[\n");
-    for (int a = 5; a < argc; a++)
+    for (int a = 4; a < argc; a++)
     {
         uint8_t buf[2048];
         int len = unhex(argv[a], buf, sizeof buf);
@@ -191,6 +172,47 @@ int main(int argc, char **argv)
             fprintf(stderr, "argument %d is not an even-length hex string that fits\n", a);
             return 2;
         }
+        unsigned frame_spi = ((unsigned)buf[5] << 8) | buf[6];
+        if (frame_spi <= 0 || frame_spi >= 63)
+        {
+            printf("  {\"frame\": \"%s\", \"octets\": %d, \"declined\": "
+                   "\"SPI %u is outside CryptoLib's in-memory store (NUM_SA 64, and it refuses "
+                   "SPI_MIN and SPI_MAX); the SDLS SPI field is 16 bits, so this is CryptoLib's "
+                   "limit, not the standard's\"}%s\n",
+                   argv[a], len, frame_spi, (a + 1 < argc) ? "," : "");
+            continue;
+        }
+        SecurityAssociation_t *sa = NULL;
+        if (sa_if->sa_get_from_spi((uint16_t)frame_spi, &sa) != CRYPTO_LIB_SUCCESS || sa == NULL)
+        {
+            fprintf(stderr, "no SA slot at SPI %u\n", frame_spi);
+            return 1;
+        }
+        sa->sa_state = SA_OPERATIONAL;
+        sa->est = 0;
+        sa->ast = 1;
+        sa->shivf_len = iv_len;
+        sa->iv_len = iv_len;
+        sa->shsnf_len = sn_len;
+        sa->arsn_len = sn_len;
+        sa->shplf_len = 0;
+        sa->stmacf_len = mac_len;
+        sa->acs_len = 1;
+        sa->acs = CRYPTO_MAC_CMAC_AES256;
+        sa->abm_len = ABM_SIZE;
+        memset(sa->abm, 0xFF, ABM_SIZE);
+        sa->arsnw_len = 1;
+        sa->arsnw = 5;
+        sa->akid = 130;
+        sa->ekid = 130;
+        crypto_key_t *k = key_if->get_key(sa->akid);
+        if (k == NULL)
+        {
+            fprintf(stderr, "CryptoLib's internal key store has no key %u\n", sa->akid);
+            return 1;
+        }
+        k->key_state = KEY_PREACTIVE;
+
         TC_t parsed;
         memset(&parsed, 0, sizeof parsed);
         int ingest_len = len;

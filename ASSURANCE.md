@@ -21,6 +21,7 @@ This document exists so that mistake has to be made deliberately.
   | PUS-C secondary headers | spacepackets | `test_oracle_pus.py` |
   | TC transfer frame primary header | NASA CryptoLib, which parses the octets rather than reimplementing them, plus a hand pack from 232.0-B-4 | `test_golden_transfer_frame.py` |
   | TM transfer frame primary header | `spacepackets.ccsds.tm_frame` | `test_golden_transfer_frame.py` |
+  | SDLS TC security header and trailer | NASA CryptoLib, parsing frames it did not produce, plus libsodium and the NIST AES-256-GCM vectors for the MAC | `test_golden_sdls.py` |
 
   The last two rows said **none** until 2026-09-10, and the row above them was easy to over-read:
   the FECF that *covers* a transfer frame had four independent opinions while the FIELD PACKING of
@@ -62,7 +63,7 @@ Do not cite a CubeRange result as evidence of any of these:
 | Real-time behaviour | Renode is a functional emulator. Instruction timing, cache, bus contention and interrupt latency are not modelled |
 | RF or link-layer conformance | The outer framing is "CubeRange lab framing", not a CCSDS CLTU. There is no modulation, coding, Doppler or noise |
 | CCSDS or ECSS conformance | Subsets are implemented, with documented deviations. Conformance is a testing regime this project has not undergone |
-| Cryptographic assurance | SDLS is not implemented yet. When it is, it will be a lab implementation, not a validated one |
+| Cryptographic assurance | The SDLS **authentication** service is implemented host-side as of 2026-09-12 - `src/cuberange/proto/sdls.py`, AES-256-GCM through OpenSSL, checked against libsodium and the NIST vectors. No spacecraft runs it yet, there is no key management, and one key is compiled in. It is a lab implementation, which is what this row has always said it would be |
 | Hardware security | No side channels, no glitching, no fault injection, no silicon errata. Renode models registers, not physics |
 | Radiation or fault tolerance | Not modelled at all |
 | That a real satellite is or is not vulnerable | This is a synthetic target. It resembles real systems because it implements the same standards, which is not the same as being one |
