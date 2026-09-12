@@ -59,10 +59,22 @@ difference is whether the spacecraft says anything about what it refused.
 make firmware-g04
 make verify EX=EX-G04-a-refusal-nobody-hears
 
-# or by hand
+# or by hand, at the prompt `make exercise` gives you
 make exercise EX=EX-G04-a-refusal-nobody-hears
-make channel
+make channel &
 python3 exercises/EX-G04-a-refusal-nobody-hears/solve.py
+```
+
+`make exercise` puts you in a shell **inside the range's network namespace**, and the solver has
+to run from there. The namespace holds only loopback (SAFE_USE.md), and a new one is created per
+invocation, so a solver started in another terminal gets `ConnectionRefusedError` — the space link
+and the injector do not exist outside. `make channel`, `make gs` and `make verify` work from that
+shell too, and are the same three commands they always were.
+
+To run one command instead of getting a shell:
+
+```bash
+make exercise EX=EX-G04-a-refusal-nobody-hears RUN='python3 exercises/EX-G04-a-refusal-nobody-hears/solve.py'
 ```
 
 ## Hints

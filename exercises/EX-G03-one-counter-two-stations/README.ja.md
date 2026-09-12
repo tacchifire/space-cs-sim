@@ -53,12 +53,24 @@ EX-L01 の再送防止が ON の COMM と、それ以外はすべて硬化版。
 make firmware-g03
 make verify EX=EX-G03-one-counter-two-stations
 
-# あるいは手で、端末 3 つ
+# あるいは手で。すべて `make exercise` が出すプロンプトで実行する——端末を 3 つ開くと
+# 名前空間が 3 つになり、互いに見えない range が 3 つできる。
 make exercise EX=EX-G03-one-counter-two-stations
-make channel
+make channel &
 make gs STATION=primary                 # 動く
 python3 exercises/EX-G03-one-counter-two-stations/solve.py
 make gs STATION=primary                 # もう動かない
+```
+
+`make exercise` は **range のネットワーク名前空間の中**のシェルに入る。ソルバはそこから走らせる。
+名前空間にはループバックしか無く（SAFE_USE.md）、起動ごとに新しく作られるので、別の端末で
+起動したソルバは `ConnectionRefusedError` を受け取る——宇宙リンクもインジェクタも外側には
+存在しない。`make channel`・`make gs`・`make verify` もそのシェルから動き、コマンドは従来のままである。
+
+シェルではなく1コマンドだけ走らせるなら:
+
+```bash
+make exercise EX=EX-G03-one-counter-two-stations RUN='python3 exercises/EX-G03-one-counter-two-stations/solve.py'
 ```
 
 ## ヒント

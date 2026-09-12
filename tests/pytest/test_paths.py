@@ -229,14 +229,19 @@ def test_the_student_facing_target_derives_its_ports_from_the_map():
     """
     recipe = re.search(r"^exercise:.*?(?=\n[a-zA-Z])", MAKEFILE_TEXT, re.S | re.M)
     assert recipe, "the `exercise` target is gone"
-    body = recipe.group(0)
+    #: The recipe delegates to tools/exercise.sh, which is where the banner lives - the target
+    #: became a launcher for a shell inside the namespace rather than a foreground Renode.
+    launcher = REPO / "tools" / "exercise.sh"
+    assert launcher.is_file(), "tools/exercise.sh is gone but `make exercise` still calls it"
+    body = recipe.group(0) + launcher.read_text()
     assert "cuberange import ports" in body, (
         "`make exercise` prints port numbers that are not derived from cuberange.ports")
     # Built from the map rather than written out. Writing them here would put three port
     # literals in this file, which is the very thing test_port_literals.py forbids - and it
     # caught exactly that on the first version of this test.
     from cuberange import ports as _ports
-    for port in (_ports.link(0), _ports.monitor(), _ports.injector(0)):
+    for port in (_ports.link(0), _ports.monitor(), _ports.injector(0),
+                 _ports.crosslink_injector()):
         assert f"localhost:{port}" not in body, f"`make exercise` hardcodes localhost:{port}"
 
 

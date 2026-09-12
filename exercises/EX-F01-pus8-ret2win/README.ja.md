@@ -60,6 +60,17 @@ python3 exercises/EX-F01-pus8-ret2win/solve.py             # 模範解答
 make verify EX=EX-F01-pus8-ret2win
 ```
 
+`make exercise` は **range のネットワーク名前空間の中**のシェルに入る。ソルバはそこから走らせる。
+名前空間にはループバックしか無く（SAFE_USE.md）、起動ごとに新しく作られるので、別の端末で
+起動したソルバは `ConnectionRefusedError` を受け取る——宇宙リンクもインジェクタも外側には
+存在しない。`make channel`・`make gs`・`make verify` もそのシェルから動き、コマンドは従来のままである。
+
+シェルではなく1コマンドだけ走らせるなら:
+
+```bash
+make exercise EX=EX-F01-pus8-ret2win RUN='python3 exercises/EX-F01-pus8-ret2win/solve.py'
+```
+
 ## 始める前に：何が効かないか
 
 シェルコードを書かないこと。

@@ -61,9 +61,20 @@ There is no attacker machine and no CAN injector. There is nothing here to injec
 make firmware-g02
 make exercise EX=EX-G02-unauthorized-authority
 
-# or by hand, inside the range's network namespace
-python3 -m cuberange.safety.isolate -- \
-  python3 exercises/EX-G02-unauthorized-authority/solve.py --station backup
+# or by hand, at the prompt `make exercise` gives you
+python3 exercises/EX-G02-unauthorized-authority/solve.py --station backup
+```
+
+`make exercise` puts you in a shell **inside the range's network namespace**, and the solver has
+to run from there. The namespace holds only loopback (SAFE_USE.md), and a new one is created per
+invocation, so a solver started in another terminal gets `ConnectionRefusedError` — the space link
+and the injector do not exist outside. `make channel`, `make gs` and `make verify` work from that
+shell too, and are the same three commands they always were.
+
+To run one command instead of getting a shell:
+
+```bash
+make exercise EX=EX-G02-unauthorized-authority RUN='python3 exercises/EX-G02-unauthorized-authority/solve.py --station backup'
 ```
 
 `solve.py` prints the frame it sends. Print the authorised one too, and compare them:

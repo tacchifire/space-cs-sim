@@ -57,6 +57,17 @@ make exercise EX=EX-B01-eps-killswitch      # シナリオを起動したまま�
 python3 exercises/EX-B01-eps-killswitch/solve.py     # 模範解答
 ```
 
+`make exercise` は **range のネットワーク名前空間の中**のシェルに入る。ソルバはそこから走らせる。
+名前空間にはループバックしか無く（SAFE_USE.md）、起動ごとに新しく作られるので、別の端末で
+起動したソルバは `ConnectionRefusedError` を受け取る——宇宙リンクもインジェクタも外側には
+存在しない。`make channel`・`make gs`・`make verify` もそのシェルから動き、コマンドは従来のままである。
+
+シェルではなく1コマンドだけ走らせるなら:
+
+```bash
+make exercise EX=EX-B01-eps-killswitch RUN='python3 exercises/EX-B01-eps-killswitch/solve.py'
+```
+
 ## ヒント
 
 <details><summary>ヒント1 — どこを見るか</summary>

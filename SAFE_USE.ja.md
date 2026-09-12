@@ -56,6 +56,16 @@ python3 -m cuberange.safety.isolate --probe        # このホストで何が使
 python3 -m cuberange.safety.isolate -- <コマンド>   # 名前空間の中で何かを走らせる
 ```
 
+`make exercise` はその名前空間の**中**のシェルに入る。ソルバも `make channel` も `make gs` も
+`make verify` も、そこで走らせるためのものである。そうでなければならない——名前空間は起動ごとに
+作られるので、**2 つ目の端末は 2 つ目の名前空間**であり、そこで起動した地上局はどこにも繋がらない。
+演習 README はかつて「これはこちらで、あれはあちらで」と書いており、この封じ込めが入った日から
+動かなくなっていた。`tests/e2e/test_documented_workflow.py` が文書どおりの経路を実際に走らせるので、
+同じことが静かに起きることはもう無い。
+
+`cuberange.safety.isolate` は**冪等**である。既にループバック専用名前空間にいる状態で隔離を求められたら、
+新しく作らずそのままコマンドを exec する。
+
 機構は 2 つ試すが、選択は「どのバイナリが存在するか」ではなく**実際に走らせて結果を見て**決める。
 この違いは机上のものではない。現行の Ubuntu では `unshare` はインストールされているのにポリシーで拒否される
 （`kernel.apparmor_restrict_unprivileged_userns=1`）。バイナリの有無で選んでいたら、それを選んでいた。

@@ -182,6 +182,7 @@ check: probe
 	$(MAKE) ground-stations NOFW=1
 	$(MAKE) verify-all  NOFW=1
 	$(MAKE) pair-gate   NOFW=1
+	$(MAKE) workflow    NOFW=1
 	@echo
 	@echo "================================================================"
 	@echo "  CHECK PASSED - probe, codecs, native, round trip, determinism,"
@@ -206,6 +207,16 @@ firmware-p1: firmware-p0
 	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
 	    -d $(OUT)/build-eps-hard firmware/apps/eps -- -DCUBERANGE_EPS_REQUIRE_AUTH=1
 	@ls -l $(OUT)/build-eps-vuln/zephyr/zephyr.elf $(OUT)/build-eps-hard/zephyr/zephyr.elf
+
+# The reader's path, run the way a reader runs it.
+#
+# NOT wrapped in $(ISOLATE): the namespace this is about is the one `make exercise` creates, and
+# entering another first would test a namespace no reader enters. (Wrapping would no longer break
+# it - isolate runs the command directly when it is already inside a loopback-only namespace - but
+# it would be the wrong namespace.)
+workflow: $(call FWDEP,firmware-all)
+	env PYTHONPATH=src OUT=$(OUT) RENODE_DIR=$(RENODE_DIR) \
+	    python3 -m pytest tests/e2e/test_documented_workflow.py -v
 
 # Run one exercise's verification, in both directions.
 #   make verify EX=EX-B01-eps-killswitch
@@ -287,25 +298,33 @@ firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03
 # Not supervised, deliberately: a student watches this one and stops it with Ctrl-C, and a
 # watchdog that killed it after four minutes would be a defect rather than a guard. It IS
 # isolated, because a range whose containment depends on which target you ran is not contained.
+# Run an exercise, and be INSIDE it.
+#
+#   make exercise EX=EX-B01-eps-killswitch
+#   make exercise EX=EX-B01-eps-killswitch RUN='python3 exercises/EX-B01-eps-killswitch/solve.py'
+#
+# The shell this drops you into is inside the range's network namespace, and that is not a
+# convenience. ISOLATE runs Renode in a namespace containing only loopback (SAFE_USE.md), a new
+# namespace per invocation, so a solver started from ANOTHER terminal cannot reach the space link
+# or the injector - measured: ConnectionRefusedError, every time.
+#
+# Every exercise README told the reader to do exactly that: `make exercise` here, `python3
+# solve.py` there. Fourteen files, both languages, and it had not worked since isolation landed on
+# 2026-09-10. Nothing caught it because no gate ran the reader's path - `make verify` launches
+# Renode from inside pytest, which is already in the namespace, so the tested path and the
+# documented path were different paths.
+#
+# RUN= is that gate's way in: it runs one command inside the namespace instead of a shell, which
+# is what tests/e2e/test_documented_workflow.py does.
 exercise:
-	@test -n "$(EX)" || { echo "usage: make exercise EX=<exercise-dir>"; exit 1; }
+	@test -n "$(EX)" || { echo "usage: make exercise EX=<exercise-dir> [RUN='<command>']"; exit 1; }
 	@test -d exercises/$(EX) || { echo "no such exercise: exercises/$(EX)"; \
 	    echo "available:"; ls -1 exercises; exit 1; }
 	@test -f $(OUT)/build-comm/zephyr/zephyr.elf || { \
 	    echo "no firmware in $(OUT) - run 'make firmware-all' first"; exit 1; }
-	@echo "starting exercises/$(EX) - Ctrl-C to stop"
-	@echo "  space link  localhost:$(shell PYTHONPATH=src python3 -c 'from cuberange import ports; print(ports.link(0))')"
-	@echo "  monitor     localhost:$(shell PYTHONPATH=src python3 -c 'from cuberange import ports; print(ports.monitor())')"
-	@echo "  injector    localhost:$(shell PYTHONPATH=src python3 -c 'from cuberange import ports; print(ports.injector(0))')"
-	@echo "  images from $(OUT)"
-	cd $(RENODE_DIR) && $(CURDIR:%=PYTHONPATH=%/src) python3 -m cuberange.safety.isolate -- \
-	  ./renode --disable-xwt --plain --hide-analyzers \
-	  --port $(shell PYTHONPATH=src python3 -c 'from cuberange import ports; print(ports.monitor())') \
-	  -e '$$injector=@$(CURDIR)/attacker/TcpCanInjector.cs' \
-	  -e '$$profile=@$(CURDIR)/scripts/profiles/interactive.resc' \
-	  -e '$$out=@$(OUT)' \
-	  -e 'include @$(CURDIR)/exercises/$(EX)/scenario.resc' \
-	  -e 'start'
+	$(ISOLATE) env PYTHONPATH=$(CURDIR)/src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
+	    CUBERANGE_EX='$(EX)' CUBERANGE_RUN='$(RUN)' \
+	    bash $(CURDIR)/tools/exercise.sh
 
 # Satellite 1: the same four node roles, built with a different identity.
 #

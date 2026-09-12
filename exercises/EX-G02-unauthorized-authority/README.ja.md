@@ -58,9 +58,19 @@ CAN ハブ上の COMM・OBC・EPS と、宇宙リンク。このシナリオに�
 make firmware-g02
 make exercise EX=EX-G02-unauthorized-authority
 
-# あるいは手で、レンジのネットワーク名前空間の中で
-python3 -m cuberange.safety.isolate -- \
-  python3 exercises/EX-G02-unauthorized-authority/solve.py --station backup
+# あるいは手で、`make exercise` が出すプロンプトで
+python3 exercises/EX-G02-unauthorized-authority/solve.py --station backup
+```
+
+`make exercise` は **range のネットワーク名前空間の中**のシェルに入る。ソルバはそこから走らせる。
+名前空間にはループバックしか無く（SAFE_USE.md）、起動ごとに新しく作られるので、別の端末で
+起動したソルバは `ConnectionRefusedError` を受け取る——宇宙リンクもインジェクタも外側には
+存在しない。`make channel`・`make gs`・`make verify` もそのシェルから動き、コマンドは従来のままである。
+
+シェルではなく1コマンドだけ走らせるなら:
+
+```bash
+make exercise EX=EX-G02-unauthorized-authority RUN='python3 exercises/EX-G02-unauthorized-authority/solve.py --station backup'
 ```
 
 `solve.py` は送るフレームを表示する。正規の方も表示させて、並べて見てほしい。

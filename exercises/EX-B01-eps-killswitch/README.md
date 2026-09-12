@@ -54,6 +54,18 @@ make exercise EX=EX-B01-eps-killswitch      # runs the scenario and leaves it up
 python3 exercises/EX-B01-eps-killswitch/solve.py     # the model answer
 ```
 
+`make exercise` puts you in a shell **inside the range's network namespace**, and the solver has
+to run from there. The namespace holds only loopback (SAFE_USE.md), and a new one is created per
+invocation, so a solver started in another terminal gets `ConnectionRefusedError` — the space link
+and the injector do not exist outside. `make channel`, `make gs` and `make verify` work from that
+shell too, and are the same three commands they always were.
+
+To run one command instead of getting a shell:
+
+```bash
+make exercise EX=EX-B01-eps-killswitch RUN='python3 exercises/EX-B01-eps-killswitch/solve.py'
+```
+
 ## Hints
 
 <details><summary>Hint 1 — where to look</summary>
