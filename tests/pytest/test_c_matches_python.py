@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from cuberange.proto import sdls  # noqa: E402
 from cuberange.proto.crc import crc16_ccsds
 from cuberange.proto.frame import (Deframer, decode_tc_frame, decode_tm_frame,
                                    encode_tc_frame, encode_tm_frame,
@@ -40,17 +41,46 @@ FRAME_CB = ctypes.CFUNCTYPE(None, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_
                             ctypes.c_void_p)
 
 
+class CrSdlsParts(ctypes.Structure):
+    """`struct cr_sdls_parts`, field for field.
+
+    Declared here rather than parsed out of the header, and the pointer fields are c_void_p with
+    the offsets recovered by subtracting the frame's own address - which is what lets this compare
+    WHERE the C code decided each field starts, rather than only what it copied.
+    """
+    _fields_ = [("spi", ctypes.c_uint16),
+                ("iv", ctypes.c_void_p), ("iv_len", ctypes.c_size_t),
+                ("seq_num", ctypes.c_uint32),
+                ("sn", ctypes.c_void_p), ("sn_len", ctypes.c_size_t),
+                ("payload", ctypes.c_void_p), ("payload_len", ctypes.c_size_t),
+                ("mac", ctypes.c_void_p), ("mac_len", ctypes.c_size_t),
+                ("aad", ctypes.c_void_p), ("aad_len", ctypes.c_size_t)]
+
+
 @pytest.fixture(scope="module")
 def clib(tmp_path_factory):
     so = tmp_path_factory.mktemp("clib") / "libcrproto.so"
     subprocess.run(
         ["cc", "-std=c11", "-O1", "-fPIC", "-shared",
-         "-I", str(COMMON), str(COMMON / "cuberange_proto.c"), "-o", str(so)],
+         "-I", str(COMMON), str(COMMON / "cuberange_proto.c"),
+         str(COMMON / "cuberange_sdls.c"), "-o", str(so)],
         check=True)
     lib = ctypes.CDLL(str(so))
 
     lib.cr_crc16.restype = ctypes.c_uint16
     lib.cr_crc16.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
+
+    for fn in ("cr_sdls_spi_at", "cr_sdls_iv_at"):
+        getattr(lib, fn).restype = ctypes.c_size_t
+        getattr(lib, fn).argtypes = []
+    lib.cr_sdls_sn_at.restype = ctypes.c_size_t
+    lib.cr_sdls_sn_at.argtypes = [ctypes.c_size_t]
+    lib.cr_sdls_pdu_at.restype = ctypes.c_size_t
+    lib.cr_sdls_pdu_at.argtypes = [ctypes.c_size_t, ctypes.c_size_t]
+    lib.cr_sdls_split.restype = ctypes.c_int
+    lib.cr_sdls_split.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_size_t,
+                                  ctypes.c_size_t, ctypes.c_size_t,
+                                  ctypes.POINTER(CrSdlsParts)]
 
     lib.cr_encode_tc_frame.restype = ctypes.c_int
     lib.cr_encode_tc_frame.argtypes = [ctypes.c_char_p, ctypes.c_size_t,
@@ -247,11 +277,115 @@ def test_every_exported_c_function_is_cross_checked():
     """
     import re
 
-    header = (COMMON / "cuberange_proto.h").read_text()
-    api = set(re.findall(r"^\w[\w \*]*?\b(cr_\w+)\(", header, re.M))
-    assert len(api) >= 8, f"only {len(api)} functions found in the header; the regex has drifted"
+    headers = sorted(COMMON.glob("cuberange_*.h"))
+    assert len(headers) >= 2, f"only {len(headers)} shared headers found; the glob has drifted"
+    api = set()
+    for h in headers:
+        api |= set(re.findall(r"^\w[\w \*]*?\b(cr_\w+)\(", h.read_text(), re.M))
+    assert len(api) >= 13, f"only {len(api)} functions found across {len(headers)} headers"
     mine = Path(__file__).read_text()
     missing = sorted(f for f in api if f not in mine)
     assert not missing, (
         "these are exported by the C codec and never compared against the Python one: "
         + ", ".join(missing))
+
+
+# --------------------------------------------------------------------------------------------
+# SDLS: the security header's layout, in two implementations
+#
+# The MAC is not compared here, and that is on purpose: the C side computes none. Crypto lives in
+# whatever library the platform has - mbedTLS on the spacecraft, OpenSSL on the host - and mixing
+# it into the shared codec would end this comparison. What CAN drift silently is WHERE each field
+# starts, and that is what these check.
+
+SDLS_LENGTHS = (sdls.IV_LEN, sdls.SN_LEN, sdls.MAC_LEN)
+
+
+def _split(clib, frame: bytes, iv_len=None, sn_len=None, mac_len=None):
+    """cr_sdls_split, with the pointer fields turned back into offsets."""
+    iv_len = sdls.IV_LEN if iv_len is None else iv_len
+    sn_len = sdls.SN_LEN if sn_len is None else sn_len
+    mac_len = sdls.MAC_LEN if mac_len is None else mac_len
+    buf = ctypes.create_string_buffer(frame, len(frame))
+    parts = CrSdlsParts()
+    rc = clib.cr_sdls_split(buf, len(frame), iv_len, sn_len, mac_len, ctypes.byref(parts))
+    if rc != 0:
+        return rc, None
+    base = ctypes.cast(buf, ctypes.c_void_p).value
+    return 0, {
+        "spi": parts.spi,
+        "iv_at": parts.iv - base, "iv_len": parts.iv_len,
+        "seq_num": parts.seq_num,
+        "sn_at": parts.sn - base, "sn_len": parts.sn_len,
+        "pdu_at": parts.payload - base, "payload_len": parts.payload_len,
+        "mac_at": parts.mac - base, "mac_len": parts.mac_len,
+        "aad_at": parts.aad - base, "aad_len": parts.aad_len,
+    }
+
+
+def test_the_c_offset_helpers_agree_with_the_python_constants(clib):
+    assert clib.cr_sdls_spi_at() == sdls.SPI_AT
+    assert clib.cr_sdls_iv_at() == sdls.IV_AT
+    assert clib.cr_sdls_sn_at(sdls.IV_LEN) == sdls.SN_AT
+    assert clib.cr_sdls_pdu_at(sdls.IV_LEN, sdls.SN_LEN) == sdls.PDU_AT
+
+
+@pytest.mark.parametrize("payload", [b"", b"\x01", bytes.fromhex("08a9c00000000a"),
+                                     bytes(range(64)), b"\xFF" * 200])
+def test_both_split_an_authenticated_frame_the_same_way(clib, payload):
+    key, iv = bytes(range(32)), bytes(range(0xA0, 0xAC))
+    frame = sdls.encode_tc(payload, key=key, spi=9, iv=iv, seq_num=0x01020304,
+                           frame_seq=7, scid=0x0A9, vcid=0)
+    rc, got = _split(clib, frame)
+    assert rc == 0, f"C refused a frame Python produced: rc={rc}"
+    py = sdls.decode_tc(frame, key=key)
+
+    assert got["spi"] == py.spi
+    assert got["iv_at"] == sdls.IV_AT and got["iv_len"] == sdls.IV_LEN
+    assert frame[got["iv_at"]:got["iv_at"] + got["iv_len"]] == py.iv
+    assert got["seq_num"] == py.seq_num
+    assert got["pdu_at"] == sdls.PDU_AT
+    assert frame[got["pdu_at"]:got["pdu_at"] + got["payload_len"]] == py.payload
+    assert got["mac_len"] == sdls.MAC_LEN
+    assert got["mac_at"] == len(frame) - 2 - sdls.MAC_LEN
+    #: The authenticated portion has to be the SAME octets on both sides, or the two compute MACs
+    #: over different things and the spacecraft rejects what the ground signed.
+    assert got["aad_at"] == 0
+    assert got["aad_len"] == got["mac_at"]
+
+
+@pytest.mark.parametrize("payload", [b"", bytes(range(32))])
+def test_both_refuse_the_same_hostile_frames(clib, payload):
+    """What they REFUSE, which is the half that was missing for the plain codec until 2026-09-12."""
+    key, iv = bytes(range(32)), bytes(range(0xA0, 0xAC))
+    good = sdls.encode_tc(payload, key=key, spi=9, iv=iv, seq_num=1, frame_seq=0)
+
+    for i, bad in enumerate(_hostile(good)):
+        label = f"case {i} ({len(bad)} octets)"
+        rc, _ = _split(clib, bad)
+        try:
+            sdls.decode_tc(bad, key=key)
+            py_ok = True
+        except sdls.AuthenticationError:
+            py_ok = False
+        #: C does no crypto, so it can ACCEPT a frame whose MAC is wrong where Python refuses.
+        #: The other direction must never happen: if C refuses the shape, Python must too, or the
+        #: spacecraft is dropping frames the ground believes are fine.
+        if rc != 0:
+            assert not py_ok, (
+                f"{label}: C refused it (rc={rc}) and Python accepted it - the spacecraft would "
+                f"drop a frame the ground station thinks is valid")
+
+
+def test_the_c_side_refuses_lengths_it_does_not_support(clib):
+    """A sequence number wider than the field that holds it is refused, not truncated.
+
+    seq_num is a uint32. Accepting sn_len 8 would produce an anti-replay counter that wraps four
+    octets earlier than the sender's, and the symptom would be a spacecraft that rejects valid
+    commands after a while.
+    """
+    key, iv = bytes(range(32)), bytes(range(0xA0, 0xAC))
+    frame = sdls.encode_tc(b"\x01", key=key, spi=9, iv=iv, seq_num=1, frame_seq=0)
+    for iv_len, sn_len, mac_len in ((0, 4, 16), (17, 4, 16), (12, 8, 16), (12, 4, 0), (12, 4, 17)):
+        rc, _ = _split(clib, frame, iv_len, sn_len, mac_len)
+        assert rc == -4, f"iv_len={iv_len} sn_len={sn_len} mac_len={mac_len} gave rc={rc}, not -4"

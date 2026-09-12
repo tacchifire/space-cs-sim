@@ -119,8 +119,14 @@ class Range:
             time.sleep(0.2)
         return False
 
-    def alive(self, timeout: float = 8.0) -> bool:
-        return self.station.ping(timeout=timeout) is not None
+    def alive(self, timeout: float = 20.0) -> bool:
+        """One ping is link luck, not liveness - see GroundStation.alive.
+
+        `timeout` is how long to keep trying, which is what every caller here already
+        meant. The negative uses - `assert not r.alive(timeout=8)` - are why it has to
+        spend the budget rather than give up after one frame.
+        """
+        return self.station.alive(timeout=timeout)
 
     def settle_power(self, seconds: float = 6.0):
         """Poll the rail until it changes or the budget runs out. Returns the event, or None."""

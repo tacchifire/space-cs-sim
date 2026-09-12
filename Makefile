@@ -182,6 +182,7 @@ check: probe
 	$(MAKE) ground-stations NOFW=1
 	$(MAKE) verify-all  NOFW=1
 	$(MAKE) pair-gate   NOFW=1
+	$(MAKE) sdls        NOFW=1
 	$(MAKE) workflow    NOFW=1
 	@echo
 	@echo "================================================================"
@@ -207,6 +208,14 @@ firmware-p1: firmware-p0
 	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
 	    -d $(OUT)/build-eps-hard firmware/apps/eps -- -DCUBERANGE_EPS_REQUIRE_AUTH=1
 	@ls -l $(OUT)/build-eps-vuln/zephyr/zephyr.elf $(OUT)/build-eps-hard/zephyr/zephyr.elf
+
+# An authenticated uplink, on the spacecraft.
+#
+# Four assertions, and the first is that AES-256-GCM gets the published NIST answer on the target -
+# which the build succeeding does not tell you. See the note in sdls.conf about the stack.
+sdls: $(call FWDEP,firmware-sdls firmware-p1 firmware-exl01)
+	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
+	    python3 -m pytest tests/e2e/test_sdls_uplink.py -v
 
 # The reader's path, run the way a reader runs it.
 #
@@ -278,7 +287,7 @@ firmware-f01: firmware-p1
 # prerequisite once per invocation, so this is one pristine build of each of the seven images
 # rather than the four rounds `check` used to do.
 .PHONY: firmware-all
-firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03 firmware-g04 firmware-x01
+firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-sdls
 	@echo "all node images built:"
 	@ls -1 $(OUT)/build-*/zephyr/zephyr.elf
 
@@ -396,6 +405,17 @@ firmware-g01: firmware-f01
 # or per virtual channel.
 # EX-G04's pair. EX-G02's authority check is ON in both: what differs is whether the refusal
 # reaches the ground as PUS 1,2, or only the console nobody off the spacecraft can read.
+firmware-sdls:
+	# COMM that speaks AUTHENTICATED framing and nothing else. Not a pair: there is no "SDLS off"
+	# half, because an SDLS frame and a plain frame are two formats rather than one format with a
+	# flag - the payload starts in a different place. The exercise that uses this compares it
+	# against the EXISTING plain builds, which is a comparison between formats and is the point.
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-comm-sdls firmware/apps/comm -- \
+	    -DCUBERANGE_COMM_SDLS=1 \
+	    -DEXTRA_CONF_FILE=$(CUBERANGE_REPO)/firmware/apps/comm/sdls.conf
+	@ls -l $(OUT)/build-comm-sdls/zephyr/zephyr.elf
+
 firmware-x01:
 	# COMM with the crosslink, on BOTH spacecraft, and with every link-layer defence this range
 	# has turned ON: EX-L01's anti-replay and EX-G03's per-VC sequence numbers. That is
