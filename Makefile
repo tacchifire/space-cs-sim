@@ -235,7 +235,7 @@ verify:
 	    python3 -m pytest exercises/$(EX)/verify_*.py -v
 
 # Every exercise, both directions. This is the claim the product makes.
-verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02 firmware-g03 firmware-g04 firmware-x01)
+verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-s01)
 	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest exercises/*/verify_*.py -v
 
@@ -287,7 +287,7 @@ firmware-f01: firmware-p1
 # prerequisite once per invocation, so this is one pristine build of each of the seven images
 # rather than the four rounds `check` used to do.
 .PHONY: firmware-all
-firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-sdls
+firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-sdls firmware-s01
 	@echo "all node images built:"
 	@ls -1 $(OUT)/build-*/zephyr/zephyr.elf
 
@@ -405,6 +405,23 @@ firmware-g01: firmware-f01
 # or per virtual channel.
 # EX-G04's pair. EX-G02's authority check is ON in both: what differs is whether the refusal
 # reaches the ground as PUS 1,2, or only the console nobody off the spacecraft can read.
+firmware-s01:
+	# COMM with BOTH the crosslink and SDLS, on both spacecraft. That combination is the exercise:
+	# the uplink is authenticated and the crosslink is not, because SDLS sits on the transfer-frame
+	# layer and the crosslink carries CSP. Nothing about the two flags interacts - which is the
+	# thing EX-S01 asks the student to notice.
+	for sat in 0 1; do \
+	    . $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	        -d $(OUT)/build-comm-s01-sat$$sat firmware/apps/comm -- \
+	        -DCUBERANGE_SAT_INDEX=$$sat \
+	        -DCUBERANGE_COMM_SDLS=1 -DCUBERANGE_COMM_CROSSLINK=1 \
+	        -DCUBERANGE_COMM_ANTIREPLAY=1 -DCUBERANGE_COMM_ANTIREPLAY_PER_VC=1 \
+	        -DEXTRA_DTC_OVERLAY_FILE=$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.overlay \
+	        -DEXTRA_CONF_FILE="$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.conf;$(CUBERANGE_REPO)/firmware/apps/comm/sdls.conf" \
+	        || exit 1; \
+	done
+	@ls -l $(OUT)/build-comm-s01-sat0/zephyr/zephyr.elf $(OUT)/build-comm-s01-sat1/zephyr/zephyr.elf
+
 firmware-sdls:
 	# COMM that speaks AUTHENTICATED framing and nothing else. Not a pair: there is no "SDLS off"
 	# half, because an SDLS frame and a plain frame are two formats rather than one format with a
