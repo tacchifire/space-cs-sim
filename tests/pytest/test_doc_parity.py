@@ -18,11 +18,18 @@ problem. Table rows are compared too, because both drifts showed up there.
 Then a third drift appeared that rows could not see either: `README.ja.md` was missing EX-G01
 from its exercise list entirely and still said four attack origins were covered when there were
 five. A list item is as countable as a table row, so those are compared as well. Between
-headings, table rows and list items, a section, a row or a bullet cannot go missing silently -
-which is not the same as the two versions saying the same thing, and this file does not claim it
-is.
+headings, table rows and list items, a section, a row or a bullet cannot go missing silently.
+
+All three compare structure, and a fourth drift slipped under all of them: `CONTRIBUTING.md` told
+an English reader to verify a vuln/hardened pair by typing a `diff` of two Kconfig files, while
+the Japanese version had already been rewritten around the gate that checks six things and runs
+in `make check`. Same headings, same rows, same bullets, different instructions. So the commands
+inside the code blocks are compared too - those are the part of a document that does not
+translate. That is still not the same as the two versions saying the same thing, and this file
+does not claim it is.
 """
 import re
+import shutil
 from pathlib import Path
 
 import pytest
@@ -188,3 +195,166 @@ def test_the_two_versions_have_the_same_table_rows(en: Path, ja: Path):
     assert a == b, (
         f"{ja.relative_to(REPO)} has {b} table rows against {en.relative_to(REPO)}'s {a}. A row "
         f"was dropped or added in one of them - check which, rather than padding the count.")
+
+
+# --------------------------------------------------------------------------------------------
+# Commands
+#
+# Headings, rows and bullets compare STRUCTURE. Two documents can match on all three and still
+# tell the reader to run different things, because the thing the reader runs lives inside a code
+# block and code blocks were never compared.
+#
+# That is not hypothetical. `CONTRIBUTING.md` told an English reader to verify a vuln/hardened
+# pair with a `diff` of two Kconfig files typed by hand; the Japanese version had already been
+# rewritten around `tools/config_diff_gate.py`, which checks six things instead of that one and
+# runs inside `make check`. `EX-B01`'s mitigation had the same split, and its English half went
+# on to say "only the length check changes" about an exercise whose flag is
+# CUBERANGE_EPS_REQUIRE_AUTH — the length check belongs to EX-F01. Every structural check passed
+# throughout.
+#
+# Commands are the part of a document that does not translate. Prose does, comments do,
+# placeholders do; `make pair-gate` does not.
+
+def _fenced_blocks(text: str) -> list[tuple[str, str]]:
+    """(info string, body) for each fenced block."""
+    out: list[tuple[str, str]] = []
+    fence: str | None = None
+    info = ""
+    buf: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if fence is None and re.match(r"^(```|~~~)", stripped):
+            fence, info, buf = stripped[:3], stripped[3:].strip(), []
+            continue
+        if fence and stripped.startswith(fence):
+            out.append((info, "\n".join(buf)))
+            fence = None
+            continue
+        if fence:
+            buf.append(line)
+    return out
+
+
+def _is_command(token: str) -> bool:
+    """Whether `token` names something runnable.
+
+    Probed, not guessed: `shutil.which` for PATH, the filesystem for repo-relative scripts. The
+    alternative is an allowlist of command names, which would have to be extended every time a
+    document mentions a new tool and would fail open until someone noticed.
+
+    This is what keeps ASCII diagrams out. The exercise READMEs draw their topology inside
+    unlabelled code blocks - `COMM  OBC  EPS  attacker  ------  one CAN hub`, `you are here` -
+    and those lines are prose that happens to be monospaced. `COMM` and `you` are not on PATH.
+    """
+    if token.startswith("./") or token.startswith("tools/"):
+        return (REPO / token.removeprefix("./")).is_file()
+    if "/" in token or "=" in token:
+        return False
+    return shutil.which(token) is not None
+
+
+def _strip_trailing_prose(line: str) -> str:
+    """Drop the trailing comment and any column-aligned description.
+
+    Both are translated on purpose and neither changes what runs:
+
+        make exercise EX=EX-A01-adcs-tumble    # runs the scenario / シナリオを起動したままにする
+        tools/setup-toolchain.sh               Zephyr + SDK, no root / root 不要、Docker 不要
+
+    The `#` scan honours quotes so that `grep '#define'` keeps its argument. The column split is
+    on a run of two or more spaces, which is how this repository aligns those descriptions; real
+    commands separate their arguments with one.
+    """
+    out: list[str] = []
+    quote: str | None = None
+    for ch in line:
+        if quote:
+            out.append(ch)
+            if ch == quote:
+                quote = None
+            continue
+        if ch in "'\"":
+            quote = ch
+            out.append(ch)
+            continue
+        if ch == "#":
+            break
+        out.append(ch)
+    return re.split(r"\s{2,}", "".join(out).strip())[0].strip()
+
+
+def commands(text: str) -> list[str]:
+    """Runnable lines, in order, with translated decoration removed."""
+    found: list[str] = []
+    for info, body in _fenced_blocks(text):
+        if info not in ("bash", "sh", "console", "shell", ""):
+            continue
+        for raw in body.splitlines():
+            line = re.sub(r"^\$\s+", "", raw.strip())
+            if not line or line.startswith("#"):
+                continue
+            head = line.split()[0]
+            if not _is_command(head):
+                continue
+            #: `<command>` and `<コマンド>` are the same placeholder.
+            cleaned = re.sub(r"<[^>]*>", "<>", _strip_trailing_prose(line))
+            if cleaned:
+                found.append(cleaned)
+    return found
+
+
+def test_command_extractor_keeps_commands_and_drops_decoration():
+    """The extractor itself, on input where the answer is known.
+
+    Without this, `commands()` returning [] for every document would make the comparison below
+    pass on all 24 pairs while comparing nothing - the failure mode of W42, where a check that
+    never ran was documented as running.
+    """
+    kept = commands(
+        "```bash\n"
+        "make pair-gate\n"
+        "python3 -m cuberange.safety.isolate -- <command>\n"
+        "tools/setup-toolchain.sh        Zephyr + SDK, no root\n"
+        "grep '#define' firmware/common/cuberange_proto.h\n"
+        "```\n"
+    )
+    assert kept == [
+        "make pair-gate",
+        "python3 -m cuberange.safety.isolate -- <>",
+        "tools/setup-toolchain.sh",
+        "grep '#define' firmware/common/cuberange_proto.h",
+    ], kept
+
+    dropped = commands(
+        "```\n"
+        "COMM  OBC  EPS  attacker  ------  one CAN hub\n"
+        "you are here                            the target\n"
+        "gpioPortD.5 = COMM power rail\n"
+        "# a comment line\n"
+        "```\n"
+        "```c\n"
+        "make this_is_c_not_shell\n"
+        "```\n"
+    )
+    assert dropped == [], dropped
+
+    #: The two spellings of a translated line must collapse to the same command...
+    en = commands("```bash\nmake exercise EX=EX-B01      # runs the scenario\n```\n")
+    ja = commands("```bash\nmake exercise EX=EX-B01      # シナリオを起動する\n```\n")
+    assert en == ja == ["make exercise EX=EX-B01"]
+
+    #: ...and a changed command must not.
+    assert commands("```bash\nmake pair-gate\n```\n") != commands(
+        "```bash\npython3 tools/config_diff_gate.py\n```\n"
+    )
+
+
+@pytest.mark.parametrize("en,ja", _doc_pairs(), ids=lambda p: p.name)
+def test_both_languages_tell_the_reader_to_run_the_same_thing(en: Path, ja: Path):
+    a, b = commands(en.read_text()), commands(ja.read_text())
+    assert a == b, (
+        f"{en.relative_to(REPO)} and {ja.relative_to(REPO)} give different instructions.\n"
+        f"  en only: {[x for x in a if x not in b]}\n"
+        f"  ja only: {[x for x in b if x not in a]}\n"
+        "A reader following one of these does something the other reader does not."
+    )
