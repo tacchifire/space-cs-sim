@@ -38,7 +38,7 @@ wrong: probe.sh's 1.5x four-node speed floor, which this eight-core machine clea
 looked like the obvious thing to blame on a two-vCPU runner. The probe passes there in 110
 seconds. Blaming the host was the comfortable guess, and it was the wrong one.
 
-Nine exercises work today. Six cover an attack origin each: EX-B01 (internal bus), EX-L01
+Ten exercises work today. Six cover an attack origin each: EX-B01 (internal bus), EX-L01
 (space link), EX-A01 (ADCS command envelope), EX-F01 (the OBC's own PUS 8 parser), EX-G01 (the
 ground segment that decides what to send) and EX-X01 (the crosslink, where the attacker is a
 spacecraft in your own constellation). Three add no new origin on purpose, and they are the
@@ -60,7 +60,14 @@ what the sender must POSSESS does - the EPS refuses the same attacker on both bu
 link-layer defence here lives in on_tc_frame, which is the space link; a defence is attached to a
 path, not to an asset.
 
-36 assertions, all measured. The last three each end by naming a limit the next one attacks, and
+EX-S01 is the tenth, and it adds no origin either: it is EX-X01's attack, byte for byte, against
+a spacecraft whose uplink now verifies a CCSDS 355.0-B-2 AES-256-GCM MAC and an anti-replay
+counter inside the signed portion. EX-L01's replay is dead and EX-G02's forgery half is dead. The
+crosslink attack is untouched, because SDLS is a transfer-frame protocol and the crosslink carries
+CSP - the packet did not fail a check, it never met one. The strongest control in the range is
+still attached to a path, and its strength is what makes that easy to forget.
+
+40 assertions, all measured. The last three each end by naming a limit the next one attacks, and
 in each the fix turned out to be reading something already on the wire: a source id that was
 arriving and ignored, a virtual channel that was being stepped over, a refused request sitting in
 a local variable.

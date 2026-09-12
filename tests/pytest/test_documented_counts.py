@@ -73,7 +73,9 @@ ACTUAL = {
 CLAIMS = [
     ("exercises",      "CLAUDE.md",            r"(\w+) exercises work today"),
     ("assertions",     "CLAUDE.md",            r"(\d+) assertions, all measured"),
-    ("exercises",      "CLAUDE.ja.md",         r"現在 (\d+) つの演習が動く"),
+    #: `つ` is optional because 「10 つ」 is not Japanese - the prose says 「10 の演習」,
+    #: and the regex accommodates the language rather than the reverse.
+    ("exercises",      "CLAUDE.ja.md",         r"現在 (\d+) つ?の演習が動く"),
     ("assertions",     "CLAUDE.ja.md",         r"アサーションは (\d+)、すべて実測である"),
     ("exercise files", "CONTRIBUTING.md",    r"An exercise is (\w+) files"),
     ("exercise files", "CONTRIBUTING.ja.md", r"演習は(\w+)つのファイル"),

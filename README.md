@@ -54,6 +54,12 @@ mitigation admitted to:
   is two octets. Meanwhile the EPS refuses that same attacker on both builds, because it asks for
   a token rather than a name.
 
+- **EX-S01** — you have cryptography now. The uplink verifies a CCSDS 355.0-B-2 AES-256-GCM MAC
+  and an anti-replay counter that lives inside the signed portion, so EX-L01's replay is dead and
+  a station can no longer claim another station's identity on the space link. Then EX-X01's
+  attack runs again, byte for byte, and switches the radio off. SDLS is a transfer-frame protocol;
+  the crosslink carries CSP. The packet did not fail a check — it never met one.
+
 Six attack origins are covered: the internal bus, the space link, the ADCS command envelope, the
 OBC's own command parser, the ground segment that decides what to send, and a spacecraft in your
 own constellation. EX-G02, EX-G03 and EX-G04 add no origin on purpose — a legitimate origin
