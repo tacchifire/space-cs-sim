@@ -45,15 +45,17 @@ path; `exercises/EX-G01-schedule-poisoning/verify_ex_g01.py` shows the three lin
 ### The vulnerable and mitigated builds must differ by one thing
 
 Guard the flaw behind a single build flag and change nothing else — no board, no `prj.conf`, no
-compiler options. Prove it:
+compiler options. Declare the pair in `firmware-matrix.yml` and prove it:
 
 ```bash
-diff <(grep ^CONFIG_ build-vuln/zephyr/.config | sort) \
-     <(grep ^CONFIG_ build-hard/zephyr/.config | sort)
+make pair-gate
 ```
 
-If that prints anything, the exercise is manufactured by weakening the platform, and it is teaching
-something that is not true.
+`tools/config_diff_gate.py` checks six things per pair, and it is part of `make check`. The
+snippet that used to live here was a `diff` of the two Kconfig outputs that a contributor had to
+remember to type, and it caught only the first of the six: it said nothing about compiler options,
+about whether the flag reached the compiler at all, about whether any source reads it, or about
+whether the two builds even came from this checkout.
 
 **For a host-side exercise** there is no pair of builds to diff, so the rule needs an analogue.
 EX-G01's is: one implementation, two policy objects, and the implementation may not know which it
@@ -82,10 +84,14 @@ That chain only works because the write-ups are honest. A mitigation oversold is
 - Host-side Python and the shared C codec parse attacker-controlled bytes. They are **not**
   intended to be vulnerable. `tests/native` builds the codec with
   `-fsanitize=address,undefined`; keep it clean.
-- The C and Python codecs are separate implementations of the same wire format and are diffed
-  byte-for-byte in `tests/pytest/test_c_matches_python.py`. Two self-written codecs that share a
-  mistake validate each other perfectly, which is why the independent oracles in `tests/golden/`
-  and the cross-check exist. Do not weaken either.
+- The C and Python codecs are separate implementations of the same wire format, compared in
+  `tests/pytest/test_c_matches_python.py` — on what they emit AND on what they refuse. The second
+  half was missing until 2026-09-12: only the encoders were compared, while the decoders, which
+  are the functions that parse attacker-controlled bytes, were not. A C decoder that accepts what
+  the Python one rejects means the spacecraft acting on something the ground station discarded,
+  silently. That file now fails if a new `cr_*` appears in the header without a comparison.
+  Two self-written codecs that share a mistake validate each other perfectly, which is why the
+  independent oracles in `tests/golden/` exist as well. Do not weaken either.
 - Pinned versions are pinned for reasons. See section 5 of the handoff document before changing
   Renode, Zephyr, the CSP version or the emulation quantum.
 - Run `make check`. The last line must be `CHECK PASSED`. It says so explicitly because a failing

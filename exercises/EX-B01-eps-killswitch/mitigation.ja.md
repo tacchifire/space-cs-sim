@@ -31,10 +31,12 @@ west build -b nucleo_h753zi -d build-eps-hard firmware/apps/eps -- -DCUBERANGE_E
 今は `tools/config_diff_gate.py` が機械的に証明し、`make check` の一部になっている。
 
 ```bash
-python3 tools/config_diff_gate.py
+make pair-gate
+# EX-B01: both halves built from this source tree
 # EX-B01: 836 Kconfig symbols identical
 # EX-B01: only CUBERANGE_EPS_REQUIRE_AUTH differs (0 -> 1)
-# EX-B01: ELFs differ
+# EX-B01: ELFs differ (a37faa479b55... vs 1a9d8c2911ae...)
+# EX-B01: CUBERANGE_EPS_REQUIRE_AUTH referenced in firmware/apps/eps
 # EX-B01: 2 translation units compiled identically apart from -DCUBERANGE_EPS_REQUIRE_AUTH
 ```
 

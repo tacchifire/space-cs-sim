@@ -29,13 +29,22 @@ is not true. The two EPS images share a board, a `prj.conf`, a source file and c
 you can check that mechanically:
 
 ```bash
-diff <(grep ^CONFIG_ build-eps-vuln/zephyr/.config | sort) \
-     <(grep ^CONFIG_ build-eps-hard/zephyr/.config | sort)
-# no output: not one Zephyr option differs
+make pair-gate
+# EX-B01: both halves built from this source tree
+# EX-B01: 836 Kconfig symbols identical
+# EX-B01: only CUBERANGE_EPS_REQUIRE_AUTH differs (0 -> 1)
+# EX-B01: ELFs differ (a37faa479b55... vs 1a9d8c2911ae...)
+# EX-B01: CUBERANGE_EPS_REQUIRE_AUTH referenced in firmware/apps/eps
+# EX-B01: 2 translation units compiled identically apart from -DCUBERANGE_EPS_REQUIRE_AUTH
 ```
 
-Only the length check changes. The attack works against a normally-configured satellite, and the
-mitigation is a line of application code — not a compiler flag.
+This used to be a `diff` of the two Kconfig outputs that you had to remember to type. It proved
+only the first of those six lines: nothing about compiler options, nothing about whether the flag
+reached the compiler at all, nothing about whether any source reads it, and nothing about whether
+the two builds came from this checkout.
+
+Only `CUBERANGE_EPS_REQUIRE_AUTH` changes. The attack works against a normally-configured
+satellite, and the mitigation is a line of application code — not a compiler flag.
 
 ## What this does NOT solve
 
