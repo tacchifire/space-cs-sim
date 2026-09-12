@@ -131,6 +131,13 @@ say "tc_oracle (TC transfer frame primary header, parsed by CryptoLib)"
       -L"$WORK/cryptolib/build" -lcryptolib -Wl,-rpath,"$WORK/cryptolib/build"
 echo "    $WORK/tc_oracle"
 
+# ------------------------------------------------------------------------- SDLS header oracle
+say "sdls_oracle (SDLS security header and trailer, laid out by CryptoLib)"
+"$CC" -O2 -I"$WORK/cryptolib/include" -I"$WORK/cryptolib/build/include" \
+      -o "$WORK/sdls_oracle" "$REPO/tools/oracles/sdls_oracle.c" \
+      -L"$WORK/cryptolib/build" -lcryptolib -Wl,-rpath,"$WORK/cryptolib/build"
+echo "    $WORK/sdls_oracle"
+
 say "done"
 echo
 echo "Generate the vectors with:"
