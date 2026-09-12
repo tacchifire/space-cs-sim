@@ -1,0 +1,34 @@
+/*
+ * CubeRange: the inter-spacecraft crosslink, on fdcan2.
+ *
+ * Applied through EXTRA_DTC_OVERLAY_FILE by the crosslink builds only. Enabling fdcan2 changes
+ * the devicetree, and a devicetree change is a build change: folding this into the COMM app's own
+ * boards/ overlay would have rebuilt every existing exercise's COMM with a peripheral none of
+ * them asked for, and those exercises rest on vuln/hardened pairs that compare builds.
+ *
+ * fdcan2 is `status = "disabled"` in stm32h7.dtsi and present on this package. It shares the
+ * message RAM with fdcan1 at 0x4000AC00 - `bosch,mram-cfg` puts fdcan2's section at offset 0x350
+ * - and Renode's stm32h743.repl models exactly that: one `canMessageRAM` behind both controllers.
+ * That agreement was checked before the first line of this was written.
+ *
+ * The `clocks` property is copied from the board's own &fdcan1 node, not inherited. The SoC dtsi
+ * gives fdcan2 its bus clock; the board adds the KERNEL clock source (PLL2_Q), and without that
+ * second entry the controller has no timing reference to derive a bitrate from.
+ *
+ * PINS. PB12 (RX) / PB13 (TX) is the FDCAN2 pinout on this package, and the board's own
+ * devicetree warns that PB13 is also Ethernet TXD1, resolved on hardware by jumpers JP6 and JP7.
+ * COMM builds no networking, so the mac driver never initialises and never claims the pin.
+ *
+ * None of that affects whether this works, because RENODE DOES NOT MODEL PIN MULTIPLEXING - it
+ * models the controller's register block, and pinctrl is inert. The pins are chosen carefully
+ * anyway, because a devicetree that would not work on the hardware it names is a lie told in a
+ * file that looks like a fact. On a real spacecraft this link is an RF terminal, not a second
+ * wire: there is one CAN transceiver on a Nucleo-144 and fdcan1 has it.
+ */
+&fdcan2 {
+	clocks = <&rcc STM32_CLOCK_BUS_APB1_2 0x00000100>,
+		 <&rcc STM32_SRC_PLL2_Q FDCAN_SEL(2)>;
+	pinctrl-0 = <&fdcan2_rx_pb12 &fdcan2_tx_pb13>;
+	pinctrl-names = "default";
+	status = "okay";
+};

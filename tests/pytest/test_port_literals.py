@@ -42,6 +42,10 @@ RESC_DEFAULTS = {
     "linkport": ports.link(0), "injport": ports.injector(0),
     "link0": ports.link(0), "link1": ports.link(1),
     "inj0": ports.injector(0), "inj1": ports.injector(1),
+    #: The crosslink injector is NOT indexed - the crosslink is one bus for the constellation,
+    #: the way the Monitor is one per emulation. A scenario that spelled it `injport` would be
+    #: checked against satellite 0's own injector and be wrong in a way nobody would read.
+    "xlinkport": ports.crosslink_injector(),
 }
 
 

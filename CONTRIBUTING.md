@@ -14,16 +14,22 @@ In practice: if you add a claim, add the command. If you add a test, prove it ca
 
 ## Contributing an exercise
 
-An exercise is five files and all five are required.
+An exercise is seven files and all seven are required.
 
 ```
 exercises/EX-XXX-short-name/
   README.md          scenario, objective, three-stage hints, what to conclude
+  README.ja.md       the same, in Japanese - the title translates, the front matter does not
   scenario.resc      the Renode setup
   solve.py           the model answer
   mitigation.md      the fix, and what it does not solve
+  mitigation.ja.md   the same, in Japanese
   verify_ex_xxx.py   the verification - note the unique basename
 ```
+
+This said five for a long time, and listed five, and the test that enforces it required seven -
+the two Japanese files were missing from the count in both languages, which is a pleasing way for
+a bilingual repository to be wrong. The number is now checked against the list the test uses.
 
 `verify_ex_xxx.py` must assert **three** things, not one:
 

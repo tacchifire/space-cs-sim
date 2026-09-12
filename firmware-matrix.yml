@@ -76,3 +76,9 @@ pairs:
     flag: CUBERANGE_OBC_VERIFY_REPORTS
     vuln: { value: "0", build: build-obc-g04-vuln }
     hard: { value: "1", build: build-obc-g04-hard }
+
+  - id: EX-X01
+    app: firmware/apps/obc
+    flag: CUBERANGE_OBC_CROSSLINK_ORIGIN
+    vuln: { value: "0", build: build-obc-x01-vuln }
+    hard: { value: "1", build: build-obc-x01-hard }

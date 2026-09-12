@@ -72,9 +72,20 @@ def monitor() -> int:
 
 def all_assigned(satellites: int = MAX_SATELLITES) -> dict[int, str]:
     """Every port this module hands out, mapped to what it is. Used by the collision test."""
-    out: dict[int, str] = {monitor(): "monitor", SCRATCH_LINK: "scratch link"}
+    out: dict[int, str] = {monitor(): "monitor", SCRATCH_LINK: "scratch link",
+                           crosslink_injector(): "crosslink injector"}
     for sat in range(satellites):
         for name, port in (("link", link(sat)), ("injector", injector(sat)),
                            ("channel", channel(sat))):
             out[port] = f"sat{sat} {name}"
     return out
+#: The injector on the CROSSLINK, which is one bus for the whole constellation rather than one per
+#: spacecraft - so this is not indexed, for the same reason the Monitor is not. Placed at BASE+800,
+#: clear of every satellite's ten-port block (the last is 3849 at MAX_SATELLITES 8) and clear of
+#: SCRATCH_LINK at BASE+900.
+CROSSLINK_INJECTOR = BASE + 800
+
+
+def crosslink_injector() -> int:
+    """The TcpCanInjector attached to the shared crosslink hub. One per emulation."""
+    return CROSSLINK_INJECTOR

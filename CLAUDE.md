@@ -38,9 +38,10 @@ wrong: probe.sh's 1.5x four-node speed floor, which this eight-core machine clea
 looked like the obvious thing to blame on a two-vCPU runner. The probe passes there in 110
 seconds. Blaming the host was the comfortable guess, and it was the wrong one.
 
-Eight exercises work today. Five cover an attack origin each: EX-B01 (internal bus), EX-L01
-(space link), EX-A01 (ADCS command envelope), EX-F01 (the OBC's own PUS 8 parser) and EX-G01 (the
-ground segment that decides what to send). Three add no new origin on purpose, and they are the
+Nine exercises work today. Six cover an attack origin each: EX-B01 (internal bus), EX-L01
+(space link), EX-A01 (ADCS command envelope), EX-F01 (the OBC's own PUS 8 parser), EX-G01 (the
+ground segment that decides what to send) and EX-X01 (the crosslink, where the attacker is a
+spacecraft in your own constellation). Three add no new origin on purpose, and they are the
 chain the others point at:
 
 - EX-G02, where the origin is legitimate - a real station sending a real command it has no
@@ -51,7 +52,15 @@ chain the others point at:
 - EX-G04, where nothing is broken and the control works, and the refusal never leaves the
   spacecraft - so from the ground it is indistinguishable from a frame that was never received.
 
-30 assertions, all measured. The last three each end by naming a limit the next one attacks, and
+EX-X01 is the one that answers all three of them at once, and not kindly. Every defence those
+exercises built is ON in its vulnerable build, and a peer spacecraft switches the victim's radio
+off anyway, by writing the ground station's source id into a field it chooses. Two lessons:
+a control keyed on what the sender ASSERTS does not survive a second way in, while one keyed on
+what the sender must POSSESS does - the EPS refuses the same attacker on both builds. And every
+link-layer defence here lives in on_tc_frame, which is the space link; a defence is attached to a
+path, not to an asset.
+
+36 assertions, all measured. The last three each end by naming a limit the next one attacks, and
 in each the fix turned out to be reading something already on the wire: a source id that was
 arriving and ignored, a virtual channel that was being stepped over, a refused request sitting in
 a local variable.

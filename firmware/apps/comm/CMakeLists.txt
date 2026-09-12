@@ -17,7 +17,19 @@ set(CUBERANGE_COMM_ANTIREPLAY 0 CACHE STRING "reject replayed TC frames")
 set(CUBERANGE_COMM_ANTIREPLAY_PER_VC 0 CACHE STRING
     "keep the replay counter per virtual channel, as CCSDS does, instead of per link")
 
+# EX-X01's crosslink. NOT a vuln/hardened pair - it is a second CAN interface, and both halves of
+# EX-X01's pair use the same crosslink COMM. The flag exists because enabling it changes every
+# other exercise's COMM otherwise, and those exercises rest on pairs that compare builds.
+#
+# It travels with two files that are applied by the build command, not by this list:
+#   -DEXTRA_DTC_OVERLAY_FILE=.../crosslink.overlay   enables fdcan2
+#   -DEXTRA_CONF_FILE=.../crosslink.conf             a second CSP RX thread, and heap for it
+# Setting this without them compiles code that calls DEVICE_DT_GET on a disabled node.
+set(CUBERANGE_COMM_CROSSLINK 0 CACHE STRING
+    "join fdcan2 to the constellation's shared crosslink bus as a second CSP interface")
+
 target_link_libraries(app PRIVATE csp)
 target_compile_definitions(app PRIVATE
   CUBERANGE_COMM_ANTIREPLAY=${CUBERANGE_COMM_ANTIREPLAY}
-  CUBERANGE_COMM_ANTIREPLAY_PER_VC=${CUBERANGE_COMM_ANTIREPLAY_PER_VC})
+  CUBERANGE_COMM_ANTIREPLAY_PER_VC=${CUBERANGE_COMM_ANTIREPLAY_PER_VC}
+  CUBERANGE_COMM_CROSSLINK=${CUBERANGE_COMM_CROSSLINK})

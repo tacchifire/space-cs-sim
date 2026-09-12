@@ -38,6 +38,16 @@ math(EXPR _cr_obc  "${_cr_base} + 1")
 math(EXPR _cr_eps  "${_cr_base} + 2")
 math(EXPR _cr_adcs "${_cr_base} + 4")
 math(EXPR _cr_comm "${_cr_base} + 5")
+# The crosslink terminal, and the reason it is a SEPARATE address rather than the COMM's own.
+#
+# libcsp's split horizon asks "is the OUTGOING interface's address inside the INCOMING interface's
+# subnet?" (csp_io.c, three times; csp_iflist.c:15). A router with two interfaces that both carry
+# the node's address answers yes to that for every netmask, so it forwards NOTHING - silently, with
+# no error and no counter. Measured here: the packet arrives on fdcan2 and stops.
+#
+# Giving the crosslink attachment its own address makes the two interfaces distinguishable. Offset
+# 6 is free: 1, 2, 4 and 5 are the node roles and 7 is the subnet broadcast address.
+math(EXPR _cr_xlink "${_cr_base} + 6")
 math(EXPR _cr_scid "169 + ${CUBERANGE_SAT_INDEX}")     # 169 = 0x0A9
 
 # Ground stations. The PUS TC secondary header carries a 16-bit source id, and until EX-G02 the
@@ -56,9 +66,10 @@ target_compile_definitions(app PRIVATE
   EPS_ADDR=${_cr_eps}
   ADCS_ADDR=${_cr_adcs}
   COMM_ADDR=${_cr_comm}
+  XLINK_ADDR=${_cr_xlink}
   CR_SCID=${_cr_scid}
   OBC_APID=${_cr_scid})
 
 message(STATUS
   "CubeRange satellite ${CUBERANGE_SAT_INDEX}: OBC=${_cr_obc} EPS=${_cr_eps} "
-  "ADCS=${_cr_adcs} COMM=${_cr_comm} SCID=${_cr_scid}")
+  "ADCS=${_cr_adcs} COMM=${_cr_comm} XLINK=${_cr_xlink} SCID=${_cr_scid}")
