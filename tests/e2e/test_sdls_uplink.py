@@ -147,6 +147,46 @@ def test_a_tampered_payload_is_refused_with_the_fecf_repaired():
             "the OBC acted on a frame the MAC should have stopped\n" + obc)
 
 
+def test_a_replayed_authenticated_frame_is_refused():
+    """The reason SDLS is worth having over EX-L01's counter.
+
+    EX-L01's mitigation reads the frame sequence number out of the primary header - a field the
+    attacker writes, outside anything signed - and its own notes say a recording can be replayed
+    with that counter advanced. The SDLS sequence number is inside the authenticated portion, so
+    advancing it invalidates the MAC, and the MAC cannot be recomputed without the key.
+
+    The recording here is BYTE-IDENTICAL, which is the whole point: a replay does not need to
+    change anything.
+    """
+    with Range() as r:
+        frame = sdls.encode_tc(_pus17(), key=SDLS_KEY, spi=SDLS_SPI,
+                               iv=bytes(range(0xA0, 0xAC)), seq_num=5, frame_seq=0,
+                               scid=SAT.scid, vcid=0)
+        r.send(frame)
+        comm = r.console("sdls-comm.uart")
+        assert "authenticated frame" in comm, comm
+        assert "REPLAY" not in comm, "the first transmission was called a replay\n" + comm
+
+        r.send(frame)                                   # the same octets, again
+        comm = r.console("sdls-comm.uart")
+        assert "REPLAY - authenticated frame with sequence 5" in comm, (
+            "a byte-identical authenticated frame was accepted twice\n" + comm)
+
+
+def test_the_replay_check_does_not_block_the_next_real_command():
+    """A build that rejected everything after the first frame would pass the test above."""
+    with Range() as r:
+        for sn in (1, 2, 3):
+            r.send(sdls.encode_tc(_pus17(), key=SDLS_KEY, spi=SDLS_SPI,
+                                  iv=bytes(range(0xA0, 0xAC)), seq_num=sn, frame_seq=sn,
+                                  scid=SAT.scid, vcid=0), settle=3.0)
+        comm, obc = r.console("sdls-comm.uart"), r.console("sdls-obc.uart")
+        assert comm.count("authenticated frame") == 3, (
+            f"{comm.count('authenticated frame')} of 3 advancing frames were accepted\n" + comm)
+        assert "REPLAY" not in comm, comm
+        assert obc.count("PUS 17,1 from source") == 3, obc
+
+
 def test_a_plain_unauthenticated_frame_is_refused():
     """The format every other build in this range speaks, and this one does not."""
     with Range() as r:

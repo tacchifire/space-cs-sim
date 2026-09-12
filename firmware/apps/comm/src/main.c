@@ -219,6 +219,36 @@ static void on_tc_frame(const uint8_t *frame, size_t len, void *ctx)
 		printk("COMM: dropping a TC frame that did not authenticate\n");
 		return;
 	}
+	/* Anti-replay on the AUTHENTICATED sequence number, and this is the part that makes SDLS
+	 * worth having over EX-L01's counter.
+	 *
+	 * EX-L01 reads the frame sequence number out of the TC primary header - a field the attacker
+	 * writes, outside anything signed - so its own mitigation notes say a recording can be
+	 * replayed with the counter advanced. The SDLS sequence number is INSIDE the authenticated
+	 * portion: changing it invalidates the MAC, and the MAC cannot be recomputed without the key.
+	 *
+	 * ONE counter, because this range has one Security Association. That is the same shape
+	 * EX-G03 is about, one layer up: a second ground station transmitting on this SA would be
+	 * locked out exactly as it was there. The difference is that SDLS has somewhere to put the
+	 * fix - anti-replay state belongs to the SA, so two stations get two SAs and two counters -
+	 * whereas EX-G03 had to move the counter to the virtual channel and hope those lined up.
+	 * That is not implemented here: one SA, one counter, and the limit is written down.
+	 *
+	 * Strictly greater, not "not equal". A window would accept out-of-order frames within it, and
+	 * CCSDS 355.0-B-2 provides for one (the SA's arsnw); a single high-water mark is the
+	 * degenerate window of size one and is what this range needs to make the lesson visible.
+	 */
+	static uint32_t sdls_sn_seen;
+	static bool sdls_sn_have;
+
+	if (sdls_sn_have && parts.seq_num <= sdls_sn_seen) {
+		printk("COMM: REPLAY - authenticated frame with sequence %u, already seen %u\n",
+		       (unsigned int)parts.seq_num, (unsigned int)sdls_sn_seen);
+		return;
+	}
+	sdls_sn_seen = parts.seq_num;
+	sdls_sn_have = true;
+
 	seq = frame[4];
 	packet = parts.payload;
 	packet_len = parts.payload_len;
