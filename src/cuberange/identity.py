@@ -10,8 +10,8 @@ The derivation is duplicated rather than shared because CMake and Python cannot 
 and `test_identity.py` asserts the two agree by parsing identity.cmake. A divergence is then a test
 failure rather than a range that answers from the wrong satellite.
 
-    satellite 0    OBC 1   EPS 2   ADCS 4   COMM 5    SCID/APID 0x0A9
-    satellite 1    OBC 9   EPS 10  ADCS 12  COMM 13   SCID/APID 0x0AA
+    satellite 0    OBC 1   EPS 2   ADCS 4   COMM 5   XLINK 6    SCID/APID 0x0A9
+    satellite 1    OBC 9   EPS 10  ADCS 12  COMM 13  XLINK 14   SCID/APID 0x0AA
 """
 from __future__ import annotations
 
@@ -21,7 +21,11 @@ STRIDE = 8
 MAX_SATELLITES = 4          # CSP v1 addresses are five bits: 4 x 8 = 32
 BASE_SCID = 0x0A9
 
-_OFFSETS = {"obc": 1, "eps": 2, "adcs": 4, "comm": 5}
+#: Offset 6 is the crosslink terminal, not a node. It exists because libcsp's split horizon
+#: compares the outgoing interface's ADDRESS against the incoming interface's subnet, so a COMM
+#: whose two interfaces both carry address 8i+5 forwards nothing between them - silently. Offsets
+#: 0, 3 are free; 7 is the subnet broadcast address and must stay free.
+_OFFSETS = {"obc": 1, "eps": 2, "adcs": 4, "comm": 5, "xlink": 6}
 
 #: Ground stations, by name, as they appear in the PUS TC secondary header's source id.
 #:
@@ -61,6 +65,9 @@ class Spacecraft:
     eps: int
     adcs: int
     comm: int
+    #: The COMM's crosslink attachment, not a node of its own. See _OFFSETS for why it needs an
+    #: address at all.
+    xlink: int
     scid: int
 
     @property

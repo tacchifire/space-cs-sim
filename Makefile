@@ -215,7 +215,7 @@ verify:
 	    python3 -m pytest exercises/$(EX)/verify_*.py -v
 
 # Every exercise, both directions. This is the claim the product makes.
-verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02 firmware-g03 firmware-g04)
+verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02 firmware-g03 firmware-g04 firmware-x01)
 	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest exercises/*/verify_*.py -v
 
@@ -267,7 +267,7 @@ firmware-f01: firmware-p1
 # prerequisite once per invocation, so this is one pristine build of each of the seven images
 # rather than the four rounds `check` used to do.
 .PHONY: firmware-all
-firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03 firmware-g04
+firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03 firmware-g04 firmware-x01
 	@echo "all node images built:"
 	@ls -1 $(OUT)/build-*/zephyr/zephyr.elf
 
@@ -377,6 +377,43 @@ firmware-g01: firmware-f01
 # or per virtual channel.
 # EX-G04's pair. EX-G02's authority check is ON in both: what differs is whether the refusal
 # reaches the ground as PUS 1,2, or only the console nobody off the spacecraft can read.
+firmware-x01:
+	# COMM with the crosslink, on BOTH spacecraft, and with every link-layer defence this range
+	# has turned ON: EX-L01's anti-replay and EX-G03's per-VC sequence numbers. That is
+	# deliberate. EX-X01 is not about a COMM with its guard down - it is about WHERE those guards
+	# are. They live in on_tc_frame, the space-link deframer, and a CSP packet arriving on the
+	# crosslink never reaches it.
+	#
+	# The crosslink is a devicetree change and a Kconfig change, both applied through EXTRA_*
+	# files rather than the app's own boards/ overlay and prj.conf, so that every other
+	# exercise's COMM keeps the build it has. Those exercises rest on pairs that compare builds.
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-comm-xlink firmware/apps/comm -- \
+	    -DCUBERANGE_COMM_ANTIREPLAY=1 -DCUBERANGE_COMM_ANTIREPLAY_PER_VC=1 \
+	    -DCUBERANGE_COMM_CROSSLINK=1 \
+	    -DEXTRA_DTC_OVERLAY_FILE=$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.overlay \
+	    -DEXTRA_CONF_FILE=$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.conf
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-comm-xlink-sat1 firmware/apps/comm -- \
+	    -DCUBERANGE_SAT_INDEX=1 \
+	    -DCUBERANGE_COMM_ANTIREPLAY=1 -DCUBERANGE_COMM_ANTIREPLAY_PER_VC=1 \
+	    -DCUBERANGE_COMM_CROSSLINK=1 \
+	    -DEXTRA_DTC_OVERLAY_FILE=$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.overlay \
+	    -DEXTRA_CONF_FILE=$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.conf
+	# The pair. REQUIRE_AUTHORITY is ON in BOTH halves - EX-G02's defence is present and working
+	# in the vulnerable build, and it does not help. That is the exercise.
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-obc-x01-vuln firmware/apps/obc -- \
+	    -DCUBERANGE_OBC_PUS8_LENGTH_CHECK=1 -DCUBERANGE_OBC_REQUIRE_AUTHORITY=1 \
+	    -DCUBERANGE_OBC_VERIFY_REPORTS=1 -DCUBERANGE_OBC_CROSSLINK_ORIGIN=0
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-obc-x01-hard firmware/apps/obc -- \
+	    -DCUBERANGE_OBC_PUS8_LENGTH_CHECK=1 -DCUBERANGE_OBC_REQUIRE_AUTHORITY=1 \
+	    -DCUBERANGE_OBC_VERIFY_REPORTS=1 -DCUBERANGE_OBC_CROSSLINK_ORIGIN=1
+	@ls -l $(OUT)/build-comm-xlink/zephyr/zephyr.elf \
+	       $(OUT)/build-comm-xlink-sat1/zephyr/zephyr.elf \
+	       $(OUT)/build-obc-x01-vuln/zephyr/zephyr.elf $(OUT)/build-obc-x01-hard/zephyr/zephyr.elf
+
 firmware-g04:
 	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
 	    -d $(OUT)/build-obc-g04-vuln firmware/apps/obc -- \

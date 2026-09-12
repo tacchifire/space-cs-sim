@@ -33,11 +33,17 @@ SUBTYPE_ACCEPTANCE_FAILURE = 2
 FAILURE_NOT_AUTHORISED = 1
 FAILURE_UNKNOWN_FUNCTION = 2
 FAILURE_MALFORMED = 3
+#: The source id named a ground station and the packet did not arrive from this spacecraft's COMM.
+#: Distinct from NOT_AUTHORISED on purpose: that one means "you may not", this one means "you are
+#: not who the packet says", and an operator who cannot tell them apart will investigate the wrong
+#: thing. EX-X01.
+FAILURE_WRONG_ORIGIN = 4
 
 FAILURE_NAMES = {
     FAILURE_NOT_AUTHORISED: "not authorised",
     FAILURE_UNKNOWN_FUNCTION: "unknown function",
     FAILURE_MALFORMED: "malformed request",
+    FAILURE_WRONG_ORIGIN: "origin does not match the claimed source",
 }
 
 

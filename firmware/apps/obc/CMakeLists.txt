@@ -20,6 +20,13 @@ set(CUBERANGE_OBC_REQUIRE_AUTHORITY 0 CACHE STRING
 set(CUBERANGE_OBC_VERIFY_REPORTS 0 CACHE STRING
     "send PUS 1,2 acceptance failure reports when a telecommand is refused")
 
+# EX-X01's only difference. The crosslink gives a telecommand a second way in, and the source id
+# in its secondary header is a field the sender writes - so the authority table above authorises
+# whoever fills it in. This binds the claim to the CSP address the packet actually arrived from.
+#   west build ... -- -DCUBERANGE_OBC_CROSSLINK_ORIGIN=1
+set(CUBERANGE_OBC_CROSSLINK_ORIGIN 0 CACHE STRING
+    "a packet claiming a ground station's source id must have arrived from this spacecraft's COMM")
+
 include(${CMAKE_CURRENT_LIST_DIR}/../../common/identity.cmake)
 
 target_sources(app PRIVATE src/main.c ../../common/cuberange_proto.c)
@@ -28,4 +35,5 @@ target_link_libraries(app PRIVATE csp)
 target_compile_definitions(app PRIVATE
   CUBERANGE_OBC_PUS8_LENGTH_CHECK=${CUBERANGE_OBC_PUS8_LENGTH_CHECK}
   CUBERANGE_OBC_REQUIRE_AUTHORITY=${CUBERANGE_OBC_REQUIRE_AUTHORITY}
-  CUBERANGE_OBC_VERIFY_REPORTS=${CUBERANGE_OBC_VERIFY_REPORTS})
+  CUBERANGE_OBC_VERIFY_REPORTS=${CUBERANGE_OBC_VERIFY_REPORTS}
+  CUBERANGE_OBC_CROSSLINK_ORIGIN=${CUBERANGE_OBC_CROSSLINK_ORIGIN})

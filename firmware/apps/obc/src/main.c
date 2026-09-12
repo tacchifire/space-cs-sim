@@ -175,6 +175,39 @@ static bool source_may_perform(uint16_t source_id, uint16_t function_id)
 }
 #endif
 
+#if CUBERANGE_OBC_CROSSLINK_ORIGIN
+/* Bind the claimed source to the path the packet arrived on - EX-X01's whole difference.
+ *
+ * The TC secondary header's source id is a FIELD THE SENDER WRITES. EX-G02 added an authority
+ * table keyed on it and EX-G04 added a refusal report about it, and both are correct about what
+ * they do: they stop a ground station from exceeding its authority. Neither authenticates
+ * anything, because there is nothing in the packet to authenticate with.
+ *
+ * That was survivable while every packet reached this OBC through its own spacecraft's COMM, off
+ * the space link. The crosslink is a second way in, it is shared with every other spacecraft in
+ * the constellation, and none of the link-layer work - EX-L01's anti-replay, EX-G03's per-VC
+ * sequence numbers - exists on it. Those defences live on the space link. A defence is attached
+ * to a path, not to an asset.
+ *
+ * So: a packet claiming to come from a ground station has to have come from this spacecraft's own
+ * COMM. A peer may talk to us. A peer may not be the ground.
+ *
+ * This is a TOPOLOGY check, not authentication. It says where the packet entered, which the
+ * attacker does not choose, instead of who sent it, which the attacker writes. It stops a peer
+ * from borrowing the ground's name; it does nothing about a peer that compromises our own COMM,
+ * and nothing about anyone who can transmit on the space link. Authenticating the sender needs
+ * SDLS, which this range does not implement - see ASSURANCE.md, which says so and will keep
+ * saying so until it is true.
+ */
+static bool origin_permits_claim(uint16_t source_id, uint16_t via)
+{
+	if (source_id != GROUND_PRIMARY_ID && source_id != GROUND_BACKUP_ID) {
+		return true;
+	}
+	return via == COMM_ADDR;
+}
+#endif
+
 #define ROUTER_STACK 1024
 #define APP_STACK    2048
 
@@ -386,7 +419,7 @@ static void handle_function(const uint8_t *app_data, size_t len, uint16_t source
 	printk("OBC: unknown function %u\n", function_id);
 }
 
-static void handle_space_packet(const uint8_t *raw, size_t len)
+static void handle_space_packet(const uint8_t *raw, size_t len, uint16_t via)
 {
 	if (len < SP_HEADER_LEN + PUS_TC_SEC_LEN) {
 		printk("OBC: space packet too short: %u octets\n", (unsigned int)len);
@@ -407,6 +440,24 @@ static void handle_space_packet(const uint8_t *raw, size_t len)
 	uint16_t source_id = (uint16_t)((sec[3] << 8) | sec[4]);
 
 	printk("OBC: APID 0x%03x PUS %u,%u from source %u\n", apid, service, subtype, source_id);
+
+#if CUBERANGE_OBC_CROSSLINK_ORIGIN
+	/* Before the dispatch, and before the authority table, because this is not a question about
+	 * what the sender may do. It is a question about whether the name on the packet can be the
+	 * name it says, and a packet that fails it must not reach a handler at all. */
+	if (!origin_permits_claim(source_id, via)) {
+		printk("OBC: REJECTED a packet claiming source %u that arrived from node %u\n",
+		       (unsigned int)source_id, (unsigned int)via);
+#if CUBERANGE_OBC_VERIFY_REPORTS
+		/* Reported to the claimed source, not to the sender. A ground station receiving a
+		 * refusal for a request id it never issued is being told its name is in use. */
+		send_acceptance_failure(source_id, raw, 4 /* wrong origin */);
+#endif
+		return;
+	}
+#else
+	ARG_UNUSED(via);
+#endif
 
 	if (service == SERVICE_TEST && subtype == SUBTYPE_TEST) {
 		send_test_report(source_id);
@@ -454,7 +505,7 @@ static void app_task(void *a, void *b, void *c)
 
 		while ((packet = csp_read(conn, 100)) != NULL) {
 			if (csp_conn_dport(conn) == CSP_PORT_PUS) {
-				handle_space_packet(packet->data, packet->length);
+				handle_space_packet(packet->data, packet->length, csp_conn_src(conn));
 				csp_buffer_free(packet);
 			} else {
 				/* Takes ownership of the packet. */

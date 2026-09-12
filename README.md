@@ -46,10 +46,19 @@ mitigation admitted to:
   ground, a refused command and a frame that was never received are the same observation, so the
   pass is spent debugging the radio. Four octets of request id and one of reason end that.
 
-All five attack origins are covered: the internal bus, the space link, the ADCS command envelope,
-the OBC's own command parser, and the ground segment that decides what to send. EX-G02, EX-G03
-and EX-G04 add no sixth on purpose — a legitimate origin exceeding its authority, a legitimate
-origin exceeding nothing at all, and a control that works and cannot be heard working.
+- **EX-X01** — two spacecraft, and a crosslink between them, because a constellation whose
+  members cannot talk to each other is four satellites. Everything is hardened: the EPS token
+  check, the PUS 8 length check, the authority table, the verification reports, all on. A
+  compromised peer switches the victim's radio off anyway, by writing the ground station's source
+  id into a field it chooses. Its own identity is refused; the ground's is obeyed; the difference
+  is two octets. Meanwhile the EPS refuses that same attacker on both builds, because it asks for
+  a token rather than a name.
+
+Six attack origins are covered: the internal bus, the space link, the ADCS command envelope, the
+OBC's own command parser, the ground segment that decides what to send, and a spacecraft in your
+own constellation. EX-G02, EX-G03 and EX-G04 add no origin on purpose — a legitimate origin
+exceeding its authority, a legitimate origin exceeding nothing at all, and a control that works
+and cannot be heard working.
 
 **Two ground stations, two consoles.** `make ground-stations` runs both as separate nodes
 against one spacecraft, and `make gs STATION=backup` is a console to sit at while a scenario runs

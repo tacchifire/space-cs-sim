@@ -49,6 +49,9 @@
 #ifndef CUBERANGE_COMM_ANTIREPLAY_PER_VC
 #define CUBERANGE_COMM_ANTIREPLAY_PER_VC 0
 #endif
+#ifndef CUBERANGE_COMM_CROSSLINK
+#define CUBERANGE_COMM_CROSSLINK 0
+#endif
 
 #define RX_RING_SIZE  512
 #define ROUTER_STACK  1024
@@ -57,6 +60,9 @@
 
 static const struct device *link_dev;
 static csp_iface_t *can_iface;
+#if CUBERANGE_COMM_CROSSLINK
+static csp_iface_t *xlink_iface;
+#endif
 
 K_MSGQ_DEFINE(link_rx_q, 1, RX_RING_SIZE, 1);
 
@@ -251,6 +257,45 @@ K_THREAD_DEFINE(router_id, ROUTER_STACK, router_task, NULL, NULL, NULL, 0, 0, K_
 K_THREAD_DEFINE(link_id, LINK_STACK, link_task, NULL, NULL, NULL, 1, 0, K_TICKS_FOREVER);
 K_THREAD_DEFINE(down_id, DOWN_STACK, down_task, NULL, NULL, NULL, 1, 0, K_TICKS_FOREVER);
 
+#if CUBERANGE_COMM_CROSSLINK
+/* Prove the crosslink carries traffic, once, at startup.
+ *
+ * Without this the link's presence is an assertion: the interface registers, the console says it
+ * is up, and nothing has crossed it. csp_ping is libcsp's own service - csp_services.c is in the
+ * library's source list, and `arm-zephyr-eabi-nm` on a COMM image built before this showed no
+ * csp_ping symbol at all, because nothing referenced it and --gc-sections dropped it. Referencing
+ * it here is what links it in.
+ *
+ * It is also what the exercise opens with. A crosslink exists so that a spacecraft out of contact
+ * with every ground station is reachable through a neighbour that is not; the first thing a
+ * student should see is the link working, before seeing what else it carries.
+ *
+ * The delay is because the peer may still be booting. One shot, not a beacon: a periodic thread
+ * would be more firmware than this needs, and a single logged round trip is the whole claim.
+ */
+static void crosslink_hello(void)
+{
+	/* Every other spacecraft's COMM. The address plan puts the spacecraft in the top two bits
+	 * of the five, so this is just "every other value of those two bits" - see the routing
+	 * comment in main(). */
+	k_sleep(K_SECONDS(3));
+
+	for (int sat = 0; sat < 4; sat++) {
+		uint16_t peer = (uint16_t)(sat * 8 + 5);
+
+		if (peer == COMM_ADDR) {
+			continue;
+		}
+		int ms = csp_ping(peer, 1000, 4, CSP_O_NONE);
+
+		if (ms >= 0) {
+			printk("COMM: crosslink reached COMM %u in %d ms\n",
+			       (unsigned int)peer, ms);
+		}
+	}
+}
+#endif
+
 int main(void)
 {
 	printk("CUBERANGE: COMM (addr %d) booting\n", COMM_ADDR);
@@ -284,7 +329,77 @@ int main(void)
 		printk("COMM: FATAL csp_can_open_and_add_interface -> %d\n", err);
 		return -1;
 	}
+#if CUBERANGE_COMM_CROSSLINK
+	/* The crosslink. fdcan2, joined to every other spacecraft's fdcan2 on one shared hub.
+	 *
+	 * ROUTING, WITHOUT A ROUTING TABLE. This build sets CONFIG_CSP_USE_RTABLE=n, so csp_io.c
+	 * chooses an interface by subnet (csp_iflist_get_by_subnet) and falls back to whatever is
+	 * marked default. That is enough for a constellation, because this range's address plan
+	 * already puts the spacecraft in the address:
+	 *
+	 *     CSP v1 address        b4 b3 | b2 b1 b0
+	 *                           sat   | node
+	 *
+	 * identity.py uses STRIDE 8 and MAX_SATELLITES 4, and 8 x 4 is 32, which is the whole
+	 * five-bit space (CSP_ID1_HOST_SIZE is 5 in libcsp's csp_id.c). So the top two bits ARE the
+	 * spacecraft index, a /2 on the intra-spacecraft interface is exactly "my own spacecraft",
+	 * and everything else falls through to here. Nobody designed that: the address plan was laid
+	 * out for identity, before this link existed, and it turned out to be the right shape.
+	 *
+	 * csp_iflist_is_within_subnet builds its mask as ((1 << netmask) - 1) << (5 - netmask), so
+	 * netmask 2 is 0b11000 - read the source rather than assume, because the same field means a
+	 * host-bits count in some stacks and a prefix length in others.
+	 *
+	 * The intra interface stops being default. csp_send_direct walks EVERY default interface and
+	 * sends a copy to each, so leaving both default would put every internal packet on the
+	 * crosslink as well - the spacecraft's own housekeeping, broadcast to the constellation.
+	 */
+	can_iface->netmask = 2;
+	can_iface->is_default = 0;
+
+	const struct device *xlink_dev = DEVICE_DT_GET(DT_NODELABEL(fdcan2));
+
+	if (!device_is_ready(xlink_dev)) {
+		printk("COMM: FATAL crosslink device not ready\n");
+		return -1;
+	}
+	/* Same all-accepting filter as the intra bus, for the same reason, plus one specific to this
+	 * link: a spacecraft must be able to HEAR its neighbours' traffic. That is what makes the
+	 * crosslink a shared medium rather than a bundle of point-to-point wires, and it is what the
+	 * exercise on this link is about. */
+	err = csp_can_open_and_add_interface(xlink_dev, "XLINK", XLINK_ADDR, CAN_BITRATE,
+					     0x3FFF, 0x0000, &xlink_iface);
+	if (err != CSP_ERR_NONE) {
+		printk("COMM: FATAL crosslink csp_can_open_and_add_interface -> %d\n", err);
+		return -1;
+	}
+	/* A HOST ROUTE, not a subnet, and the address is XLINK_ADDR rather than this node's own.
+	 *
+	 * Both of those are forced by libcsp's split horizon, which appears three times in csp_io.c
+	 * and asks the same question each time:
+	 *
+	 *     if (csp_iflist_is_within_subnet(iface->addr, routed_from)) continue;
+	 *
+	 * That compares the OUTGOING interface's ADDRESS against the INCOMING interface's subnet. A
+	 * router whose two interfaces both carry the node's own address answers yes for every
+	 * netmask - csp_iflist.c:21 builds the mask from the netmask, and netmask 0 builds mask 0,
+	 * which makes every address equal to every other - so it forwards NOTHING. There is no error
+	 * and no counter: the packet arrives on fdcan2 and stops. Measured, after the first version
+	 * of this file did exactly that.
+	 *
+	 * So the crosslink attachment gets its own address (8i+6, free in the plan) and a /5, which
+	 * is a route to itself alone. Outbound traffic does not need the subnet: this is the default
+	 * interface, and a packet this node ORIGINATES has routed_from == NULL, which
+	 * csp_iflist_is_within_subnet answers 0 for - no split horizon on anything we send.
+	 */
+	xlink_iface->netmask = 5;
+	xlink_iface->is_default = 1;
+
+	printk("CUBERANGE: COMM crosslink up on %s, /2 local, default out\n", xlink_dev->name);
+#else
+	/* One bus, everything on it. What every exercise except EX-X01 runs. */
 	can_iface->is_default = 1;
+#endif
 
 	link_dev = DEVICE_DT_GET(DT_ALIAS(spacelink));
 	if (!device_is_ready(link_dev)) {
@@ -298,6 +413,10 @@ int main(void)
 	k_thread_start(down_id);
 
 	printk("CUBERANGE: COMM ready, link on %s\n", link_dev->name);
+
+#if CUBERANGE_COMM_CROSSLINK
+	crosslink_hello();
+#endif
 
 	return 0;
 }

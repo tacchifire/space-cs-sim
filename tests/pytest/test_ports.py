@@ -38,7 +38,10 @@ def test_all_assigned_agrees_with_the_individual_functions():
     assert table[ports.injector(3)] == "sat3 injector"
     assert table[ports.channel(1)] == "sat1 channel"
     assert table[ports.monitor()] == "monitor"
-    assert len(table) == ports.MAX_SATELLITES * 3 + 2
+    assert table[ports.crosslink_injector()] == "crosslink injector"
+    #: three per satellite, plus the three that are not per-satellite: the Monitor, the scratch
+    #: link, and the crosslink injector.
+    assert len(table) == ports.MAX_SATELLITES * 3 + 3
 
 
 def test_the_historical_numbers_are_preserved():

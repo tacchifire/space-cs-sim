@@ -58,6 +58,7 @@ def firmware_pairs() -> int:
 
 ACTUAL = {
     "exercises": lambda: len(exercise_dirs()),
+    "exercise files": lambda: len(EXERCISE_FILES),
     "assertions": exercise_assertions,
     "golden files": golden_files,
     "firmware pairs": firmware_pairs,
@@ -74,6 +75,8 @@ CLAIMS = [
     ("assertions",     "CLAUDE.md",            r"(\d+) assertions, all measured"),
     ("exercises",      "CLAUDE.ja.md",         r"現在 (\d+) つの演習が動く"),
     ("assertions",     "CLAUDE.ja.md",         r"アサーションは (\d+)、すべて実測である"),
+    ("exercise files", "CONTRIBUTING.md",    r"An exercise is (\w+) files"),
+    ("exercise files", "CONTRIBUTING.ja.md", r"演習は(\w+)つのファイル"),
     ("firmware pairs", "tools/config_diff_gate.py", None),   # checked below, not by regex
 ]
 
@@ -116,12 +119,19 @@ def test_the_gate_documents_as_many_checks_as_it_runs():
         f"{sorted(documented)}. A check nobody knows about is one nobody maintains.")
 
 
+#: What makes a directory an exercise. Named here rather than inline because CONTRIBUTING.md
+#: states the COUNT in both languages, and CLAIMS below checks the prose against len() of this -
+#: the prose said five for a long time while this required seven, the two Japanese files having
+#: fallen out of the sentence in both languages.
+EXERCISE_FILES = ("README.md", "README.ja.md", "mitigation.md", "mitigation.ja.md",
+                  "solve.py", "scenario.resc", "verify_ex_*.py")
+
+
 def test_every_exercise_directory_is_a_complete_exercise():
-    """Five files each, and CONTRIBUTING.md says so. A half-landed exercise counts as one here."""
+    """Every file in EXERCISE_FILES. A half-landed exercise counts as one here."""
     missing = []
     for d in exercise_dirs():
-        for name in ("README.md", "README.ja.md", "mitigation.md", "mitigation.ja.md",
-                     "solve.py", "scenario.resc"):
+        for name in [n for n in EXERCISE_FILES if not n.startswith("verify_")]:
             if not (d / name).is_file():
                 missing.append(f"{d.name}/{name}")
         if not list(d.glob("verify_ex_*.py")):
