@@ -37,6 +37,18 @@ Start it and watch it work:
 make exercise EX=EX-X01-a-peer-with-the-grounds-name
 ```
 
+`make exercise` puts you in a shell **inside the range's network namespace**, and the solver has
+to run from there. The namespace holds only loopback (SAFE_USE.md), and a new one is created per
+invocation, so a solver started in another terminal gets `ConnectionRefusedError` — the space link
+and the injector do not exist outside. `make channel`, `make gs` and `make verify` work from that
+shell too, and are the same three commands they always were.
+
+To run one command instead of getting a shell:
+
+```bash
+make exercise EX=EX-X01-a-peer-with-the-grounds-name RUN='python3 exercises/EX-X01-a-peer-with-the-grounds-name/solve.py'
+```
+
 Both COMM consoles say so, within a few seconds of boot:
 
 ```

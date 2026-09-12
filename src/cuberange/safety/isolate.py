@@ -34,7 +34,7 @@ import subprocess
 import sys
 from typing import Sequence
 
-from .network import ISOLATED_ENV, NetworkIsolationError
+from .network import ISOLATED_ENV, NetworkIsolationError, is_isolated
 
 #: A candidate is (name, argv-prefix builder). Each is tried by running the probe below inside it.
 _PROBE = (
@@ -107,6 +107,23 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if not args.command:
         ap.error("nothing to run; pass the command after --")
+
+    #: Already inside one? Then run here, and do NOT build another.
+    #:
+    #: Two reasons, and the second is the one that bites. Namespaces do not nest on this host -
+    #: measured: bwrap inside bwrap is "No permissions to create a new namespace" and unshare is
+    #: EPERM, both from kernel.apparmor_restrict_unprivileged_userns=1. But even where it works,
+    #: a nested namespace is a DIFFERENT loopback: `make exercise` in one and `make channel` in
+    #: another gives two ranges that cannot see each other, and the symptom is a ground station
+    #: that connects to nothing with no explanation.
+    #:
+    #: This is what lets the exercise shell be a shell. Inside it, `make channel`, `make gs` and
+    #: `make verify` reach the Renode that `make exercise` started, because they stop re-wrapping
+    #: and simply run.
+    if is_isolated():
+        os.execvpe(args.command[0], list(args.command),
+                   dict(os.environ, **{ISOLATED_ENV: "1"}))
+        return 127                                            # pragma: no cover
 
     name, build = working_backend()
     env = dict(os.environ, **{ISOLATED_ENV: "1", "CUBERANGE_ISOLATION_BACKEND": name})

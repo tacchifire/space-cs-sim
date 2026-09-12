@@ -54,6 +54,16 @@ python3 -m cuberange.safety.isolate --probe        # which mechanism works on th
 python3 -m cuberange.safety.isolate -- <command>   # run anything inside the namespace
 ```
 
+`make exercise` gives you a shell **inside** that namespace, and that is where the solvers,
+`make channel`, `make gs` and `make verify` are meant to run. They have to: the namespace is
+created per invocation, so a second terminal is a second namespace, and a ground station started
+there connects to nothing. Every exercise README used to say "run this here, run that there", and
+it stopped working the day this containment landed - `tests/e2e/test_documented_workflow.py` now
+runs the documented path so that cannot happen quietly again.
+
+`cuberange.safety.isolate` is idempotent: asked to isolate while already in a loopback-only
+namespace, it runs the command directly instead of building another one.
+
 Two mechanisms are tried, and the choice is made by running each one and looking at the result
 rather than by checking which binary exists. That distinction is not academic: on a current Ubuntu
 `unshare` is installed and refused by policy

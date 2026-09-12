@@ -54,12 +54,25 @@ watch them interfere.
 make firmware-g03
 make verify EX=EX-G03-one-counter-two-stations
 
-# or by hand, three terminals
+# or by hand. All of it at the prompt `make exercise` gives you - three TERMINALS would be
+# three namespaces, which is three ranges that cannot see each other.
 make exercise EX=EX-G03-one-counter-two-stations
-make channel
+make channel &
 make gs STATION=primary                 # works
 python3 exercises/EX-G03-one-counter-two-stations/solve.py
 make gs STATION=primary                 # now it does not
+```
+
+`make exercise` puts you in a shell **inside the range's network namespace**, and the solver has
+to run from there. The namespace holds only loopback (SAFE_USE.md), and a new one is created per
+invocation, so a solver started in another terminal gets `ConnectionRefusedError` — the space link
+and the injector do not exist outside. `make channel`, `make gs` and `make verify` work from that
+shell too, and are the same three commands they always were.
+
+To run one command instead of getting a shell:
+
+```bash
+make exercise EX=EX-G03-one-counter-two-stations RUN='python3 exercises/EX-G03-one-counter-two-stations/solve.py'
 ```
 
 ## Hints

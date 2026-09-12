@@ -54,6 +54,18 @@ python3 exercises/EX-F01-pus8-ret2win/solve.py             # the model answer
 make verify EX=EX-F01-pus8-ret2win
 ```
 
+`make exercise` puts you in a shell **inside the range's network namespace**, and the solver has
+to run from there. The namespace holds only loopback (SAFE_USE.md), and a new one is created per
+invocation, so a solver started in another terminal gets `ConnectionRefusedError` — the space link
+and the injector do not exist outside. `make channel`, `make gs` and `make verify` work from that
+shell too, and are the same three commands they always were.
+
+To run one command instead of getting a shell:
+
+```bash
+make exercise EX=EX-F01-pus8-ret2win RUN='python3 exercises/EX-F01-pus8-ret2win/solve.py'
+```
+
 ## Before you start: what will not work
 
 Do not write shellcode. It is not that it is hard here — it cannot execute at all, and that is a

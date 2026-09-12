@@ -58,10 +58,21 @@ EX-G02 の権限検査は ON で、正しく働いている。`power` を与え�
 make firmware-g04
 make verify EX=EX-G04-a-refusal-nobody-hears
 
-# あるいは手で
+# あるいは手で、`make exercise` が出すプロンプトで
 make exercise EX=EX-G04-a-refusal-nobody-hears
-make channel
+make channel &
 python3 exercises/EX-G04-a-refusal-nobody-hears/solve.py
+```
+
+`make exercise` は **range のネットワーク名前空間の中**のシェルに入る。ソルバはそこから走らせる。
+名前空間にはループバックしか無く（SAFE_USE.md）、起動ごとに新しく作られるので、別の端末で
+起動したソルバは `ConnectionRefusedError` を受け取る——宇宙リンクもインジェクタも外側には
+存在しない。`make channel`・`make gs`・`make verify` もそのシェルから動き、コマンドは従来のままである。
+
+シェルではなく1コマンドだけ走らせるなら:
+
+```bash
+make exercise EX=EX-G04-a-refusal-nobody-hears RUN='python3 exercises/EX-G04-a-refusal-nobody-hears/solve.py'
 ```
 
 ## ヒント

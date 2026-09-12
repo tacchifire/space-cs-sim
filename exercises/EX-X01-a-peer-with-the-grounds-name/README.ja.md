@@ -35,6 +35,17 @@ EX-G04 の拒否報告。`make constellation` は宇宙機同士が**分離し�
 make exercise EX=EX-X01-a-peer-with-the-grounds-name
 ```
 
+`make exercise` は **range のネットワーク名前空間の中**のシェルに入る。ソルバはそこから走らせる。
+名前空間にはループバックしか無く（SAFE_USE.md）、起動ごとに新しく作られるので、別の端末で
+起動したソルバは `ConnectionRefusedError` を受け取る——宇宙リンクもインジェクタも外側には
+存在しない。`make channel`・`make gs`・`make verify` もそのシェルから動き、コマンドは従来のままである。
+
+シェルではなく1コマンドだけ走らせるなら:
+
+```bash
+make exercise EX=EX-X01-a-peer-with-the-grounds-name RUN='python3 exercises/EX-X01-a-peer-with-the-grounds-name/solve.py'
+```
+
 起動から数秒で、両方の COMM コンソールがそう言う:
 
 ```
