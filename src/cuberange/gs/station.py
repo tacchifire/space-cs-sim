@@ -91,6 +91,24 @@ class GroundStation:
         #: dropped: on a range whose subject is forged telemetry, "something claimed to be from
         #: the spacecraft and was not" is the observation, and discarding it would hide it.
         self.unauthenticated: list = []
+        #: The spacecraft's own report counter, and the gaps in it.
+        #:
+        #: EX-D01 ended by naming this. Authentication proves what the spacecraft SAID; it cannot
+        #: prove the spacecraft said everything, and a suppressed refusal is indistinguishable
+        #: from a command that was accepted - which is EX-G04's finding, still true after two
+        #: rounds of cryptography aimed at forgery.
+        #:
+        #: The counter is the PUS TM message counter, which the spacecraft increments for every
+        #: report it sends. It is sixteen bits and it wraps; `_advance` treats a step of more than
+        #: half the range as a wrap rather than a gap, because the alternative is a station that
+        #: reports 65000 missing reports once a day.
+        #:
+        #: THIS ONLY WORKS ON AUTHENTICATED TELEMETRY. Without a trailer an attacker suppresses a
+        #: report and forges a replacement carrying the counter value that would have been next,
+        #: and the gap closes. EX-D02 measures that, because a detection that a forger can defeat
+        #: is worth knowing the shape of rather than trusting.
+        self.last_report_counter: int | None = None
+        self.counter_gaps: list = []
         self.undecodable: list = []
         # Replies that decoded but were not ours. Kept rather than dropped: on a range with two
         # stations, "someone else's telemetry arrived here" is the observation the exercise is
@@ -154,6 +172,8 @@ class GroundStation:
             except ValueError as exc:
                 self.undecodable.append((frame, str(exc)))
                 continue
+            if tm.dest_id == self.station_id:
+                self._advance(tm.msg_counter)
             if (tm.service, tm.subtype) == (SERVICE_VERIFICATION, SUBTYPE_ACCEPTANCE_FAILURE):
                 if tm.dest_id == self.station_id:
                     self.refusals.append(decode_refusal(tm))
@@ -167,6 +187,31 @@ class GroundStation:
                 continue
             mine.append(tm)
         return mine
+
+    def _advance(self, counter: int) -> None:
+        """Record this report's counter and note anything missing between it and the last.
+
+        Counts the gap rather than merely flagging one, because "three reports are missing" and
+        "one report is missing" are different situations for an operator and the difference is
+        free to carry.
+        """
+        if self.last_report_counter is None:
+            self.last_report_counter = counter
+            return
+        step = (counter - self.last_report_counter) & 0xFFFF
+        if step == 0:
+            return
+        #: A backwards step, or a jump of more than half the counter's range, is a wrap or a
+        #: reordering rather than 60-thousand lost reports. Reported as neither: this station
+        #: claims to detect gaps, not to reconstruct history.
+        if step > 1 and step < 0x8000:
+            self.counter_gaps.append((self.last_report_counter, counter, step - 1))
+        self.last_report_counter = counter
+
+    @property
+    def reports_missing(self) -> int:
+        """How many reports this station can tell it never received."""
+        return sum(missing for _, _, missing in self.counter_gaps)
 
     def await_refusal(self, timeout: float = 10.0):
         """Wait for the spacecraft to say it refused something. None if it never does."""
