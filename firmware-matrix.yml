@@ -82,3 +82,9 @@ pairs:
     flag: CUBERANGE_OBC_CROSSLINK_ORIGIN
     vuln: { value: "0", build: build-obc-x01-vuln }
     hard: { value: "1", build: build-obc-x01-hard }
+
+  - id: EX-S02
+    app: firmware/apps/obc
+    flag: CUBERANGE_OBC_REQUIRE_PUS_AUTH
+    vuln: { value: "0", build: build-obc-s02-vuln }
+    hard: { value: "1", build: build-obc-s02-hard }

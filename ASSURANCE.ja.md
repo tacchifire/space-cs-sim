@@ -21,6 +21,7 @@
   | TC 転送フレームの一次ヘッダ | NASA CryptoLib（再実装ではなく、octets を解析させる）と 232.0-B-4 からの手組み | `test_golden_transfer_frame.py` |
   | TM 転送フレームの一次ヘッダ | `spacepackets.ccsds.tm_frame` | `test_golden_transfer_frame.py` |
   | SDLS の TC セキュリティヘッダ／トレーラ | NASA CryptoLib（自分が作っていないフレームを解析させる）、MAC は libsodium と NIST の AES-256-GCM ベクタ | `test_golden_sdls.py` |
+  | PUS 層の認証トレーラ | **レイアウトには無い**——ミッション定義であり、記述する標準が存在しない。MAC は libsodium と NIST ベクタが担う | `test_golden_pus_auth.py` |
 
   下 2 行は 2026-09-10 まで**「無し」**だった。そしてその上の行は読み違えやすかった——
   転送フレームを**覆う** FECF には独立した意見が 4 つあるのに、

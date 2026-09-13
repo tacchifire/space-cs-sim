@@ -1,0 +1,62 @@
+{
+  "spec": "MISSION-DEFINED. ECSS-E-ST-70-41C has no authentication field for a TC packet and CCSDS puts security at the transfer-frame layer; this trailer is this project's, and EX-S02 exists because that layer is the one a crosslink bypasses.",
+  "oracles": [
+    "NONE for the field layout - there is no standard to check it against, and naming one here that only resembles the question would be worse than saying this.",
+    "libsodium via PyNaCl for the AES-256-GCM tag - a different implementation from the OpenSSL one the codec uses.",
+    "NIST SP 800-38D / CAVP AES-256-GCM vectors for the primitive, in sdls.json."
+  ],
+  "layout": "primary(6) | PUS TC secondary(5) | application data | SEQ(4) | MAC(16)",
+  "nonce": "APID(2) | source id(2) | sequence(4) | zeros(4), derived rather than transmitted",
+  "nonce_reuse": "within one key the nonce repeats only if a source id reuses a sequence number, which is the event the anti-replay check refuses. GCM punishes nonce reuse by leaking the authentication subkey, so those two properties being the same property is what makes the counter non-optional.",
+  "key": "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F",
+  "vectors": [
+    {
+      "apid": 169,
+      "source_id": 66,
+      "seq": 0,
+      "service": 17,
+      "subtype": 1,
+      "app_data": "",
+      "inner": "18A9C00000042F11010042",
+      "nonce": "00A900420000000000000000",
+      "mac": "D68D6327E5330E8C6CC792C65FFEDC1B",
+      "packet": "18A9C00000182F1101004200000000D68D6327E5330E8C6CC792C65FFEDC1B"
+    },
+    {
+      "apid": 169,
+      "source_id": 66,
+      "seq": 7,
+      "service": 8,
+      "subtype": 1,
+      "app_data": "000100",
+      "inner": "18A9C00000072F08010042000100",
+      "nonce": "00A900420000000700000000",
+      "mac": "CB93B70E167A2332470DE525154C18FC",
+      "packet": "18A9C000001B2F0801004200010000000007CB93B70E167A2332470DE525154C18FC"
+    },
+    {
+      "apid": 2047,
+      "source_id": 65535,
+      "seq": 4294967295,
+      "service": 8,
+      "subtype": 1,
+      "app_data": "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F202122232425262728292A2B2C2D2E2F303132333435363738393A3B3C3D3E3F",
+      "inner": "1FFFC00000442F0801FFFF000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F202122232425262728292A2B2C2D2E2F303132333435363738393A3B3C3D3E3F",
+      "nonce": "07FFFFFFFFFFFFFF00000000",
+      "mac": "9B4D55BDAF605376BB6261D0BCB1A93C",
+      "packet": "1FFFC00000582F0801FFFF000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F202122232425262728292A2B2C2D2E2F303132333435363738393A3B3C3D3E3FFFFFFFFF9B4D55BDAF605376BB6261D0BCB1A93C"
+    },
+    {
+      "apid": 0,
+      "source_id": 1,
+      "seq": 1,
+      "service": 17,
+      "subtype": 1,
+      "app_data": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "inner": "1800C00000682F11010001AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "nonce": "000000010000000100000000",
+      "mac": "2C9BEBC01E733ACF2620E8A3AA70E1E1",
+      "packet": "1800C000007C2F11010001AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA000000012C9BEBC01E733ACF2620E8A3AA70E1E1"
+    }
+  ]
+}

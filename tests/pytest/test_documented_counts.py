@@ -82,8 +82,12 @@ CLAIMS = [
     ("firmware pairs", "tools/config_diff_gate.py", None),   # checked below, not by regex
 ]
 
-WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
-         "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+#: English prose counts in words up to a point and then stops; this follows it rather than forcing
+#: the prose to say "11 exercises". Extended when the range passed ten.
+WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+         "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+         "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+         "nineteen": 19, "twenty": 20}
 
 
 def _as_int(text: str) -> int:
