@@ -72,6 +72,13 @@ mitigation admitted to:
   right sequence number, right station, plausible reason, and an OBC console with nothing on it.
   The fix is in two places and only one of them is the spacecraft.
 
+- **EX-D02** — the only exercise here that does not ask you to break anything. Three commands go
+  up, some number of reports come back, and you decide from the console whether the spacecraft
+  answered all three. The counter that makes that possible has been in every report since P0.
+  Then the same attacker closes the gap, by putting a replacement back carrying the counter the
+  missing one would have had — which works exactly as long as the station is not checking
+  signatures. The gap check and the signature check are one mitigation, not two.
+
 Seven attack origins are covered: the internal bus, the space link, the ADCS command envelope, the
 OBC's own command parser, the ground segment that decides what to send, a spacecraft in your
 own constellation, and the downlink the operator reads. EX-G02, EX-G03 and EX-G04 add no origin on purpose — a legitimate origin

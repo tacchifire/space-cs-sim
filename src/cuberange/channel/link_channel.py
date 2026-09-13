@@ -17,6 +17,22 @@ does. Two stations transmitting at once interleave, and that is not a defect: tw
 one channel collide. The transmit lock keeps a single write from being torn, and nothing pretends
 to more than that.
 
+SUPPRESSION. A `downlink_filter` can refuse individual frames, which is how EX-D02 models an
+attacker who denies specific telemetry rather than forging it. Be precise about what that is:
+
+  - It is exactly what a compromised ground-segment front end can do - a scheduler, a
+    demodulator's output handler, anything between the antenna and the operator's console. That is
+    the same supply-chain position EX-G01 attacks, and it needs no radio at all.
+  - It OVERSTATES a jammer, which cannot pick one frame out of a stream with this precision, and
+    UNDERSTATES a compromised ground segment, which could also alter them. The lesson EX-D02
+    teaches - that an authenticated report proves what the spacecraft said and not that it said
+    everything - does not depend on which of those the attacker is.
+
+The filter is opt-in and OFF by default, and when it is off the downlink is forwarded as raw
+bytes exactly as before. With it on, the channel forwards frame by frame and re-wraps them, which
+means malformed octets between frames are dropped rather than passed - a real behaviour change,
+and the reason it is not the default.
+
 Not modelled yet, and named here so nobody mistakes this for a channel model: propagation delay,
 bit errors, pass windows, and Doppler. EX-L01 needs none of them; EX-L02 will.
 """
@@ -33,9 +49,18 @@ from .. import ports
 
 class LinkChannel:
     def __init__(self, listen_port: int, sat_host: str = "127.0.0.1", sat_port: int = ports.link(0),
-                 listen_host: str = "127.0.0.1"):
+                 listen_host: str = "127.0.0.1", downlink_filter=None):
         self.listen_addr = (listen_host, listen_port)
         self.sat_addr = (sat_host, sat_port)
+
+        #: `downlink_filter(frame) -> bool`; True lets it through. None keeps the raw byte
+        #: passthrough this channel has always had - see the module docstring for why that
+        #: distinction is not cosmetic.
+        self.downlink_filter = downlink_filter
+        #: What the filter refused, in order. Kept rather than counted: on a range whose subject
+        #: is what the operator can and cannot know, "this is what you were not told" is the
+        #: thing a write-up needs to be able to show.
+        self.suppressed: List[bytes] = []
 
         self.uplink_frames: List[bytes] = []      # ground -> satellite
         self.downlink_frames: List[bytes] = []    # satellite -> ground
@@ -140,7 +165,23 @@ class LinkChannel:
             if not chunk:
                 break
             self.downlink_bytes.extend(chunk)
-            self.downlink_frames.extend(self._down_deframer.feed(chunk))
+            frames = self._down_deframer.feed(chunk)
+            self.downlink_frames.extend(frames)
+
+            if self.downlink_filter is None:
+                out = chunk
+            else:
+                #: Frame by frame, re-wrapped. Whole frames only: an attacker that could deny half
+                #: a frame would be denying a checksum, which the receiver already handles.
+                kept = []
+                for frame in frames:
+                    if self.downlink_filter(frame):
+                        kept.append(wrap(frame))
+                    else:
+                        self.suppressed.append(frame)
+                out = b"".join(kept)
+                if not out:
+                    continue
             # Broadcast. A downlink is a transmission, not a reply to whoever spoke last: every
             # attached station hears it, which is how a second site takes telemetry from a pass it
             # is not commanding.
@@ -148,7 +189,7 @@ class LinkChannel:
                 attached = list(self._clients)
             for client in attached:
                 try:
-                    client.sendall(chunk)
+                    client.sendall(out)
                 except OSError:
                     pass
 
@@ -171,6 +212,26 @@ class LinkChannel:
         would quietly hide a mitigation that depends on a field the attacker never parsed.
         """
         self._to_satellite(wrap(frame))
+
+    def transmit_to_ground(self, frame: bytes) -> None:
+        """Put a frame in front of every attached station, as if the spacecraft had sent it.
+
+        The downlink counterpart of `replay`, and it exists because an attacker who can DENY a
+        frame is in the same position as one who can ADD one - the two are the same access. A
+        write-up that modelled only denial would leave the reader thinking a suppressed report
+        leaves a hole, when the interesting case is the hole being filled.
+
+        Not routed through `downlink_filter`: this frame is the attacker's, and passing their own
+        injection through their own filter would be a confusion of who is doing what.
+        """
+        raw = wrap(frame)
+        with self._clients_lock:
+            attached = list(self._clients)
+        for client in attached:
+            try:
+                client.sendall(raw)
+            except OSError:
+                pass
 
     def wait_for_uplink(self, count: int, timeout: float = 10.0) -> bool:
         deadline = time.time() + timeout
