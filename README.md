@@ -66,9 +66,15 @@ mitigation admitted to:
   EX-X01's attack — the same solver file, a third time — is refused. Twenty octets on every
   telecommand is what that costs, and authentication still answers who rather than what.
 
-Six attack origins are covered: the internal bus, the space link, the ADCS command envelope, the
-OBC's own command parser, the ground segment that decides what to send, and a spacecraft in your
-own constellation. EX-G02, EX-G03 and EX-G04 add no origin on purpose — a legitimate origin
+- **EX-D01** — the only exercise here that attacks the operator. EX-G04 built a channel so the
+  ground could hear a refusal instead of guessing at silence; nobody authenticated it. A peer on
+  the crosslink hands the victim's own COMM a PUS 1,2 and the victim transmits it — right APID,
+  right sequence number, right station, plausible reason, and an OBC console with nothing on it.
+  The fix is in two places and only one of them is the spacecraft.
+
+Seven attack origins are covered: the internal bus, the space link, the ADCS command envelope, the
+OBC's own command parser, the ground segment that decides what to send, a spacecraft in your
+own constellation, and the downlink the operator reads. EX-G02, EX-G03 and EX-G04 add no origin on purpose — a legitimate origin
 exceeding its authority, a legitimate origin exceeding nothing at all, and a control that works
 and cannot be heard working.
 

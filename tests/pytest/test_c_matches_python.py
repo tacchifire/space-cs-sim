@@ -44,7 +44,8 @@ FRAME_CB = ctypes.CFUNCTYPE(None, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_
 
 class CrPusAuthParts(ctypes.Structure):
     """`struct cr_pus_auth_parts`, field for field."""
-    _fields_ = [("apid", ctypes.c_uint16), ("source_id", ctypes.c_uint16),
+    _fields_ = [("apid", ctypes.c_uint16), ("party_id", ctypes.c_uint16),
+                ("direction", ctypes.c_uint8),
                 ("seq", ctypes.c_uint32),
                 ("mac", ctypes.c_void_p),
                 ("aad", ctypes.c_void_p), ("aad_len", ctypes.c_size_t),
@@ -98,7 +99,12 @@ def clib(tmp_path_factory):
                                       ctypes.POINTER(CrPusAuthParts)]
     lib.cr_pus_auth_nonce.restype = None
     lib.cr_pus_auth_nonce.argtypes = [ctypes.c_uint16, ctypes.c_uint16, ctypes.c_uint32,
-                                      ctypes.c_char_p]
+                                      ctypes.c_uint8, ctypes.c_char_p]
+    lib.cr_pus_auth_direction.restype = ctypes.c_uint8
+    lib.cr_pus_auth_direction.argtypes = [ctypes.c_char_p]
+    lib.cr_pus_auth_prepare.restype = ctypes.c_size_t
+    lib.cr_pus_auth_prepare.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_uint32,
+                                        ctypes.POINTER(CrPusAuthParts)]
     lib.cr_pus_auth_strip.restype = None
     lib.cr_pus_auth_strip.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
 
@@ -440,7 +446,8 @@ def _auth_split(clib, packet: bytes):
     if rc != 0:
         return rc, None
     base = ctypes.cast(buf, ctypes.c_void_p).value
-    return 0, {"apid": parts.apid, "source_id": parts.source_id, "seq": parts.seq,
+    return 0, {"apid": parts.apid, "source_id": parts.party_id,
+               "direction": parts.direction, "seq": parts.seq,
                "mac_at": parts.mac - base, "aad_at": parts.aad - base,
                "aad_len": parts.aad_len, "inner_len": parts.inner_len}
 
@@ -475,9 +482,13 @@ def test_both_split_an_authenticated_packet_the_same_way(clib, payload, source_i
 ])
 def test_both_derive_the_same_nonce(clib, apid, source_id, seq):
     """A nonce that differs by one octet is a MAC that never verifies and a message nobody can debug."""
-    buf = ctypes.create_string_buffer(pus_auth.NONCE_LEN)
-    clib.cr_pus_auth_nonce(apid, source_id, seq, buf)
-    assert buf.raw[:pus_auth.NONCE_LEN] == pus_auth.nonce(apid, source_id, seq)
+    for direction in (pus_auth.DIRECTION_TC, pus_auth.DIRECTION_TM):
+        buf = ctypes.create_string_buffer(pus_auth.NONCE_LEN)
+        clib.cr_pus_auth_nonce(apid, source_id, seq, direction, buf)
+        assert buf.raw[:pus_auth.NONCE_LEN] == pus_auth.nonce(apid, source_id, seq, direction)
+    #: And the two directions must not collide, which is the whole reason the octet is there.
+    assert (pus_auth.nonce(apid, source_id, seq, pus_auth.DIRECTION_TC)
+            != pus_auth.nonce(apid, source_id, seq, pus_auth.DIRECTION_TM))
 
 
 def test_both_put_the_length_field_back_the_same_way(clib):
@@ -507,3 +518,62 @@ def test_both_refuse_the_same_malformed_packets(clib):
         #: drops telecommands the ground believes are valid.
         if rc != 0:
             assert not py_ok, f"case {i}: C refused it (rc={rc}) and Python accepted it"
+
+
+def _tm_packet(dest_id=None, seq=5, apid=0x0A9):
+    """A PUS 1,2 acceptance-failure report, which is what the spacecraft signs."""
+    from cuberange.gs.station import PUS_TM_TIME_LEN
+    from cuberange.identity import GROUND_STATIONS
+    from cuberange.proto.pus import PusTm
+    from cuberange.proto.spacepacket import PacketType, SpacePacket
+
+    if dest_id is None:
+        dest_id = GROUND_STATIONS["primary"]
+    return SpacePacket(apid=apid, ptype=PacketType.TM, sec_hdr=True, seq_count=0,
+                       data=PusTm(service=1, subtype=2, dest_id=dest_id,
+                                  time=bytes(PUS_TM_TIME_LEN),
+                                  app_data=bytes(5)).encode()).encode()
+
+
+@pytest.mark.parametrize("build", ["tc", "tm"])
+def test_both_read_the_counterparty_from_the_right_place(clib, build):
+    """A TC's source id and a TM's destination id are at different offsets, and the nonce needs
+    whichever the packet's type bit says. Getting it wrong produces a MAC that never verifies and
+    a message nobody can debug."""
+    packet = _auth_packet()[0] if build == "tc" else pus_auth.sign(
+        _tm_packet(), key=bytes(range(32)), seq=5)
+    rc, got = _auth_split(clib, packet)
+    assert rc == 0
+    assert clib.cr_pus_auth_direction(packet) == pus_auth.direction_of(packet)
+    assert got["direction"] == pus_auth.direction_of(packet)
+    assert got["source_id"] == pus_auth.party_of(packet)
+    assert pus_auth.verify(packet, key=bytes(range(32))).source_id == got["source_id"]
+
+
+def test_the_c_signer_and_the_python_signer_produce_the_same_packet(clib):
+    """cr_pus_auth_prepare fills in everything but the MAC; the MAC is the caller's.
+
+    So: let C prepare the packet, compute the tag over the region C says to, write it where C says
+    to, and require the result to equal what pus_auth.sign produced. That compares the length-field
+    rewrite, the sequence placement, the nonce and the authenticated region in one assertion - and
+    those are exactly the four things that make a spacecraft and a ground station disagree about a
+    report that is actually fine.
+    """
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    key = bytes(range(32))
+    for inner in (_tm_packet(), _auth_packet()[1]):
+        buf = ctypes.create_string_buffer(inner + bytes(pus_auth.TRAILER_LEN),
+                                          len(inner) + pus_auth.TRAILER_LEN)
+        parts = CrPusAuthParts()
+        total = clib.cr_pus_auth_prepare(buf, len(inner), 5, ctypes.byref(parts))
+        assert total == len(inner) + pus_auth.TRAILER_LEN
+
+        aad = buf.raw[:parts.aad_len]
+        iv = pus_auth.nonce(parts.apid, parts.party_id, parts.seq, parts.direction)
+        tag = AESGCM(key).encrypt(iv, b"", aad)
+        built = aad + tag
+
+        assert built == pus_auth.sign(inner, key=key, seq=5), (
+            f"C-prepared and Python-signed differ\n  C:      {built.hex()}\n"
+            f"  Python: {pus_auth.sign(inner, key=key, seq=5).hex()}")

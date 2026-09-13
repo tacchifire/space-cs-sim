@@ -88,3 +88,9 @@ pairs:
     flag: CUBERANGE_OBC_REQUIRE_PUS_AUTH
     vuln: { value: "0", build: build-obc-s02-vuln }
     hard: { value: "1", build: build-obc-s02-hard }
+
+  - id: EX-D01
+    app: firmware/apps/obc
+    flag: CUBERANGE_OBC_SIGN_REPORTS
+    vuln: { value: "0", build: build-obc-d01-vuln }
+    hard: { value: "1", build: build-obc-d01-hard }

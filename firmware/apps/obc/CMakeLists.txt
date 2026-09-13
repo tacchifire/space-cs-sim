@@ -34,6 +34,13 @@ set(CUBERANGE_OBC_CROSSLINK_ORIGIN 0 CACHE STRING
 set(CUBERANGE_OBC_REQUIRE_PUS_AUTH 0 CACHE STRING
     "verify a MAC carried inside the telecommand itself, whatever link it arrived on")
 
+# EX-D01's only difference. EX-G04 gave the ground the ability to HEAR a refusal; nobody
+# authenticated it, so anybody could speak. This signs the report with the same trailer the
+# telecommands carry.
+#   west build ... -- -DCUBERANGE_OBC_SIGN_REPORTS=1
+set(CUBERANGE_OBC_SIGN_REPORTS 0 CACHE STRING
+    "put an authentication trailer on the reports the spacecraft sends to the ground")
+
 include(${CMAKE_CURRENT_LIST_DIR}/../../common/identity.cmake)
 
 target_sources(app PRIVATE src/main.c ../../common/cuberange_proto.c
@@ -45,4 +52,5 @@ target_compile_definitions(app PRIVATE
   CUBERANGE_OBC_REQUIRE_AUTHORITY=${CUBERANGE_OBC_REQUIRE_AUTHORITY}
   CUBERANGE_OBC_VERIFY_REPORTS=${CUBERANGE_OBC_VERIFY_REPORTS}
   CUBERANGE_OBC_CROSSLINK_ORIGIN=${CUBERANGE_OBC_CROSSLINK_ORIGIN}
-  CUBERANGE_OBC_REQUIRE_PUS_AUTH=${CUBERANGE_OBC_REQUIRE_PUS_AUTH})
+  CUBERANGE_OBC_REQUIRE_PUS_AUTH=${CUBERANGE_OBC_REQUIRE_PUS_AUTH}
+  CUBERANGE_OBC_SIGN_REPORTS=${CUBERANGE_OBC_SIGN_REPORTS})

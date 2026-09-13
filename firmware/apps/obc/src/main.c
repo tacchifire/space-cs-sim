@@ -32,11 +32,14 @@
 #ifndef CUBERANGE_OBC_REQUIRE_PUS_AUTH
 #define CUBERANGE_OBC_REQUIRE_PUS_AUTH 0
 #endif
+#ifndef CUBERANGE_OBC_SIGN_REPORTS
+#define CUBERANGE_OBC_SIGN_REPORTS 0
+#endif
 
 /* Included after the default above, never beside the other headers: a `#if` on a macro that has
  * not been defaulted yet is 0 whatever the build says, and the symptom is a build with the flag
  * ON whose verifier was compiled out. Measured the hard way in COMM - see W47. */
-#if CUBERANGE_OBC_REQUIRE_PUS_AUTH
+#if CUBERANGE_OBC_REQUIRE_PUS_AUTH || CUBERANGE_OBC_SIGN_REPORTS
 #include "cuberange_pus_auth.h"
 #include "cuberange_keys.h"
 #include <mbedtls/gcm.h>
@@ -247,7 +250,7 @@ static bool pus_auth_ok(uint8_t *packet, size_t *len)
 
 	uint8_t nonce[CR_PUS_AUTH_NONCE_LEN];
 
-	cr_pus_auth_nonce(parts.apid, parts.source_id, parts.seq, nonce);
+	cr_pus_auth_nonce(parts.apid, parts.party_id, parts.seq, parts.direction, nonce);
 
 	mbedtls_gcm_context gcm;
 
@@ -276,7 +279,7 @@ static bool pus_auth_ok(uint8_t *packet, size_t *len)
 	size_t slot = ARRAY_SIZE(replay);
 
 	for (size_t i = 0; i < ARRAY_SIZE(replay); i++) {
-		if (replay[i].used && replay[i].source == parts.source_id) {
+		if (replay[i].used && replay[i].source == parts.party_id) {
 			slot = i;
 			break;
 		}
@@ -286,16 +289,16 @@ static bool pus_auth_ok(uint8_t *packet, size_t *len)
 	}
 	if (slot == ARRAY_SIZE(replay)) {
 		printk("OBC: no replay slot left for source %u - refusing\n",
-		       (unsigned int)parts.source_id);
+		       (unsigned int)parts.party_id);
 		return false;
 	}
 	if (replay[slot].used && parts.seq <= replay[slot].seen) {
 		printk("OBC: REPLAY - source %u sequence %u, already seen %u\n",
-		       (unsigned int)parts.source_id, (unsigned int)parts.seq,
+		       (unsigned int)parts.party_id, (unsigned int)parts.seq,
 		       (unsigned int)replay[slot].seen);
 		return false;
 	}
-	replay[slot].source = parts.source_id;
+	replay[slot].source = parts.party_id;
 	replay[slot].seen = parts.seq;
 	replay[slot].used = true;
 
@@ -304,6 +307,44 @@ static bool pus_auth_ok(uint8_t *packet, size_t *len)
 	return true;
 }
 #endif /* CUBERANGE_OBC_REQUIRE_PUS_AUTH */
+
+#if CUBERANGE_OBC_SIGN_REPORTS
+/* Sign a report before it goes down, with the same trailer the telecommands carry.
+ *
+ * EX-G04 gave the ground the ability to HEAR a refusal. Nobody authenticated it, so anybody could
+ * speak: COMM's downlink task frames whatever arrives on its PUS port from any CSP source, so a
+ * peer on the crosslink can tell an operator "your command was refused - not authorised" about a
+ * command the spacecraft never saw. Measured before this existed; EX-D01 is that.
+ *
+ * The direction octet in the nonce exists for this function. Without it a telecommand FROM a
+ * station and a report TO that same station, both with the same sequence number, produce the same
+ * nonce under one key - and GCM answers nonce reuse by leaking the authentication subkey.
+ *
+ * `body` must have CR_PUS_AUTH_TRAILER octets of room after `len`. Returns the new length.
+ */
+static size_t sign_report(uint8_t *body, size_t len)
+{
+	static uint32_t report_seq;
+	struct cr_pus_auth_parts parts;
+	const size_t total = cr_pus_auth_prepare(body, len, report_seq++, &parts);
+
+	uint8_t nonce[CR_PUS_AUTH_NONCE_LEN];
+
+	cr_pus_auth_nonce(parts.apid, parts.party_id, parts.seq, parts.direction, nonce);
+
+	mbedtls_gcm_context gcm;
+
+	mbedtls_gcm_init(&gcm);
+	if (mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, cr_sdls_key,
+			       8 * sizeof(cr_sdls_key)) == 0) {
+		(void)mbedtls_gcm_crypt_and_tag(&gcm, MBEDTLS_GCM_ENCRYPT, 0, nonce, sizeof(nonce),
+						parts.aad, parts.aad_len, NULL, NULL,
+						CR_PUS_AUTH_MAC_LEN, body + parts.aad_len);
+	}
+	mbedtls_gcm_free(&gcm);
+	return total;
+}
+#endif /* CUBERANGE_OBC_SIGN_REPORTS */
 
 #define ROUTER_STACK 1024
 /* The PUS-auth build carries a 424-octet mbedtls_gcm_context in pus_auth_ok, which runs on this
@@ -338,7 +379,14 @@ static uint16_t tm_msg_counter;
 static void send_acceptance_failure(uint16_t dest_id, const uint8_t *failed_packet,
 				    uint8_t failure_code)
 {
+#if CUBERANGE_OBC_SIGN_REPORTS
+	/* Room for the trailer sign_report appends. Sized here rather than in sign_report because
+	 * the buffer is the caller's and C will not tell you it was too small. */
+	uint8_t body[SP_HEADER_LEN + PUS_TM_SEC_LEN + TIME_LEN + 5 + CR_PUS_AUTH_TRAILER];
+#else
 	uint8_t body[SP_HEADER_LEN + PUS_TM_SEC_LEN + TIME_LEN + 5];
+#endif
+	const size_t body_len = SP_HEADER_LEN + PUS_TM_SEC_LEN + TIME_LEN + 5;
 	uint32_t now = (uint32_t)k_uptime_get();
 	size_t data_len = PUS_TM_SEC_LEN + TIME_LEN + 5;
 
@@ -372,8 +420,13 @@ static void send_acceptance_failure(uint16_t dest_id, const uint8_t *failed_pack
 		printk("OBC: no CSP buffer for an acceptance failure report\n");
 		return;
 	}
-	memcpy(packet->data, body, sizeof(body));
-	packet->length = (uint16_t)sizeof(body);
+	size_t blen = body_len;
+
+#if CUBERANGE_OBC_SIGN_REPORTS
+	blen = sign_report(body, blen);
+#endif
+	memcpy(packet->data, body, blen);
+	packet->length = (uint16_t)blen;
 
 	csp_conn_t *conn = csp_connect(CSP_PRIO_NORM, COMM_ADDR, CSP_PORT_PUS, 1000, CSP_O_NONE);
 
@@ -391,7 +444,12 @@ static void send_acceptance_failure(uint16_t dest_id, const uint8_t *failed_pack
 
 static void send_test_report(uint16_t source_id)
 {
+#if CUBERANGE_OBC_SIGN_REPORTS
+	uint8_t body[SP_HEADER_LEN + PUS_TM_SEC_LEN + TIME_LEN + CR_PUS_AUTH_TRAILER];
+#else
 	uint8_t body[SP_HEADER_LEN + PUS_TM_SEC_LEN + TIME_LEN];
+#endif
+	const size_t body_len = SP_HEADER_LEN + PUS_TM_SEC_LEN + TIME_LEN;
 	uint32_t now = (uint32_t)k_uptime_get();
 	size_t data_len = PUS_TM_SEC_LEN + TIME_LEN;
 
@@ -420,8 +478,13 @@ static void send_test_report(uint16_t source_id)
 		printk("OBC: no CSP buffer for a test report\n");
 		return;
 	}
-	memcpy(packet->data, body, sizeof(body));
-	packet->length = (uint16_t)sizeof(body);
+	size_t blen = body_len;
+
+#if CUBERANGE_OBC_SIGN_REPORTS
+	blen = sign_report(body, blen);
+#endif
+	memcpy(packet->data, body, blen);
+	packet->length = (uint16_t)blen;
 
 	/* Connection-oriented: COMM's downlink task receives with csp_bind/listen/accept. */
 	csp_conn_t *conn = csp_connect(CSP_PRIO_NORM, COMM_ADDR, CSP_PORT_PUS, 1000, CSP_O_NONE);

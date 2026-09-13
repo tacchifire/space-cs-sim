@@ -1,0 +1,106 @@
+:name: EX-D01 - a refusal nobody sent
+:description: EX-G04 let the ground hear a refusal. Nobody authenticated it.
+
+# Execution profile (design 4.3; rules G1/G2 of section 9.2). FIRST, so a profile that cannot be
+# found takes the machines down loudly instead of leaving every node running with no quantum set.
+$profile?=@~/space-cs-sim/scripts/profiles/interactive.resc
+include $profile
+
+# Every path hangs off $out, which has NO default - see any other scenario in this repository for
+# why. Unset, LoadELF fails where you can see it.
+#
+#   renode -e '$out=@'"$(make -s out)" -e 'include @<this file>' -e start
+$comm?=$out/build-comm-s01-sat0/zephyr/zephyr.elf
+$obc?=$out/build-obc-d01-hard/zephyr/zephyr.elf
+$eps?=$out/build-eps-hard/zephyr/zephyr.elf
+$injector?=@~/space-cs-sim/attacker/TcpCanInjector.cs
+
+# The uplink into satellite 0 is AUTHENTICATED: this COMM verifies a CCSDS 355.0-B-2 MAC and an
+# anti-replay counter that lives inside the signed portion, before anything else reads the frame.
+# A plain frame is refused; a replayed one is refused; a tampered one is refused. `make sdls`
+# measures all three.
+#
+# The crosslink is the same bus it was in EX-X01, and nothing about the two flags interacts. That
+# is the exercise.
+#
+# Satellite 1's COMM is here so the crosslink has something on the far end. It is a real image with
+# a real CSP address, not scenery: the two COMMs ping each other across the link at startup, which
+# is how the exercise opens and how anyone reading the console can see the link carry a packet
+# before seeing what else it carries.
+$comm1?=$out/build-comm-s01-sat1/zephyr/zephyr.elf
+
+$comm0uart?=$out/d01-sat0-comm.uart
+$obc0uart?=$out/d01-sat0-obc.uart
+$eps0uart?=$out/d01-sat0-eps.uart
+$comm1uart?=$out/d01-sat1-comm.uart
+$linkport?=3777
+$xlinkport?=4577
+
+# Three hubs. Two intra-spacecraft, kept apart by their names exactly as the constellation scenario
+# keeps them apart - and one crosslink that deliberately joins the two COMMs. That last hub is the
+# whole exercise: test_the_buses_are_isolated in tests/e2e/test_constellation.py asserts that the
+# first two never see each other's traffic, and it still passes, because it runs the constellation
+# scenario. This one adds a bus on purpose.
+emulation CreateCANHub "canHub0"
+emulation CreateCANHub "canHub1"
+emulation CreateCANHub "crosslinkHub"
+
+# --- satellite 0: the victim. Everything hardened. ------------------------------------------------
+
+mach create "SAT0_COMM"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub0
+connector Connect sysbus.fdcan2 crosslinkHub
+sysbus LoadELF $comm
+sysbus.usart3 CreateFileBackend $comm0uart true
+emulation CreateServerSocketTerminal $linkport "spacelink0" false
+connector Connect sysbus.usart2 spacelink0
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+logLevel 3 fdcan2
+
+mach create "SAT0_OBC"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub0
+sysbus LoadELF $obc
+sysbus.usart3 CreateFileBackend $obc0uart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "SAT0_EPS"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub0
+sysbus LoadELF $eps
+sysbus.usart3 CreateFileBackend $eps0uart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+# --- satellite 1: the neighbour. Its COMM is on the crosslink; nothing else about it matters here.
+
+mach create "SAT1_COMM"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub1
+connector Connect sysbus.fdcan2 crosslinkHub
+sysbus LoadELF $comm1
+sysbus.usart3 CreateFileBackend $comm1uart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+logLevel 3 fdcan2
+
+# --- the attacker ---------------------------------------------------------------------------------
+#
+# A bare machine with no platform, no ELF and no CPU, exactly as EX-B01's: it exists so the hub can
+# resolve GetName()/GetMachine() on the injector, because an ICAN attached to a hub must be a
+# registered machine peripheral or the exception poisons the hub for every node on it.
+#
+# It sits on the CROSSLINK, not on either spacecraft's internal bus. That is the premise: one
+# spacecraft in the constellation is already compromised, and what that buys is its radio. How it
+# was compromised is another exercise's subject - EX-F01 ends with code execution on an OBC.
+mach create "attacker"
+include $injector
+machine CreateTcpCanInjector "inj" $xlinkport
+connector Connect inj crosslinkHub

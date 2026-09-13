@@ -235,7 +235,7 @@ verify:
 	    python3 -m pytest exercises/$(EX)/verify_*.py -v
 
 # Every exercise, both directions. This is the claim the product makes.
-verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-s01 firmware-s02)
+verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-s01 firmware-s02 firmware-d01)
 	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest exercises/*/verify_*.py -v
 
@@ -287,7 +287,7 @@ firmware-f01: firmware-p1
 # prerequisite once per invocation, so this is one pristine build of each of the seven images
 # rather than the four rounds `check` used to do.
 .PHONY: firmware-all
-firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-sdls firmware-s01 firmware-s02
+firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-sdls firmware-s01 firmware-s02 firmware-d01
 	@echo "all node images built:"
 	@ls -1 $(OUT)/build-*/zephyr/zephyr.elf
 
@@ -405,6 +405,23 @@ firmware-g01: firmware-f01
 # or per virtual channel.
 # EX-G04's pair. EX-G02's authority check is ON in both: what differs is whether the refusal
 # reaches the ground as PUS 1,2, or only the console nobody off the spacecraft can read.
+firmware-d01:
+	# EX-D01's pair. Both halves have EX-G04's reports ON and EX-S02's command authentication ON,
+	# so the only thing that differs is whether the report going the other way carries a trailer.
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-obc-d01-vuln firmware/apps/obc -- \
+	    -DCUBERANGE_OBC_PUS8_LENGTH_CHECK=1 -DCUBERANGE_OBC_REQUIRE_AUTHORITY=1 \
+	    -DCUBERANGE_OBC_VERIFY_REPORTS=1 -DCUBERANGE_OBC_REQUIRE_PUS_AUTH=1 \
+	    -DCUBERANGE_OBC_SIGN_REPORTS=0 \
+	    -DEXTRA_CONF_FILE=$(CUBERANGE_REPO)/firmware/apps/obc/pus_auth.conf
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-obc-d01-hard firmware/apps/obc -- \
+	    -DCUBERANGE_OBC_PUS8_LENGTH_CHECK=1 -DCUBERANGE_OBC_REQUIRE_AUTHORITY=1 \
+	    -DCUBERANGE_OBC_VERIFY_REPORTS=1 -DCUBERANGE_OBC_REQUIRE_PUS_AUTH=1 \
+	    -DCUBERANGE_OBC_SIGN_REPORTS=1 \
+	    -DEXTRA_CONF_FILE=$(CUBERANGE_REPO)/firmware/apps/obc/pus_auth.conf
+	@ls -l $(OUT)/build-obc-d01-vuln/zephyr/zephyr.elf $(OUT)/build-obc-d01-hard/zephyr/zephyr.elf
+
 firmware-s02:
 	# EX-S02's pair. The vulnerable half is EX-X01's hardened OBC - authority table ON, refusal
 	# reports ON - so the thing that differs is only whether the telecommand carries its own MAC.
