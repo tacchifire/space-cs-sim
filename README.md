@@ -60,6 +60,12 @@ mitigation admitted to:
   attack runs again, byte for byte, and switches the radio off. SDLS is a transfer-frame protocol;
   the crosslink carries CSP. The packet did not fail a check — it never met one.
 
+- **EX-S02** — the answer EX-S01 names and does not implement: put the MAC on the telecommand.
+  It travels inside the Space Packet, covers the source id and a per-source counter, and verifies
+  the same whether the packet arrived on the space link, the crosslink or the internal bus.
+  EX-X01's attack — the same solver file, a third time — is refused. Twenty octets on every
+  telecommand is what that costs, and authentication still answers who rather than what.
+
 Six attack origins are covered: the internal bus, the space link, the ADCS command envelope, the
 OBC's own command parser, the ground segment that decides what to send, and a spacecraft in your
 own constellation. EX-G02, EX-G03 and EX-G04 add no origin on purpose — a legitimate origin

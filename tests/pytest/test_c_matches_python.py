@@ -20,7 +20,8 @@ from pathlib import Path
 
 import pytest
 
-from cuberange.proto import sdls  # noqa: E402
+from cuberange.identity import GROUND_STATIONS as _GS  # noqa: E402
+from cuberange.proto import pus_auth, sdls  # noqa: E402
 from cuberange.proto.crc import crc16_ccsds
 from cuberange.proto.frame import (Deframer, decode_tc_frame, decode_tm_frame,
                                    encode_tc_frame, encode_tm_frame,
@@ -39,6 +40,15 @@ class CrDeframer(ctypes.Structure):
 
 FRAME_CB = ctypes.CFUNCTYPE(None, ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t,
                             ctypes.c_void_p)
+
+
+class CrPusAuthParts(ctypes.Structure):
+    """`struct cr_pus_auth_parts`, field for field."""
+    _fields_ = [("apid", ctypes.c_uint16), ("source_id", ctypes.c_uint16),
+                ("seq", ctypes.c_uint32),
+                ("mac", ctypes.c_void_p),
+                ("aad", ctypes.c_void_p), ("aad_len", ctypes.c_size_t),
+                ("inner_len", ctypes.c_size_t)]
 
 
 class CrSdlsParts(ctypes.Structure):
@@ -63,7 +73,8 @@ def clib(tmp_path_factory):
     subprocess.run(
         ["cc", "-std=c11", "-O1", "-fPIC", "-shared",
          "-I", str(COMMON), str(COMMON / "cuberange_proto.c"),
-         str(COMMON / "cuberange_sdls.c"), "-o", str(so)],
+         str(COMMON / "cuberange_sdls.c"), str(COMMON / "cuberange_pus_auth.c"),
+         "-o", str(so)],
         check=True)
     lib = ctypes.CDLL(str(so))
 
@@ -81,6 +92,15 @@ def clib(tmp_path_factory):
     lib.cr_sdls_split.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_size_t,
                                   ctypes.c_size_t, ctypes.c_size_t,
                                   ctypes.POINTER(CrSdlsParts)]
+
+    lib.cr_pus_auth_split.restype = ctypes.c_int
+    lib.cr_pus_auth_split.argtypes = [ctypes.c_char_p, ctypes.c_size_t,
+                                      ctypes.POINTER(CrPusAuthParts)]
+    lib.cr_pus_auth_nonce.restype = None
+    lib.cr_pus_auth_nonce.argtypes = [ctypes.c_uint16, ctypes.c_uint16, ctypes.c_uint32,
+                                      ctypes.c_char_p]
+    lib.cr_pus_auth_strip.restype = None
+    lib.cr_pus_auth_strip.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
 
     lib.cr_encode_tc_frame.restype = ctypes.c_int
     lib.cr_encode_tc_frame.argtypes = [ctypes.c_char_p, ctypes.c_size_t,
@@ -389,3 +409,101 @@ def test_the_c_side_refuses_lengths_it_does_not_support(clib):
     for iv_len, sn_len, mac_len in ((0, 4, 16), (17, 4, 16), (12, 8, 16), (12, 4, 0), (12, 4, 17)):
         rc, _ = _split(clib, frame, iv_len, sn_len, mac_len)
         assert rc == -4, f"iv_len={iv_len} sn_len={sn_len} mac_len={mac_len} gave rc={rc}, not -4"
+
+
+# --------------------------------------------------------------------------------------------
+# PUS-layer authentication: the trailer's layout, in two implementations
+#
+# Same split as the SDLS one and for the same reason - the C side computes no MAC, because crypto
+# lives in whatever library the platform has. What can drift silently is where the sequence number
+# and the MAC start, and what the authenticated region covers; if those disagree the ground signs
+# one thing and the spacecraft checks another, and every telecommand is refused with no way to see
+# which end is wrong.
+
+def _auth_packet(payload=b"\x00\x01\x00", source_id=None, seq=7, apid=0x0A9):
+    from cuberange.identity import GROUND_STATIONS
+    from cuberange.proto.pus import PusTc
+    from cuberange.proto.spacepacket import PacketType, SpacePacket
+
+    if source_id is None:
+        source_id = GROUND_STATIONS["primary"]
+    inner = SpacePacket(apid=apid, ptype=PacketType.TC, sec_hdr=True, seq_count=0,
+                        data=PusTc(service=8, subtype=1, source_id=source_id,
+                                   app_data=payload).encode()).encode()
+    return pus_auth.sign(inner, key=bytes(range(32)), seq=seq), inner
+
+
+def _auth_split(clib, packet: bytes):
+    buf = ctypes.create_string_buffer(packet, len(packet))
+    parts = CrPusAuthParts()
+    rc = clib.cr_pus_auth_split(buf, len(packet), ctypes.byref(parts))
+    if rc != 0:
+        return rc, None
+    base = ctypes.cast(buf, ctypes.c_void_p).value
+    return 0, {"apid": parts.apid, "source_id": parts.source_id, "seq": parts.seq,
+               "mac_at": parts.mac - base, "aad_at": parts.aad - base,
+               "aad_len": parts.aad_len, "inner_len": parts.inner_len}
+
+
+#: Station ids come from cuberange.identity - test_identity.py forbids writing them by hand, and
+#: caught this file doing it. The extremes (0, 0xFFFF) are not stations and are literals on purpose.
+@pytest.mark.parametrize("payload,source_id,seq,apid", [
+    (b"", _GS["primary"], 0, 0x0A9),
+    (b"\x00\x01\x00", _GS["backup"], 7, 0x0A9),
+    (bytes(range(64)), 0xFFFF, 0xFFFFFFFF, 0x7FF),
+    (b"\xAA" * 200, 0, 1, 0x000),
+])
+def test_both_split_an_authenticated_packet_the_same_way(clib, payload, source_id, seq, apid):
+    signed, inner = _auth_packet(payload, source_id, seq, apid)
+    rc, got = _auth_split(clib, signed)
+    assert rc == 0, f"C refused a packet Python produced: rc={rc}"
+    py = pus_auth.verify(signed, key=bytes(range(32)))
+
+    assert got["apid"] == apid
+    assert got["source_id"] == py.source_id == source_id
+    assert got["seq"] == py.seq == seq
+    assert got["mac_at"] == len(signed) - pus_auth.MAC_LEN
+    assert got["aad_at"] == 0
+    assert got["aad_len"] == got["mac_at"], "the authenticated region must end where the MAC begins"
+    #: inner_len is what the packet becomes once the trailer is gone - the thing the OBC parses.
+    assert got["inner_len"] == len(inner), (
+        f"C says the inner packet is {got['inner_len']} octets, Python produced {len(inner)}")
+
+
+@pytest.mark.parametrize("apid,source_id,seq", [
+    (0x0A9, _GS["primary"], 0), (0x7FF, 0xFFFF, 0xFFFFFFFF), (0x000, 0x0001, 0x01020304),
+])
+def test_both_derive_the_same_nonce(clib, apid, source_id, seq):
+    """A nonce that differs by one octet is a MAC that never verifies and a message nobody can debug."""
+    buf = ctypes.create_string_buffer(pus_auth.NONCE_LEN)
+    clib.cr_pus_auth_nonce(apid, source_id, seq, buf)
+    assert buf.raw[:pus_auth.NONCE_LEN] == pus_auth.nonce(apid, source_id, seq)
+
+
+def test_both_put_the_length_field_back_the_same_way(clib):
+    """After the trailer is removed, the packet must be exactly what was signed."""
+    signed, inner = _auth_packet()
+    buf = ctypes.create_string_buffer(signed, len(signed))
+    clib.cr_pus_auth_strip(buf, len(signed))
+    stripped = buf.raw[:len(signed) - pus_auth.TRAILER_LEN]
+    assert stripped == inner, (
+        f"C's stripped packet differs from the one that was signed\n"
+        f"  C:      {stripped.hex()}\n  Python: {inner.hex()}")
+    assert stripped == pus_auth.verify(signed, key=bytes(range(32))).packet
+
+
+def test_both_refuse_the_same_malformed_packets(clib):
+    signed, _ = _auth_packet()
+    key = bytes(range(32))
+    for i, bad in enumerate(_hostile(signed)):
+        rc, _ = _auth_split(clib, bad)
+        try:
+            pus_auth.verify(bad, key=key)
+            py_ok = True
+        except pus_auth.AuthenticationError:
+            py_ok = False
+        #: C does no crypto, so it may accept a packet whose MAC is wrong. The other direction is
+        #: the one that must never happen: C refusing a shape Python accepts means the spacecraft
+        #: drops telecommands the ground believes are valid.
+        if rc != 0:
+            assert not py_ok, f"case {i}: C refused it (rc={rc}) and Python accepted it"

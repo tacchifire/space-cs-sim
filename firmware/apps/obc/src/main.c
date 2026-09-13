@@ -29,6 +29,19 @@
  * ports (conn->sport_outgoing = CSP_PORT_MAX_BIND + 1 + i). Binding 17 to match the PUS service
  * number silently dropped every uplink packet while csp_ping on port 1 kept working - a mnemonic
  * is not worth resizing the library's port table. */
+#ifndef CUBERANGE_OBC_REQUIRE_PUS_AUTH
+#define CUBERANGE_OBC_REQUIRE_PUS_AUTH 0
+#endif
+
+/* Included after the default above, never beside the other headers: a `#if` on a macro that has
+ * not been defaulted yet is 0 whatever the build says, and the symptom is a build with the flag
+ * ON whose verifier was compiled out. Measured the hard way in COMM - see W47. */
+#if CUBERANGE_OBC_REQUIRE_PUS_AUTH
+#include "cuberange_pus_auth.h"
+#include "cuberange_keys.h"
+#include <mbedtls/gcm.h>
+#endif
+
 #define CSP_PORT_PUS  10
 #define CAN_BITRATE   1000000
 
@@ -208,8 +221,100 @@ static bool origin_permits_claim(uint16_t source_id, uint16_t via)
 }
 #endif
 
+#if CUBERANGE_OBC_REQUIRE_PUS_AUTH
+/* Authentication on the REQUEST, which is what makes it independent of the road.
+ *
+ * EX-X01 and EX-S01 both end at the same place: a control bound to a path protects that path.
+ * EX-S01's write-up names three ways out and says the third is the one that actually answers it -
+ * put the MAC on the telecommand, so it does not matter which link it arrived on. This is that.
+ *
+ * The trailer is inside the Space Packet and the packet's own length field covers it, so the same
+ * octets verify whether they arrived in a TC transfer frame off the space link, in a CSP packet
+ * off the crosslink, or on the internal bus. The OBC checks the request it is about to act on.
+ *
+ * NOTE WHAT THIS DOES NOT DO. It answers who, never what: EX-G02's authority table is still the
+ * thing that decides whether an authenticated station may switch a rail off, and it runs after
+ * this. And telemetry is not signed - the reports going the other way carry no trailer, which is
+ * a real asymmetry and is written down in EX-S02's mitigation rather than left to be found.
+ */
+static bool pus_auth_ok(uint8_t *packet, size_t *len)
+{
+	struct cr_pus_auth_parts parts;
+
+	if (cr_pus_auth_split(packet, *len, &parts) != 0) {
+		return false;
+	}
+
+	uint8_t nonce[CR_PUS_AUTH_NONCE_LEN];
+
+	cr_pus_auth_nonce(parts.apid, parts.source_id, parts.seq, nonce);
+
+	mbedtls_gcm_context gcm;
+
+	mbedtls_gcm_init(&gcm);
+	bool ok = false;
+
+	if (mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, cr_sdls_key,
+			       8 * sizeof(cr_sdls_key)) == 0) {
+		ok = mbedtls_gcm_auth_decrypt(&gcm, 0, nonce, sizeof(nonce),
+					      parts.aad, parts.aad_len,
+					      parts.mac, CR_PUS_AUTH_MAC_LEN, NULL, NULL) == 0;
+	}
+	mbedtls_gcm_free(&gcm);
+	if (!ok) {
+		return false;
+	}
+
+	/* Anti-replay, PER SOURCE ID, because two ground stations are two senders and one counter
+	 * between them is EX-G03 a third time. A small table rather than a map: this range has two
+	 * stations and a handful of spacecraft, and a linear scan of eight entries on a telecommand
+	 * is not the thing to optimise.
+	 *
+	 * The sequence number is inside the authenticated region, so advancing it invalidates the
+	 * MAC - the same property that makes SDLS's counter worth more than EX-L01's. */
+	static struct { uint16_t source; uint32_t seen; bool used; } replay[8];
+	size_t slot = ARRAY_SIZE(replay);
+
+	for (size_t i = 0; i < ARRAY_SIZE(replay); i++) {
+		if (replay[i].used && replay[i].source == parts.source_id) {
+			slot = i;
+			break;
+		}
+		if (!replay[i].used && slot == ARRAY_SIZE(replay)) {
+			slot = i;
+		}
+	}
+	if (slot == ARRAY_SIZE(replay)) {
+		printk("OBC: no replay slot left for source %u - refusing\n",
+		       (unsigned int)parts.source_id);
+		return false;
+	}
+	if (replay[slot].used && parts.seq <= replay[slot].seen) {
+		printk("OBC: REPLAY - source %u sequence %u, already seen %u\n",
+		       (unsigned int)parts.source_id, (unsigned int)parts.seq,
+		       (unsigned int)replay[slot].seen);
+		return false;
+	}
+	replay[slot].source = parts.source_id;
+	replay[slot].seen = parts.seq;
+	replay[slot].used = true;
+
+	cr_pus_auth_strip(packet, *len);
+	*len -= CR_PUS_AUTH_TRAILER;
+	return true;
+}
+#endif /* CUBERANGE_OBC_REQUIRE_PUS_AUTH */
+
 #define ROUTER_STACK 1024
+/* The PUS-auth build carries a 424-octet mbedtls_gcm_context in pus_auth_ok, which runs on this
+ * thread. W47 is what happens when a stack is not sized for one: a node that boots, prints, passes
+ * its own crypto self-test and then silently stops working, because the overflow corrupts a kernel
+ * object rather than faulting. */
+#if CUBERANGE_OBC_REQUIRE_PUS_AUTH
+#define APP_STACK    3584
+#else
 #define APP_STACK    2048
+#endif
 
 static csp_iface_t *can_iface;
 static uint16_t tm_seq_count;
@@ -505,7 +610,21 @@ static void app_task(void *a, void *b, void *c)
 
 		while ((packet = csp_read(conn, 100)) != NULL) {
 			if (csp_conn_dport(conn) == CSP_PORT_PUS) {
-				handle_space_packet(packet->data, packet->length, csp_conn_src(conn));
+				size_t plen = packet->length;
+#if CUBERANGE_OBC_REQUIRE_PUS_AUTH
+				/* BEFORE handle_space_packet, and it rewrites the packet in place:
+				 * the trailer is removed and the length field put back, so the
+				 * parser below sees exactly the octets that were signed. Nothing
+				 * downstream knows this happened, which is the point - a control
+				 * that every handler had to remember would be forgotten by one. */
+				if (!pus_auth_ok(packet->data, &plen)) {
+					printk("OBC: REJECTED an unauthenticated telecommand from node %u\n",
+					       (unsigned int)csp_conn_src(conn));
+					csp_buffer_free(packet);
+					continue;
+				}
+#endif
+				handle_space_packet(packet->data, plen, csp_conn_src(conn));
 				csp_buffer_free(packet);
 			} else {
 				/* Takes ownership of the packet. */

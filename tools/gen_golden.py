@@ -13,7 +13,8 @@ Oracles used:
   NASA CryptoLib tc_oracle          -> TC transfer frame primary header, parsed not reimplemented
   spacepackets.ccsds.tm_frame       -> TM transfer frame primary header
 """
-import json, struct, subprocess, sys, ctypes, binascii, pathlib, re
+import json
+import sys, struct, subprocess, sys, ctypes, binascii, pathlib, re
 
 OUT = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "golden")
 OUT.mkdir(parents=True, exist_ok=True)
@@ -372,6 +373,73 @@ sdls_doc = {
     "vectors": sdls_vectors,
 }
 (OUT / "sdls.json").write_text(json.dumps(sdls_doc, indent=2))
+
+# ------------------------------------- PUS-layer authentication: primitive checked, layout NOT
+#
+# THIS ONE HAS NO ORACLE FOR ITS LAYOUT, and that is stated rather than papered over.
+# ECSS-E-ST-70-41C defines no authentication field for a TC packet and CCSDS puts security at the
+# transfer-frame layer - which is the layer this exists to stop depending on. So the trailer's
+# field order is this repository's, there is nothing outside to check it against, and the
+# `oracles` list below says so instead of naming something that merely resembles one.
+#
+# What IS checked from outside is the primitive and the nonce derivation's consequences: the tag
+# comes from libsodium, not from the codec's OpenSSL, and the NIST vectors above cover AES-256-GCM
+# itself.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
+from cuberange.proto import pus_auth as _pa                       # noqa: E402
+from cuberange.proto.pus import PusTc as _CrPusTc                 # noqa: E402
+from cuberange.proto.spacepacket import PacketType as _CrPT, SpacePacket as _CrSP  # noqa: E402
+
+from cuberange.identity import GROUND_STATIONS as _CrGS               # noqa: E402
+
+PUS_AUTH_CASES = [
+    # (apid, source_id, seq, service, subtype, app_data)
+    #: Station ids from cuberange.identity - test_identity.py forbids writing them by hand and
+    #: caught this file doing it. The extremes below are not stations and stay literal.
+    (0x0A9, _CrGS["primary"], 0, 17, 1, b""),
+    (0x0A9, _CrGS["primary"], 7, 8, 1, (1).to_bytes(2, "big") + bytes([0])),
+    (0x7FF, 0xFFFF, 0xFFFFFFFF, 8, 1, bytes(range(64))),
+    (0x000, 0x0001, 1, 17, 1, b"\xAA" * 100),
+]
+
+pus_auth_vectors = []
+for apid, source_id, seq, service, subtype, app in PUS_AUTH_CASES:
+    inner = _CrSP(apid=apid, ptype=_CrPT.TC, sec_hdr=True, seq_count=0,
+                  data=_CrPusTc(service=service, subtype=subtype, source_id=source_id,
+                                app_data=app).encode()).encode()
+    #: The length field is rewritten to cover the trailer BEFORE the MAC is computed, so the
+    #: number an attacker would have to change to strip the trailer is itself authenticated.
+    body = bytearray(inner)
+    body[4:6] = (len(inner) - 6 + _pa.TRAILER_LEN - 1).to_bytes(2, "big")
+    aad = bytes(body) + seq.to_bytes(_pa.SEQ_LEN, "big")
+    iv = _pa.nonce(apid, source_id, seq)
+    tag = _tag_libsodium(_sdls_key, iv, aad)          # libsodium, not the codec's OpenSSL
+    pus_auth_vectors.append({
+        "apid": apid, "source_id": source_id, "seq": seq,
+        "service": service, "subtype": subtype, "app_data": H(app),
+        "inner": H(inner), "nonce": H(iv), "mac": H(tag), "packet": H(aad + tag),
+    })
+
+(OUT / "pus_auth.json").write_text(json.dumps({
+    "spec": ("MISSION-DEFINED. ECSS-E-ST-70-41C has no authentication field for a TC packet and "
+             "CCSDS puts security at the transfer-frame layer; this trailer is this project's, "
+             "and EX-S02 exists because that layer is the one a crosslink bypasses."),
+    "oracles": [
+        "NONE for the field layout - there is no standard to check it against, and naming one "
+        "here that only resembles the question would be worse than saying this.",
+        "libsodium via PyNaCl for the AES-256-GCM tag - a different implementation from the "
+        "OpenSSL one the codec uses.",
+        "NIST SP 800-38D / CAVP AES-256-GCM vectors for the primitive, in sdls.json.",
+    ],
+    "layout": "primary(6) | PUS TC secondary(5) | application data | SEQ(4) | MAC(16)",
+    "nonce": "APID(2) | source id(2) | sequence(4) | zeros(4), derived rather than transmitted",
+    "nonce_reuse": ("within one key the nonce repeats only if a source id reuses a sequence "
+                    "number, which is the event the anti-replay check refuses. GCM punishes "
+                    "nonce reuse by leaking the authentication subkey, so those two properties "
+                    "being the same property is what makes the counter non-optional."),
+    "key": H(_sdls_key),
+    "vectors": pus_auth_vectors,
+}, indent=2))
 
 print("wrote:", *[p.name for p in sorted(OUT.iterdir())])
 print()

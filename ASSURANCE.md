@@ -22,6 +22,7 @@ This document exists so that mistake has to be made deliberately.
   | TC transfer frame primary header | NASA CryptoLib, which parses the octets rather than reimplementing them, plus a hand pack from 232.0-B-4 | `test_golden_transfer_frame.py` |
   | TM transfer frame primary header | `spacepackets.ccsds.tm_frame` | `test_golden_transfer_frame.py` |
   | SDLS TC security header and trailer | NASA CryptoLib, parsing frames it did not produce, plus libsodium and the NIST AES-256-GCM vectors for the MAC | `test_golden_sdls.py` |
+  | PUS-layer authentication trailer | **NONE for the layout** - it is mission-defined and no standard describes it; libsodium and the NIST vectors cover the MAC | `test_golden_pus_auth.py` |
 
   The last two rows said **none** until 2026-09-10, and the row above them was easy to over-read:
   the FECF that *covers* a transfer frame had four independent opinions while the FIELD PACKING of

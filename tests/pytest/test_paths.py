@@ -317,3 +317,53 @@ def test_no_target_deselects_every_test_it_means_to_run(line_no, recipe, paths):
             f"marked '{excluded}' and therefore deselected by pytest.ini. The run selects "
             f"nothing, exits 5, and make reports an error that reads like a broken test. Pass "
             f"-m {excluded} in the recipe.")
+
+
+def test_every_build_directory_named_anywhere_is_one_the_makefile_produces():
+    """A scenario or a verifier pointing at a build nobody makes.
+
+    This was made twice in one afternoon, both times by a sed that renamed more than it was aimed
+    at: `s01-` to `s02-` also turned `build-comm-s01-sat0` into `build-comm-s02-sat0`. The first
+    one aborted Renode's -e chain and the consoles were empty; the second skipped every test in
+    the file, and `make verify` reported success until conftest.py was taught not to.
+
+    Both are the same mistake and neither needs Renode to catch. The Makefile is the only thing
+    that creates a build directory, so the set named anywhere else has to be a subset of the set
+    it writes.
+    """
+    import re
+
+    makefile = (REPO / "Makefile").read_text()
+    produced = set(re.findall(r"-d \$\(OUT\)/(build-[\w.-]+)", makefile))
+    #: Some targets build in a loop - `build-$$role-sat$(SAT)`, `build-comm-s01-sat$$sat` - so
+    #: their names are patterns. Expanded over the four node roles and the four spacecraft indices
+    #: identity.cmake allows, which is the same expansion the shell does.
+    ROLES = ("comm", "obc", "eps", "adcs")
+    for pattern in re.findall(r"-d \$\(OUT\)/(build-\S+)", makefile):
+        if "$" not in pattern:
+            continue
+        for role in ROLES:
+            for sat in range(4):
+                produced.add(pattern
+                             .replace("$$role", role).replace("$(ROLE)", role)
+                             .replace("$$sat", str(sat)).replace("$(SAT)", str(sat)))
+    assert len(produced) >= 15, f"only {len(produced)} build directories found; the regex drifted"
+
+    named = {}
+    for f in (sorted(REPO.glob("exercises/*/scenario.resc"))
+              + sorted(REPO.glob("exercises/*/verify_*.py"))
+              + sorted(REPO.glob("scripts/**/*.resc"))
+              + sorted(REPO.glob("tests/e2e/*.py"))):
+        #: Both spellings. A .resc writes `$out/build-x/zephyr/zephyr.elf`; a verifier writes
+        #: `OUT / "build-x" / "zephyr"`, which has no slash in it at all - and that is exactly the
+        #: one the first version of this test missed, on the day it was written to catch it.
+        #: Comments that name a build are matched too, deliberately: a comment pointing at a build
+        #: nobody makes is stale, and finding that is free here.
+        for b in re.findall(r"\b(build-[\w.-]+)", f.read_text()):
+            named.setdefault(b.rstrip("."), set()).add(str(f.relative_to(REPO)))
+
+    missing = {b: sorted(w) for b, w in named.items() if b not in produced}
+    assert not missing, (
+        "these name a build directory no Makefile target writes, so the scenario aborts or every "
+        "test skips:\n  "
+        + "\n  ".join(f"{b}  <- {', '.join(w)}" for b, w in sorted(missing.items())))

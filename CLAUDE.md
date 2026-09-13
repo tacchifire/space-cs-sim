@@ -38,7 +38,7 @@ wrong: probe.sh's 1.5x four-node speed floor, which this eight-core machine clea
 looked like the obvious thing to blame on a two-vCPU runner. The probe passes there in 110
 seconds. Blaming the host was the comfortable guess, and it was the wrong one.
 
-Ten exercises work today. Six cover an attack origin each: EX-B01 (internal bus), EX-L01
+Eleven exercises work today. Six cover an attack origin each: EX-B01 (internal bus), EX-L01
 (space link), EX-A01 (ADCS command envelope), EX-F01 (the OBC's own PUS 8 parser), EX-G01 (the
 ground segment that decides what to send) and EX-X01 (the crosslink, where the attacker is a
 spacecraft in your own constellation). Three add no new origin on purpose, and they are the
@@ -67,7 +67,14 @@ crosslink attack is untouched, because SDLS is a transfer-frame protocol and the
 CSP - the packet did not fail a check, it never met one. The strongest control in the range is
 still attached to a path, and its strength is what makes that easy to forget.
 
-40 assertions, all measured. The last three each end by naming a limit the next one attacks, and
+EX-S02 is the eleventh and it inverts the sentence the other three arrive at. The MAC moves off
+the link and onto the telecommand - inside the Space Packet, covering the source id and a
+per-source counter, so the same octets verify off the space link, off the crosslink or off the
+internal bus. EX-X01's attack, the same file, is refused. The cost is visible: 11 octets of
+payload become 31, on every telecommand, forever. And what it still does not answer is what it
+never answered - authentication says who, EX-G02 says what, and EX-G02 is untouched.
+
+45 assertions, all measured. The last three each end by naming a limit the next one attacks, and
 in each the fix turned out to be reading something already on the wire: a source id that was
 arriving and ignored, a virtual channel that was being stepped over, a refused request sitting in
 a local variable.
