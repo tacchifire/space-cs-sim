@@ -52,17 +52,33 @@ KEY_LEN = 32         #: AES-256
 TRAILER_LEN = SEQ_LEN + MAC_LEN
 
 #: The nonce. GCM needs 12 octets and this profile derives them from the packet rather than
-#: carrying them, because a nonce that is transmitted is 12 more octets on every telecommand and
-#: this one is already determined by fields the MAC covers:
+#: carrying them, because a nonce that is transmitted is 12 more octets on every packet and this
+#: one is already determined by fields the MAC covers:
 #:
-#:     APID (2) | source id (2) | sequence (4) | 0x00 x 4
+#:     APID (2) | counterparty id (2) | sequence (4) | direction (1) | 0x00 x 3
 #:
 #: The rule GCM actually needs is that a (key, nonce) pair is never reused. Reusing one with GCM is
-#: catastrophic - it leaks the authentication subkey, not just the plaintext - so this is worth
-#: being explicit about: within one key, the nonce repeats only if a source id reuses a sequence
-#: number, which is the same event the anti-replay check refuses. The two properties are the same
-#: property, which is why the counter is not optional.
+#: catastrophic - it leaks the authentication subkey, not just the plaintext - so every field here
+#: is load-bearing:
+#:
+#:   - the counterparty id, because several ground stations share the spacecraft's APID and would
+#:     otherwise collide on the same counter value;
+#:   - the sequence, because otherwise two commands from one station collide, and because that is
+#:     the same number the anti-replay check refuses to see twice. Those two properties being the
+#:     same property is what makes the counter non-optional;
+#:   - THE DIRECTION, which was added after the telemetry side was written. A telecommand from
+#:     station 0x0042 with sequence 5 and a report to station 0x0042 with sequence 5 are different
+#:     packets that produced the SAME nonce under the same key. One octet separates them.
+#:
+#: The counterparty id is read from a different offset in each direction, because PUS puts it in a
+#: different place: a TC secondary header is version/service/subtype/source(2), and a TM's is
+#: version/service/subtype/counter(2)/destination(2).
 NONCE_LEN = 12
+DIRECTION_TC = 1
+DIRECTION_TM = 0
+
+#: Where the counterparty id sits, after the Space Packet primary header, in each direction.
+_PARTY_AT = {DIRECTION_TC: 3, DIRECTION_TM: 5}
 
 
 class AuthenticationError(Exception):
@@ -82,9 +98,22 @@ class Verified:
     packet: bytes        #: the Space Packet with the trailer removed, ready for the normal parser
 
 
-def nonce(apid: int, source_id: int, seq: int) -> bytes:
-    return (apid.to_bytes(2, "big") + source_id.to_bytes(2, "big")
-            + seq.to_bytes(SEQ_LEN, "big") + bytes(NONCE_LEN - 8))
+def nonce(apid: int, party_id: int, seq: int, direction: int = DIRECTION_TC) -> bytes:
+    if direction not in _PARTY_AT:
+        raise ValueError(f"direction must be DIRECTION_TC or DIRECTION_TM, got {direction}")
+    return (apid.to_bytes(2, "big") + party_id.to_bytes(2, "big")
+            + seq.to_bytes(SEQ_LEN, "big") + bytes([direction]) + bytes(NONCE_LEN - 9))
+
+
+def direction_of(packet: bytes) -> int:
+    """TC or TM, out of the Space Packet primary header's type bit (CCSDS 133.0-B, 4.1.2.3.2)."""
+    return DIRECTION_TC if (packet[0] >> 4) & 0x01 else DIRECTION_TM
+
+
+def party_of(packet: bytes) -> int:
+    """The counterparty: a TC's source id, or a TM's destination id."""
+    at = SP_HEADER_LEN + _PARTY_AT[direction_of(packet)]
+    return int.from_bytes(packet[at:at + 2], "big")
 
 
 def _tag(key: bytes, iv: bytes, aad: bytes) -> bytes:
@@ -108,13 +137,14 @@ def sign(packet: bytes, *, key: bytes, seq: int) -> bytes:
         raise ValueError(f"the sequence number is {SEQ_LEN} octets: {seq}")
 
     apid = ((packet[0] << 8) | packet[1]) & 0x7FF
-    source_id = int.from_bytes(packet[SP_HEADER_LEN + 3:SP_HEADER_LEN + 5], "big")
+    direction = direction_of(packet)
+    party = party_of(packet)
 
     body = bytearray(packet)
     total_data = len(packet) - SP_HEADER_LEN + TRAILER_LEN
     body[4:6] = (total_data - 1).to_bytes(2, "big")
     aad = bytes(body) + seq.to_bytes(SEQ_LEN, "big")
-    return aad + _tag(key, nonce(apid, source_id, seq), aad)
+    return aad + _tag(key, nonce(apid, party, seq, direction), aad)
 
 
 def verify(packet: bytes, *, key: bytes) -> Verified:
@@ -136,17 +166,18 @@ def verify(packet: bytes, *, key: bytes) -> Verified:
     mac_at = len(packet) - MAC_LEN
     seq_at = mac_at - SEQ_LEN
     apid = ((packet[0] << 8) | packet[1]) & 0x7FF
-    source_id = int.from_bytes(packet[SP_HEADER_LEN + 3:SP_HEADER_LEN + 5], "big")
+    direction = direction_of(packet)
+    party = party_of(packet)
     seq = int.from_bytes(packet[seq_at:mac_at], "big")
 
     from cryptography.exceptions import InvalidTag
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     try:
-        AESGCM(key).decrypt(nonce(apid, source_id, seq), packet[mac_at:], packet[:mac_at])
+        AESGCM(key).decrypt(nonce(apid, party, seq, direction), packet[mac_at:], packet[:mac_at])
     except InvalidTag as exc:
         raise AuthenticationError("MAC does not verify") from exc
 
     #: The packet the OBC should parse: trailer gone, length field put back to what it describes.
     inner = bytearray(packet[:seq_at])
     inner[4:6] = (len(inner) - SP_HEADER_LEN - 1).to_bytes(2, "big")
-    return Verified(source_id=source_id, seq=seq, packet=bytes(inner))
+    return Verified(source_id=party, seq=seq, packet=bytes(inner))

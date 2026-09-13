@@ -38,10 +38,11 @@ wrong: probe.sh's 1.5x four-node speed floor, which this eight-core machine clea
 looked like the obvious thing to blame on a two-vCPU runner. The probe passes there in 110
 seconds. Blaming the host was the comfortable guess, and it was the wrong one.
 
-Eleven exercises work today. Six cover an attack origin each: EX-B01 (internal bus), EX-L01
+Twelve exercises work today. Seven cover an attack origin each: EX-B01 (internal bus), EX-L01
 (space link), EX-A01 (ADCS command envelope), EX-F01 (the OBC's own PUS 8 parser), EX-G01 (the
-ground segment that decides what to send) and EX-X01 (the crosslink, where the attacker is a
-spacecraft in your own constellation). Three add no new origin on purpose, and they are the
+ground segment that decides what to send), EX-X01 (the crosslink, where the attacker is a
+spacecraft in your own constellation) and EX-D01 (the downlink, where the target is the operator
+rather than the spacecraft). Three add no new origin on purpose, and they are the
 chain the others point at:
 
 - EX-G02, where the origin is legitimate - a real station sending a real command it has no
@@ -74,7 +75,15 @@ internal bus. EX-X01's attack, the same file, is refused. The cost is visible: 1
 payload become 31, on every telecommand, forever. And what it still does not answer is what it
 never answered - authentication says who, EX-G02 says what, and EX-G02 is untouched.
 
-45 assertions, all measured. The last three each end by naming a limit the next one attacks, and
+EX-D01 is the twelfth and the only one that attacks the OPERATOR. EX-G04 built a reporting
+channel so the ground could hear a refusal instead of guessing at silence; EX-S02 put a MAC on
+every telecommand. Nobody authenticated a report. A peer on the crosslink hands the victim's own
+COMM a PUS 1,2 and the victim transmits it: right APID, right sequence, right station, plausible
+reason, and an OBC console with nothing on it. The fix is in two places and only one is the
+spacecraft - the ground station has to REQUIRE the trailer, because optional authentication is
+defeated by not attaching any, and that is measured too.
+
+50 assertions, all measured. The last three each end by naming a limit the next one attacks, and
 in each the fix turned out to be reading something already on the wire: a source id that was
 arriving and ignored, a virtual channel that was being stepped over, a refused request sitting in
 a local variable.

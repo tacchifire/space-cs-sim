@@ -412,7 +412,7 @@ for apid, source_id, seq, service, subtype, app in PUS_AUTH_CASES:
     body = bytearray(inner)
     body[4:6] = (len(inner) - 6 + _pa.TRAILER_LEN - 1).to_bytes(2, "big")
     aad = bytes(body) + seq.to_bytes(_pa.SEQ_LEN, "big")
-    iv = _pa.nonce(apid, source_id, seq)
+    iv = _pa.nonce(apid, source_id, seq, _pa.DIRECTION_TC)
     tag = _tag_libsodium(_sdls_key, iv, aad)          # libsodium, not the codec's OpenSSL
     pus_auth_vectors.append({
         "apid": apid, "source_id": source_id, "seq": seq,
@@ -432,11 +432,16 @@ for apid, source_id, seq, service, subtype, app in PUS_AUTH_CASES:
         "NIST SP 800-38D / CAVP AES-256-GCM vectors for the primitive, in sdls.json.",
     ],
     "layout": "primary(6) | PUS TC secondary(5) | application data | SEQ(4) | MAC(16)",
-    "nonce": "APID(2) | source id(2) | sequence(4) | zeros(4), derived rather than transmitted",
-    "nonce_reuse": ("within one key the nonce repeats only if a source id reuses a sequence "
-                    "number, which is the event the anti-replay check refuses. GCM punishes "
-                    "nonce reuse by leaking the authentication subkey, so those two properties "
-                    "being the same property is what makes the counter non-optional."),
+    "nonce": ("APID(2) | counterparty(2) | sequence(4) | direction(1) | zeros(3), derived "
+              "rather than transmitted. The counterparty is a TC's source id or a TM's "
+              "destination id, read from whichever the type bit says."),
+    "nonce_reuse": ("within one key the nonce repeats only if a counterparty reuses a sequence "
+                    "number in one direction, which is the event the anti-replay check refuses. "
+                    "GCM punishes nonce reuse by leaking the authentication subkey, so those two "
+                    "properties being the same property is what makes the counter non-optional. "
+                    "The direction octet was added when telemetry was signed: a telecommand FROM "
+                    "a station and a report TO that same station, both carrying the same sequence "
+                    "number, are different packets that produced the same nonce under one key."),
     "key": H(_sdls_key),
     "vectors": pus_auth_vectors,
 }, indent=2))

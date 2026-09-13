@@ -149,6 +149,18 @@ def test_nobody_hardcodes_a_ground_station_id():
         if path == REPO / "src" / "cuberange" / "identity.py":
             continue
         for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+            #: Comments are exempt, and this is not a loophole. Explaining a nonce collision by
+            #: naming the station whose two packets collide is what makes the explanation
+            #: concrete; forcing the prose to say "the primary station" to satisfy a grep would
+            #: make the document worse to buy nothing. CLAUDE.md records three earlier times a
+            #: text search in this repository tripped on text that was explaining itself.
+            #:
+            #: A comment is a line whose first non-space character starts one. A trailing comment
+            #: on a line of code is NOT exempt - the code on it would still be an offence, and
+            #: this only looks at whole lines.
+            stripped = line.lstrip()
+            if stripped.startswith("#") or stripped.startswith('"""') or stripped.startswith("*"):
+                continue
             for value in identity.GROUND_STATIONS.values():
                 if re.search(rf"(?<![\w.])0x0*{value:X}(?![\w])", line, re.I) or \
                    re.search(rf"(?<![\w.]){value}(?![\w])", line):

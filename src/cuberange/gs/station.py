@@ -15,6 +15,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
+from ..proto import pus_auth
 from ..proto.frame import SCID, decode_tm_frame, encode_tc_frame
 from ..proto.pus import (FAILURE_NAMES, PusTc, PusTm, SERVICE_TEST, SERVICE_VERIFICATION,
                          SUBTYPE_ACCEPTANCE_FAILURE, SUBTYPE_CONNECTION_TEST,
@@ -68,7 +69,8 @@ def decode_refusal(tm: PusTm) -> Refusal:
 
 class GroundStation:
     def __init__(self, link: SpaceLink, station_id: int = GROUND_SOURCE_ID, *, vcid: int = 0,
-                 target_apid: int = OBC_APID, target_scid: int = SCID):
+                 target_apid: int = OBC_APID, target_scid: int = SCID,
+                 require_signed_tm: bytes | None = None):
         self.link = link
         self.station_id = station_id
         # The virtual channel this station transmits on. Every station used VC 0, and a spacecraft
@@ -78,6 +80,17 @@ class GroundStation:
         self.target_apid = target_apid
         self.target_scid = target_scid
         self._tc_seq = 0
+        #: The key this station will verify reports with, or None to accept unsigned telemetry.
+        #:
+        #: REQUIRED rather than opportunistic, on purpose. A station that verified a trailer when
+        #: one was present and accepted the packet when it was absent would be defeated by an
+        #: attacker who simply does not attach one - which is not a subtle attack, and is the
+        #: shape most "optional security" ends up having. EX-D01 measures it.
+        self.require_signed_tm = require_signed_tm
+        #: Reports that arrived without a valid trailer while one was required. Kept rather than
+        #: dropped: on a range whose subject is forged telemetry, "something claimed to be from
+        #: the spacecraft and was not" is the observation, and discarding it would hide it.
+        self.unauthenticated: list = []
         self.undecodable: list = []
         # Replies that decoded but were not ours. Kept rather than dropped: on a range with two
         # stations, "someone else's telemetry arrived here" is the observation the exercise is
@@ -128,8 +141,16 @@ class GroundStation:
         for frame in self.link.poll():
             try:
                 _mc, _vc, payload = decode_tm_frame(frame, expect_scid=self.target_scid)
+                if self.require_signed_tm is not None:
+                    #: Before SpacePacket.decode, because the trailer is inside the packet and its
+                    #: length field covers it - parsing first and checking after would mean the
+                    #: parser had already read octets nothing vouches for.
+                    payload = pus_auth.verify(payload, key=self.require_signed_tm).packet
                 packet = SpacePacket.decode(payload)
                 tm = PusTm.decode(packet.data, time_len=PUS_TM_TIME_LEN)
+            except pus_auth.AuthenticationError as exc:
+                self.unauthenticated.append((frame, str(exc)))
+                continue
             except ValueError as exc:
                 self.undecodable.append((frame, str(exc)))
                 continue
