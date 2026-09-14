@@ -79,6 +79,11 @@ mitigation admitted to:
   missing one would have had — which works exactly as long as the station is not checking
   signatures. The gap check and the signature check are one mitigation, not two.
 
+- **EX-L02** — the same detector, on a link that loses one frame in ten. Two gaps from the link,
+  one from an attacker, and nothing in the list says which. Ask the spacecraft to resend each
+  missing report: what comes back was lost, what never comes back is being taken. Retransmission
+  is the security control here, and a report buffer is not where anyone looks for one.
+
 Seven attack origins are covered: the internal bus, the space link, the ADCS command envelope, the
 OBC's own command parser, the ground segment that decides what to send, a spacecraft in your
 own constellation, and the downlink the operator reads. EX-G02, EX-G03 and EX-G04 add no origin on purpose — a legitimate origin

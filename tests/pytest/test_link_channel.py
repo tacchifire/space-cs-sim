@@ -150,7 +150,12 @@ def test_a_downlink_reaches_the_client_and_is_recorded(wired):
         try:
             got.extend(client.recv(4096))
         except socket.timeout:
-            break
+            #: continue, not break. This test set a five-second deadline and then gave up on the
+            #: first timeout, so one slow moment under a loaded suite failed it - which it did,
+            #: once in three full runs, on 2026-09-14. A deadline the loop does not honour is
+            #: W48's shape: a gate that reports link luck, and the next person re-runs it green
+            #: instead of reading it.
+            continue
     assert bytes(got) == wrap(frame), "the downlink did not reach the ground station"
     deadline = time.time() + 5
     while not chan.downlink_frames and time.time() < deadline:
@@ -318,7 +323,7 @@ def test_a_downlink_is_heard_by_every_attached_station(wired):
                 try:
                     got.extend(sock.recv(4096))
                 except socket.timeout:
-                    break
+                    continue          # the deadline is the claim; see the note above
             assert bytes(got) == wrap(frame), f"the {name} station did not hear the downlink"
     finally:
         second.close()

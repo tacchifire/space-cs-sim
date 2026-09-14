@@ -31,6 +31,11 @@ from ..identity import GROUND_SOURCE_ID  # noqa: F401
 OBC_APID = 0x0A9
 PUS_TM_TIME_LEN = 4
 
+#: ECSS-E-ST-70-41C service 15 is on-board storage and retrieval. What the spacecraft implements
+#: is a subset - "send report N again" - and the firmware header says so at length. EX-L02.
+SERVICE_STORAGE = 15
+SUBTYPE_RESEND = 1
+
 SERVICE_FUNCTION = 8
 SUBTYPE_PERFORM = 1
 FUNC_SET_COMM_RAIL = 1
@@ -70,7 +75,8 @@ def decode_refusal(tm: PusTm) -> Refusal:
 class GroundStation:
     def __init__(self, link: SpaceLink, station_id: int = GROUND_SOURCE_ID, *, vcid: int = 0,
                  target_apid: int = OBC_APID, target_scid: int = SCID,
-                 require_signed_tm: bytes | None = None):
+                 require_signed_tm: bytes | None = None,
+                 uplink_key: bytes | None = None, sdls_spi: int | None = None):
         self.link = link
         self.station_id = station_id
         # The virtual channel this station transmits on. Every station used VC 0, and a spacecraft
@@ -87,6 +93,17 @@ class GroundStation:
         #: attacker who simply does not attach one - which is not a subtle attack, and is the
         #: shape most "optional security" ends up having. EX-D01 measures it.
         self.require_signed_tm = require_signed_tm
+        #: The uplink half, and it is deliberately symmetric with the line above. A station that
+        #: verified telemetry and sent unauthenticated commands would be checking the answers to
+        #: questions anybody could ask.
+        #:
+        #: `uplink_key` puts EX-S02's trailer on every telecommand. `sdls_spi`, when set, also
+        #: wraps the frame in EX-S01's SDLS security header, which is what a spacecraft running
+        #: both layers requires. Both default to None and the station then transmits exactly the
+        #: plain frames it always did - EX-L01 and everything before EX-S01 depend on that.
+        self.uplink_key = uplink_key
+        self.sdls_spi = sdls_spi
+        self._sdls_sn = 1
         #: Reports that arrived without a valid trailer while one was required. Kept rather than
         #: dropped: on a range whose subject is forged telemetry, "something claimed to be from
         #: the spacecraft and was not" is the observation, and discarding it would hide it.
@@ -126,10 +143,22 @@ class GroundStation:
 
     def _send(self, tc: PusTc) -> int:
         seq = self._next_seq()
-        packet = SpacePacket(apid=self.target_apid, ptype=PacketType.TC, sec_hdr=True,
-                             seq_count=seq, data=tc.encode())
-        self.link.send_frame(encode_tc_frame(packet.encode(), seq & 0xFF,
-                                             scid=self.target_scid, vcid=self.vcid))
+        raw = SpacePacket(apid=self.target_apid, ptype=PacketType.TC, sec_hdr=True,
+                          seq_count=seq, data=tc.encode()).encode()
+        if self.uplink_key is not None:
+            raw = pus_auth.sign(raw, key=self.uplink_key, seq=seq)
+        if self.sdls_spi is not None:
+            from ..proto import sdls
+            #: A distinct IV per frame. GCM's nonce rule is not negotiable and this counter is the
+            #: only thing varying here - see pus_auth.py's note on what reuse costs.
+            iv = self._sdls_sn.to_bytes(sdls.IV_LEN, "big")
+            frame = sdls.encode_tc(raw, key=self.uplink_key or self.require_signed_tm,
+                                   spi=self.sdls_spi, iv=iv, seq_num=self._sdls_sn,
+                                   frame_seq=seq & 0xFF, scid=self.target_scid, vcid=self.vcid)
+            self._sdls_sn += 1
+        else:
+            frame = encode_tc_frame(raw, seq & 0xFF, scid=self.target_scid, vcid=self.vcid)
+        self.link.send_frame(frame)
         return seq
 
     def send_connection_test(self) -> int:
@@ -212,6 +241,24 @@ class GroundStation:
     def reports_missing(self) -> int:
         """How many reports this station can tell it never received."""
         return sum(missing for _, _, missing in self.counter_gaps)
+
+    def request_resend(self, counter: int) -> int:
+        """Ask the spacecraft to send report `counter` again. Returns the TC sequence used.
+
+        WHY THIS EXISTS, and it is not a convenience. A counter gap says the spacecraft said
+        something you did not hear. On a clean link that is an attack; on a lossy one it is
+        usually the link, and EX-L02 measures an operator who cannot tell the two apart from the
+        gap alone. Asking again separates them: what comes back was lost, what never comes back is
+        being taken.
+
+        It goes through the same `_send` as every other command, so whatever authentication this
+        station is configured for applies. That matters: a resend request a spacecraft would honour
+        without checking is a way to make it transmit on demand, which is a thing an attacker would
+        enjoy having.
+        """
+        return self._send(PusTc(service=SERVICE_STORAGE, subtype=SUBTYPE_RESEND,
+                                source_id=self.station_id,
+                                app_data=counter.to_bytes(2, "big")))
 
     def await_refusal(self, timeout: float = 10.0):
         """Wait for the spacecraft to say it refused something. None if it never does."""

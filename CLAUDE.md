@@ -38,7 +38,7 @@ wrong: probe.sh's 1.5x four-node speed floor, which this eight-core machine clea
 looked like the obvious thing to blame on a two-vCPU runner. The probe passes there in 110
 seconds. Blaming the host was the comfortable guess, and it was the wrong one.
 
-Thirteen exercises work today. Seven cover an attack origin each: EX-B01 (internal bus), EX-L01
+Fourteen exercises work today. Seven cover an attack origin each: EX-B01 (internal bus), EX-L01
 (space link), EX-A01 (ADCS command envelope), EX-F01 (the OBC's own PUS 8 parser), EX-G01 (the
 ground segment that decides what to send), EX-X01 (the crosslink, where the attacker is a
 spacecraft in your own constellation) and EX-D01 (the downlink, where the target is the operator
@@ -91,7 +91,16 @@ ATTACKER CLOSES THE GAP when the station is not requiring signatures, by putting
 back carrying the counter the missing one would have had. The gap check and the signature check
 are one mitigation, not two: a detector whose input the attacker controls detects nothing.
 
-54 assertions, all measured. The last three each end by naming a limit the next one attacks, and
+EX-L02 is the fourteenth and it takes EX-D02's detector to a link that loses one frame in ten -
+which the channel can do now, seeded, because `frame_loss` was on the list of things
+link_channel.py said it did not model and EX-D02's own write-up called its absence an excuse.
+Twenty commands, two frames lost by the link, one taken by an attacker, and the operator sees
+three identical gaps. Asking the spacecraft to resend each one separates them: two come back, one
+never does however often you ask. Retransmission is the security control, which is not where
+anyone files a report buffer. The vulnerable half resends nothing, so the same procedure names all
+three as attacks - it fails confident rather than safe, and that is its own assertion.
+
+58 assertions, all measured. The last three each end by naming a limit the next one attacks, and
 in each the fix turned out to be reading something already on the wire: a source id that was
 arriving and ignored, a virtual channel that was being stepped over, a refused request sitting in
 a local variable.

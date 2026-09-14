@@ -41,6 +41,13 @@ set(CUBERANGE_OBC_REQUIRE_PUS_AUTH 0 CACHE STRING
 set(CUBERANGE_OBC_SIGN_REPORTS 0 CACHE STRING
     "put an authentication trailer on the reports the spacecraft sends to the ground")
 
+# EX-L02's only difference. A counter gap on a lossy link says "you did not hear something" and
+# not "somebody took it"; the way to tell them apart is to ask again. This keeps the last eight
+# reports verbatim and sends one back on request.
+#   west build ... -- -DCUBERANGE_OBC_REPORT_STORE=1
+set(CUBERANGE_OBC_REPORT_STORE 0 CACHE STRING
+    "keep recent reports and resend one when the ground asks (PUS 15 subset)")
+
 include(${CMAKE_CURRENT_LIST_DIR}/../../common/identity.cmake)
 
 target_sources(app PRIVATE src/main.c ../../common/cuberange_proto.c
@@ -53,4 +60,5 @@ target_compile_definitions(app PRIVATE
   CUBERANGE_OBC_VERIFY_REPORTS=${CUBERANGE_OBC_VERIFY_REPORTS}
   CUBERANGE_OBC_CROSSLINK_ORIGIN=${CUBERANGE_OBC_CROSSLINK_ORIGIN}
   CUBERANGE_OBC_REQUIRE_PUS_AUTH=${CUBERANGE_OBC_REQUIRE_PUS_AUTH}
-  CUBERANGE_OBC_SIGN_REPORTS=${CUBERANGE_OBC_SIGN_REPORTS})
+  CUBERANGE_OBC_SIGN_REPORTS=${CUBERANGE_OBC_SIGN_REPORTS}
+  CUBERANGE_OBC_REPORT_STORE=${CUBERANGE_OBC_REPORT_STORE})
