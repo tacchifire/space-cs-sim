@@ -35,6 +35,9 @@
 #ifndef CUBERANGE_OBC_SIGN_REPORTS
 #define CUBERANGE_OBC_SIGN_REPORTS 0
 #endif
+#ifndef CUBERANGE_OBC_REPORT_STORE
+#define CUBERANGE_OBC_REPORT_STORE 0
+#endif
 
 /* Included after the default above, never beside the other headers: a `#if` on a macro that has
  * not been defaulted yet is 0 whatever the build says, and the symptom is a build with the flag
@@ -55,6 +58,16 @@
 #define SERVICE_TEST      17
 #define SUBTYPE_TEST      1
 #define SUBTYPE_TEST_REP  2
+
+/* ECSS-E-ST-70-41C service 15 is on-board storage and retrieval. What is implemented here is a
+ * SUBSET and is named as one: a request carrying a report's message counter, answered by sending
+ * that report again. No storage management, no packet selection, no retrieval intervals.
+ *
+ * It exists because EX-L02 shows a detector that cannot act. A counter gap on a lossy link says
+ * "you did not hear something" and not "somebody took it" - and the way to tell those apart is to
+ * ASK AGAIN. If it comes back, the link dropped it; if it never does, somebody is taking it. */
+#define SERVICE_STORAGE   15
+#define SUBTYPE_RESEND    1
 #define SERVICE_FUNCTION  8
 #define SUBTYPE_PERFORM   1
 
@@ -361,6 +374,60 @@ static csp_iface_t *can_iface;
 static uint16_t tm_seq_count;
 static uint16_t tm_msg_counter;
 
+#if CUBERANGE_OBC_REPORT_STORE
+/* The last few reports, verbatim, so one can be sent again.
+ *
+ * VERBATIM is the point. A resent report is the same octets, so its trailer still verifies and
+ * its counter is still the one the ground noticed missing. Re-building it would produce a
+ * different packet answering a question about a specific one, and re-signing it would need a new
+ * sequence number - which is the number the ground is trying to reconcile.
+ *
+ * Eight is small and deliberate: a spacecraft has a buffer, not an archive, and an operator who
+ * asks for something older than the buffer gets nothing, which is a real answer and one EX-L02's
+ * write-up names. The ring is not a cache to be tuned; its size is a fact the ground has to know.
+ */
+#define REPORT_STORE_DEPTH 8
+#define REPORT_STORE_MAX   96
+
+/* Named rather than anonymous, because an anonymous struct cannot be pointed at from another
+ * declaration - the compiler treats the two as unrelated types and says so. */
+struct stored_report {
+	uint16_t counter;
+	uint16_t len;
+	bool used;
+	uint8_t body[REPORT_STORE_MAX];
+};
+
+static struct stored_report report_store[REPORT_STORE_DEPTH];
+static uint8_t report_store_next;
+
+static void report_store_put(uint16_t counter, const uint8_t *body, size_t len)
+{
+	if (len > REPORT_STORE_MAX) {
+		printk("OBC: report of %u octets does not fit the store\n", (unsigned int)len);
+		return;
+	}
+	struct stored_report *slot = &report_store[report_store_next];
+
+	slot->counter = counter;
+	slot->len = (uint16_t)len;
+	slot->used = true;
+	memcpy(slot->body, body, len);
+	report_store_next = (uint8_t)((report_store_next + 1u) % REPORT_STORE_DEPTH);
+}
+
+static const uint8_t *report_store_get(uint16_t counter, size_t *len)
+{
+	for (size_t i = 0; i < REPORT_STORE_DEPTH; i++) {
+		if (report_store[i].used && report_store[i].counter == counter) {
+			*len = report_store[i].len;
+			return report_store[i].body;
+		}
+	}
+	return NULL;
+}
+#endif /* CUBERANGE_OBC_REPORT_STORE */
+
 /* Build a TM Space Packet carrying a PUS 17,2 report and send it to COMM. */
 #if CUBERANGE_OBC_VERIFY_REPORTS
 /* PUS 1,2 - acceptance failure (ECSS-E-ST-70-41C 6.1). The spacecraft saying out loud that it
@@ -425,6 +492,9 @@ static void send_acceptance_failure(uint16_t dest_id, const uint8_t *failed_pack
 #if CUBERANGE_OBC_SIGN_REPORTS
 	blen = sign_report(body, blen);
 #endif
+#if CUBERANGE_OBC_REPORT_STORE
+	report_store_put(counter, body, blen);
+#endif
 	memcpy(packet->data, body, blen);
 	packet->length = (uint16_t)blen;
 
@@ -482,6 +552,9 @@ static void send_test_report(uint16_t source_id)
 
 #if CUBERANGE_OBC_SIGN_REPORTS
 	blen = sign_report(body, blen);
+#endif
+#if CUBERANGE_OBC_REPORT_STORE
+	report_store_put(counter, body, blen);
 #endif
 	memcpy(packet->data, body, blen);
 	packet->length = (uint16_t)blen;
@@ -587,6 +660,44 @@ static void handle_function(const uint8_t *app_data, size_t len, uint16_t source
 	printk("OBC: unknown function %u\n", function_id);
 }
 
+#if CUBERANGE_OBC_REPORT_STORE
+/* Send a stored report again, unchanged.
+ *
+ * Silence is the answer when the counter is not held: the buffer is eight deep and an operator
+ * who asks for something older gets nothing. That is a real answer and EX-L02's write-up says so
+ * - a spacecraft that invented a report to fill a request would be worse than one that cannot.
+ */
+static void resend_report(uint16_t counter)
+{
+	size_t len = 0;
+	const uint8_t *body = report_store_get(counter, &len);
+
+	if (body == NULL) {
+		printk("OBC: report %u is not in the store\n", (unsigned int)counter);
+		return;
+	}
+	csp_packet_t *packet = csp_buffer_get(len);
+
+	if (packet == NULL) {
+		printk("OBC: no CSP buffer to resend report %u\n", (unsigned int)counter);
+		return;
+	}
+	memcpy(packet->data, body, len);
+	packet->length = (uint16_t)len;
+
+	csp_conn_t *conn = csp_connect(CSP_PRIO_NORM, COMM_ADDR, CSP_PORT_PUS, 1000, CSP_O_NONE);
+
+	if (conn == NULL) {
+		printk("OBC: no CSP connection to resend report %u\n", (unsigned int)counter);
+		csp_buffer_free(packet);
+		return;
+	}
+	csp_send(conn, packet);
+	csp_close(conn);
+	printk("OBC: resent report %u (%u octets)\n", (unsigned int)counter, (unsigned int)len);
+}
+#endif /* CUBERANGE_OBC_REPORT_STORE */
+
 static void handle_space_packet(const uint8_t *raw, size_t len, uint16_t via)
 {
 	if (len < SP_HEADER_LEN + PUS_TC_SEC_LEN) {
@@ -627,6 +738,18 @@ static void handle_space_packet(const uint8_t *raw, size_t len, uint16_t via)
 	ARG_UNUSED(via);
 #endif
 
+#if CUBERANGE_OBC_REPORT_STORE
+	if (service == SERVICE_STORAGE && subtype == SUBTYPE_RESEND) {
+		const uint8_t *app = sec + PUS_TC_SEC_LEN;
+
+		if (len - SP_HEADER_LEN - PUS_TC_SEC_LEN < 2) {
+			printk("OBC: a resend request carries a two-octet counter\n");
+			return;
+		}
+		resend_report((uint16_t)((app[0] << 8) | app[1]));
+		return;
+	}
+#endif
 	if (service == SERVICE_TEST && subtype == SUBTYPE_TEST) {
 		send_test_report(source_id);
 	} else if (service == SERVICE_FUNCTION && subtype == SUBTYPE_PERFORM) {

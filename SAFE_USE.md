@@ -64,6 +64,12 @@ runs the documented path so that cannot happen quietly again.
 `cuberange.safety.isolate` is idempotent: asked to isolate while already in a loopback-only
 namespace, it runs the command directly instead of building another one.
 
+The channel between a ground station and a spacecraft can lose downlink frames on request
+(`LinkChannel(frame_loss=...)`, seeded). That is independent whole-frame loss and nothing
+else - no modulation, no coding, no burst structure, no propagation delay, no pass windows,
+no Doppler. It exists so EX-L02 can ask what a lossy link does to a detector built on a clean
+one; it is not a radio model and the module says so at length.
+
 Two mechanisms are tried, and the choice is made by running each one and looking at the result
 rather than by checking which binary exists. That distinction is not academic: on a current Ubuntu
 `unshare` is installed and refused by policy

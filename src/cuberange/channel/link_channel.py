@@ -33,11 +33,30 @@ bytes exactly as before. With it on, the channel forwards frame by frame and re-
 means malformed octets between frames are dropped rather than passed - a real behaviour change,
 and the reason it is not the default.
 
-Not modelled yet, and named here so nobody mistakes this for a channel model: propagation delay,
-bit errors, pass windows, and Doppler. EX-L01 needs none of them; EX-L02 will.
+LOSS, and what it is for. `frame_loss` drops downlink frames at random, independently, with a
+given probability. It is not a radio model - there is no modulation, no coding, no burst
+structure, and a real link's errors are correlated in ways this is not - and it is not pretending
+to be one. It exists because EX-D02 builds a detector on counter gaps and its own write-up says
+the detector has never met a lossy link:
+
+    "False positives on a real link. A lossy channel drops frames, and a real operator would see
+     gaps that no attacker caused. This range has no bit errors, so every gap here is somebody's
+     decision."
+
+That sentence was true and it was an excuse. `frame_loss` is how it stops being one: EX-L02
+measures what a 10% link does to a detector that treats every gap as an attack.
+
+RANDOMNESS IS SEEDED. `random.Random(seed)` per channel, defaulting to a fixed seed, because a
+test that fails one run in twenty is a test people re-run rather than read - which is W48, and
+this range has already learned it once.
+
+Still not modelled, and named so nobody mistakes this for a channel model: propagation delay,
+correlated burst errors, modulation and coding, pass windows, and Doppler. `frame_loss` gives
+independent whole-frame loss and nothing else.
 """
 from __future__ import annotations
 
+import random
 import socket
 import threading
 import time
@@ -49,7 +68,8 @@ from .. import ports
 
 class LinkChannel:
     def __init__(self, listen_port: int, sat_host: str = "127.0.0.1", sat_port: int = ports.link(0),
-                 listen_host: str = "127.0.0.1", downlink_filter=None):
+                 listen_host: str = "127.0.0.1", downlink_filter=None,
+                 frame_loss: float = 0.0, seed: int = 20260914):
         self.listen_addr = (listen_host, listen_port)
         self.sat_addr = (sat_host, sat_port)
 
@@ -57,6 +77,17 @@ class LinkChannel:
         #: passthrough this channel has always had - see the module docstring for why that
         #: distinction is not cosmetic.
         self.downlink_filter = downlink_filter
+        #: Probability that any one downlink frame is dropped, independently. 0.0 is the default
+        #: and keeps the raw byte passthrough; anything above it forwards frame by frame, the same
+        #: switch `downlink_filter` throws and for the same reason.
+        if not 0.0 <= frame_loss <= 1.0:
+            raise ValueError(f"frame_loss is a probability: {frame_loss}")
+        self.frame_loss = frame_loss
+        self._rng = random.Random(seed)
+        #: Frames the link lost, as opposed to frames an attacker took. Separate lists on purpose:
+        #: the whole of EX-L02 is that the operator cannot tell them apart, and a range that put
+        #: them in one list would have hidden the question inside its own bookkeeping.
+        self.lost: List[bytes] = []
         #: What the filter refused, in order. Kept rather than counted: on a range whose subject
         #: is what the operator can and cannot know, "this is what you were not told" is the
         #: thing a write-up needs to be able to show.
@@ -168,14 +199,19 @@ class LinkChannel:
             frames = self._down_deframer.feed(chunk)
             self.downlink_frames.extend(frames)
 
-            if self.downlink_filter is None:
+            if self.downlink_filter is None and self.frame_loss == 0.0:
                 out = chunk
             else:
                 #: Frame by frame, re-wrapped. Whole frames only: an attacker that could deny half
                 #: a frame would be denying a checksum, which the receiver already handles.
                 kept = []
                 for frame in frames:
-                    if self.downlink_filter(frame):
+                    #: Loss first. An attacker cannot suppress a frame the link already ate, and
+                    #: counting it as both would inflate whichever list the reader looked at.
+                    if self.frame_loss and self._rng.random() < self.frame_loss:
+                        self.lost.append(frame)
+                        continue
+                    if self.downlink_filter is None or self.downlink_filter(frame):
                         kept.append(wrap(frame))
                     else:
                         self.suppressed.append(frame)
