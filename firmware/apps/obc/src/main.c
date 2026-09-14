@@ -38,6 +38,12 @@
 #ifndef CUBERANGE_OBC_REPORT_STORE
 #define CUBERANGE_OBC_REPORT_STORE 0
 #endif
+#ifndef CUBERANGE_OBC_BEACON
+#define CUBERANGE_OBC_BEACON 0
+#endif
+#ifndef CUBERANGE_OBC_BEACON_MS
+#define CUBERANGE_OBC_BEACON_MS 2000
+#endif
 
 /* Included after the default above, never beside the other headers: a `#if` on a macro that has
  * not been defaulted yet is 0 whatever the build says, and the symptom is a build with the flag
@@ -68,6 +74,17 @@
  * ASK AGAIN. If it comes back, the link dropped it; if it never does, somebody is taking it. */
 #define SERVICE_STORAGE   15
 #define SUBTYPE_RESEND    1
+
+/* ECSS-E-ST-70-41C service 3 is housekeeping. What is implemented is a SUBSET and is named as
+ * one: a parameter report, sent on a timer, carrying an uptime and nothing else.
+ *
+ * It exists because EX-L03 asks how an operator notices TOTAL silence. A gap in a counter needs
+ * two reports to sit between; a spacecraft that only speaks when spoken to gives an attacker who
+ * denies everything a perfectly quiet link and no gap at all. A spacecraft that speaks on its own
+ * makes silence mean something - which is what a beacon is for, and why nearly every real
+ * spacecraft has one. */
+#define SERVICE_HOUSEKEEPING 3
+#define SUBTYPE_HK_REPORT    25
 #define SERVICE_FUNCTION  8
 #define SUBTYPE_PERFORM   1
 
@@ -512,6 +529,80 @@ static void send_acceptance_failure(uint16_t dest_id, const uint8_t *failed_pack
 }
 #endif
 
+#if CUBERANGE_OBC_BEACON
+/* One housekeeping report: a PUS 3,25 carrying `app_data`, addressed to `dest_id`.
+ *
+ * A near-copy of send_test_report, and that duplication is deliberate rather than tidy. The two
+ * differ in service, subtype and payload length, and the alternative - one function with three
+ * more parameters - would put every report in this file through a shape whose correctness is
+ * checked nowhere. These are the packets a ground station parses; each one being visible as
+ * octets in one place is worth twenty lines.
+ */
+static void send_housekeeping(uint16_t dest_id, const uint8_t *app_data, size_t app_len)
+{
+#if CUBERANGE_OBC_SIGN_REPORTS
+	uint8_t body[SP_HEADER_LEN + PUS_TM_SEC_LEN + TIME_LEN + 8 + CR_PUS_AUTH_TRAILER];
+#else
+	uint8_t body[SP_HEADER_LEN + PUS_TM_SEC_LEN + TIME_LEN + 8];
+#endif
+	if (app_len > 8) {
+		printk("OBC: housekeeping payload of %u octets does not fit\n", (unsigned int)app_len);
+		return;
+	}
+	const size_t body_len = SP_HEADER_LEN + PUS_TM_SEC_LEN + TIME_LEN + app_len;
+	uint32_t now = (uint32_t)k_uptime_get();
+	size_t data_len = PUS_TM_SEC_LEN + TIME_LEN + app_len;
+
+	uint16_t word0 = (0 << 12) | (1 << 11) | OBC_APID;
+	uint16_t word1 = (uint16_t)((0x3u << 14) | (tm_seq_count++ & 0x3FFF));
+	uint16_t word2 = (uint16_t)(data_len - 1);
+
+	body[0] = (uint8_t)(word0 >> 8);  body[1] = (uint8_t)(word0 & 0xFF);
+	body[2] = (uint8_t)(word1 >> 8);  body[3] = (uint8_t)(word1 & 0xFF);
+	body[4] = (uint8_t)(word2 >> 8);  body[5] = (uint8_t)(word2 & 0xFF);
+
+	uint8_t *sec = body + SP_HEADER_LEN;
+	uint16_t counter = tm_msg_counter++;
+
+	sec[0] = PUS_VERSION << 4;
+	sec[1] = SERVICE_HOUSEKEEPING;
+	sec[2] = SUBTYPE_HK_REPORT;
+	sec[3] = (uint8_t)(counter >> 8);   sec[4] = (uint8_t)(counter & 0xFF);
+	sec[5] = (uint8_t)(dest_id >> 8);   sec[6] = (uint8_t)(dest_id & 0xFF);
+	sec[7] = (uint8_t)(now >> 24); sec[8] = (uint8_t)(now >> 16);
+	sec[9] = (uint8_t)(now >> 8);  sec[10] = (uint8_t)(now & 0xFF);
+	memcpy(sec + PUS_TM_SEC_LEN + TIME_LEN, app_data, app_len);
+
+	size_t blen = body_len;
+
+#if CUBERANGE_OBC_SIGN_REPORTS
+	blen = sign_report(body, blen);
+#endif
+#if CUBERANGE_OBC_REPORT_STORE
+	report_store_put(counter, body, blen);
+#endif
+	csp_packet_t *packet = csp_buffer_get(blen);
+
+	if (packet == NULL) {
+		printk("OBC: no CSP buffer for a beacon\n");
+		return;
+	}
+	memcpy(packet->data, body, blen);
+	packet->length = (uint16_t)blen;
+
+	csp_conn_t *conn = csp_connect(CSP_PRIO_NORM, COMM_ADDR, CSP_PORT_PUS, 1000, CSP_O_NONE);
+
+	if (conn == NULL) {
+		printk("OBC: no CSP connection for a beacon\n");
+		csp_buffer_free(packet);
+		return;
+	}
+	csp_send(conn, packet);
+	csp_close(conn);
+	printk("OBC: beacon %u sent\n", (unsigned int)counter);
+}
+#endif /* CUBERANGE_OBC_BEACON */
+
 static void send_test_report(uint16_t source_id)
 {
 #if CUBERANGE_OBC_SIGN_REPORTS
@@ -769,6 +860,53 @@ static void router_task(void *a, void *b, void *c)
 	}
 }
 
+#if CUBERANGE_OBC_BEACON
+/* A housekeeping report, on a timer, to whoever is listening.
+ *
+ * Addressed to the PRIMARY station rather than broadcast, because this range's telemetry carries a
+ * destination id and a station drops what is not for it - see GroundStation.collect. A real
+ * beacon is a broadcast and every site hears it; here it is addressed, and that is a simplification
+ * EX-L03's write-up names rather than leaves to be discovered.
+ *
+ * It goes through the same senders as everything else, so it is signed when the build signs
+ * reports and stored when the build stores them. That is the point: the beacon is not a special
+ * channel with its own rules, it is telemetry that happens to be unsolicited - and an attacker
+ * who can take a report can take a beacon.
+ */
+static void send_beacon(void)
+{
+	uint32_t now = (uint32_t)k_uptime_get();
+	uint8_t app[4] = {
+		(uint8_t)(now >> 24), (uint8_t)(now >> 16), (uint8_t)(now >> 8), (uint8_t)now,
+	};
+
+	send_housekeeping(GROUND_PRIMARY_ID, app, sizeof(app));
+}
+
+static void beacon_task(void *a, void *b, void *c)
+{
+	ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
+
+	while (1) {
+		k_sleep(K_MSEC(CUBERANGE_OBC_BEACON_MS));
+		send_beacon();
+	}
+}
+
+/* THE THIRD TIME. sizeof(mbedtls_gcm_context) is 424 octets and any thread that reaches
+ * sign_report carries one; W47 is what happens when a stack is not sized for it - a node that
+ * boots, prints, passes its own crypto self-test and then silently stops doing one of its jobs.
+ * Here the beacon thread sent exactly one beacon and stopped.
+ *
+ * Named rather than fixed a third time in place, so the next thread that signs does not have to
+ * rediscover the number. HW_STACK_PROTECTION is on in pus_auth.conf, which is what makes a fourth
+ * one loud instead of silent. */
+#define CR_SIGNING_THREAD_STACK 3072
+
+#define BEACON_STACK CR_SIGNING_THREAD_STACK
+K_THREAD_DEFINE(beacon_id, BEACON_STACK, beacon_task, NULL, NULL, NULL, 2, 0, K_TICKS_FOREVER);
+#endif /* CUBERANGE_OBC_BEACON */
+
 static void app_task(void *a, void *b, void *c)
 {
 	ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
@@ -862,6 +1000,9 @@ int main(void)
 	can_iface->is_default = 1;
 
 	k_thread_start(app_id);
+#if CUBERANGE_OBC_BEACON
+	k_thread_start(beacon_id);
+#endif
 	printk("CUBERANGE: OBC ready\n");
 	return 0;
 }

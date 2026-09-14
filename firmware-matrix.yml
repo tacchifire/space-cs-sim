@@ -100,3 +100,9 @@ pairs:
     flag: CUBERANGE_OBC_REPORT_STORE
     vuln: { value: "0", build: build-obc-l02-vuln }
     hard: { value: "1", build: build-obc-l02-hard }
+
+  - id: EX-L03
+    app: firmware/apps/obc
+    flag: CUBERANGE_OBC_BEACON
+    vuln: { value: "0", build: build-obc-l03-vuln }
+    hard: { value: "1", build: build-obc-l03-hard }

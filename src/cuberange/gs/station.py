@@ -124,6 +124,9 @@ class GroundStation:
         #: report and forges a replacement carrying the counter value that would have been next,
         #: and the gap closes. EX-D02 measures that, because a detection that a forger can defeat
         #: is worth knowing the shape of rather than trusting.
+        #: Every authenticated TM addressed to this station, in arrival order, whatever service
+        #: it carries. EX-L03 counts these against a pass schedule; nothing else reads them.
+        self.telemetry: list = []
         self.last_report_counter: int | None = None
         self.counter_gaps: list = []
         self.undecodable: list = []
@@ -209,6 +212,13 @@ class GroundStation:
                 else:
                     self.not_for_us.append(tm)
                 continue
+            #: Everything addressed to us is telemetry, whatever service it belongs to. The
+            #: list below used to end here for anything that was not a connection-test report,
+            #: so a housekeeping beacon arrived, decoded, verified and was dropped without
+            #: trace - and EX-L03's whole subject is whether the ground heard the spacecraft.
+            #: A station that only counts the replies to its own questions cannot answer that.
+            if tm.dest_id == self.station_id:
+                self.telemetry.append(tm)
             if (tm.service, tm.subtype) != (SERVICE_TEST, SUBTYPE_CONNECTION_TEST_REPORT):
                 continue
             if packet.apid != self.target_apid or tm.dest_id != self.station_id:

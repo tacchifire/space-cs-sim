@@ -48,6 +48,13 @@ set(CUBERANGE_OBC_SIGN_REPORTS 0 CACHE STRING
 set(CUBERANGE_OBC_REPORT_STORE 0 CACHE STRING
     "keep recent reports and resend one when the ground asks (PUS 15 subset)")
 
+# EX-L03's only difference. A gap in a counter needs two reports to sit between; a spacecraft that
+# only speaks when spoken to gives an attacker who denies everything a quiet link and no gap at
+# all. A beacon makes silence mean something, which is why nearly every real spacecraft has one.
+#   west build ... -- -DCUBERANGE_OBC_BEACON=1
+set(CUBERANGE_OBC_BEACON 0 CACHE STRING
+    "send an unsolicited housekeeping report on a timer (PUS 3,25 subset)")
+
 include(${CMAKE_CURRENT_LIST_DIR}/../../common/identity.cmake)
 
 target_sources(app PRIVATE src/main.c ../../common/cuberange_proto.c
@@ -61,4 +68,5 @@ target_compile_definitions(app PRIVATE
   CUBERANGE_OBC_CROSSLINK_ORIGIN=${CUBERANGE_OBC_CROSSLINK_ORIGIN}
   CUBERANGE_OBC_REQUIRE_PUS_AUTH=${CUBERANGE_OBC_REQUIRE_PUS_AUTH}
   CUBERANGE_OBC_SIGN_REPORTS=${CUBERANGE_OBC_SIGN_REPORTS}
-  CUBERANGE_OBC_REPORT_STORE=${CUBERANGE_OBC_REPORT_STORE})
+  CUBERANGE_OBC_REPORT_STORE=${CUBERANGE_OBC_REPORT_STORE}
+  CUBERANGE_OBC_BEACON=${CUBERANGE_OBC_BEACON})
