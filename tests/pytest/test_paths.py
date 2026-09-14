@@ -367,3 +367,32 @@ def test_every_build_directory_named_anywhere_is_one_the_makefile_produces():
         "these name a build directory no Makefile target writes, so the scenario aborts or every "
         "test skips:\n  "
         + "\n  ".join(f"{b}  <- {', '.join(w)}" for b, w in sorted(missing.items())))
+
+
+def test_every_module_is_imported_by_something_that_runs():
+    """A module nobody imports is a module nobody would miss - including if it were overwritten.
+
+    On 2026-09-14 a new `gs/passes.py` was written straight over `gs/schedule.py`, which holds
+    EX-G01's command plan store. What caught it was an ImportError from EX-G01's own tests, which
+    happened to name the module. That net was incidental; this makes it deliberate.
+
+    Named rather than imported, because a test that imported all 26 would pull in Renode
+    supervisors and socket servers at collection time. What matters is that each module has
+    somewhere a change to it would show up.
+    """
+    src = REPO / "src" / "cuberange"
+    modules = [p for p in sorted(src.rglob("*.py")) if p.name != "__init__.py"]
+    assert len(modules) >= 20, f"only {len(modules)} modules found; the glob has drifted"
+
+    readers = "\n".join(
+        f.read_text(errors="replace")
+        for f in list(REPO.glob("tests/**/*.py")) + list(REPO.glob("exercises/*/*.py"))
+        + list(REPO.glob("tools/*.py"))
+        if "__pycache__" not in f.parts)
+
+    orphans = [str(p.relative_to(REPO)) for p in modules
+               if p.stem not in readers
+               and ".".join(p.relative_to(src.parent).with_suffix("").parts) not in readers]
+    assert not orphans, (
+        "no test, exercise or tool names these, so nothing would notice them breaking:\n  "
+        + "\n  ".join(orphans))

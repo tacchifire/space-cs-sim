@@ -84,6 +84,11 @@ mitigation admitted to:
   missing report: what comes back was lost, what never comes back is being taken. Retransmission
   is the security control here, and a report buffer is not where anyone looks for one.
 
+- **EX-L03** — the attacker denies the whole pass. The counter detector sees an empty gap list,
+  which is what a perfect pass looks like. Only a schedule notices, and only if the spacecraft
+  says something when nobody asked: without a beacon the same schedule reports a silent pass every
+  time, including the ones nobody attacked.
+
 Seven attack origins are covered: the internal bus, the space link, the ADCS command envelope, the
 OBC's own command parser, the ground segment that decides what to send, a spacecraft in your
 own constellation, and the downlink the operator reads. EX-G02, EX-G03 and EX-G04 add no origin on purpose — a legitimate origin

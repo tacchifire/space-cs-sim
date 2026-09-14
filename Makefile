@@ -235,7 +235,7 @@ verify:
 	    python3 -m pytest exercises/$(EX)/verify_*.py -v
 
 # Every exercise, both directions. This is the claim the product makes.
-verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-s01 firmware-s02 firmware-d01 firmware-l02)
+verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03)
 	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest exercises/*/verify_*.py -v
 
@@ -287,7 +287,7 @@ firmware-f01: firmware-p1
 # prerequisite once per invocation, so this is one pristine build of each of the seven images
 # rather than the four rounds `check` used to do.
 .PHONY: firmware-all
-firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-sdls firmware-s01 firmware-s02 firmware-d01 firmware-l02
+firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-sdls firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03
 	@echo "all node images built:"
 	@ls -1 $(OUT)/build-*/zephyr/zephyr.elf
 
@@ -405,6 +405,26 @@ firmware-g01: firmware-f01
 # or per virtual channel.
 # EX-G04's pair. EX-G02's authority check is ON in both: what differs is whether the refusal
 # reaches the ground as PUS 1,2, or only the console nobody off the spacecraft can read.
+firmware-l03:
+	# EX-L03's pair. Both halves are everything EX-L02 deployed - signed reports, a report store,
+	# authenticated telecommands. What differs is whether the spacecraft says anything when nobody
+	# asked, which is the only thing that makes total silence mean something.
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-obc-l03-vuln firmware/apps/obc -- \
+	    -DCUBERANGE_OBC_PUS8_LENGTH_CHECK=1 -DCUBERANGE_OBC_REQUIRE_AUTHORITY=1 \
+	    -DCUBERANGE_OBC_VERIFY_REPORTS=1 -DCUBERANGE_OBC_REQUIRE_PUS_AUTH=1 \
+	    -DCUBERANGE_OBC_SIGN_REPORTS=1 -DCUBERANGE_OBC_REPORT_STORE=1 \
+	    -DCUBERANGE_OBC_BEACON=0 \
+	    -DEXTRA_CONF_FILE=$(CUBERANGE_REPO)/firmware/apps/obc/pus_auth.conf
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-obc-l03-hard firmware/apps/obc -- \
+	    -DCUBERANGE_OBC_PUS8_LENGTH_CHECK=1 -DCUBERANGE_OBC_REQUIRE_AUTHORITY=1 \
+	    -DCUBERANGE_OBC_VERIFY_REPORTS=1 -DCUBERANGE_OBC_REQUIRE_PUS_AUTH=1 \
+	    -DCUBERANGE_OBC_SIGN_REPORTS=1 -DCUBERANGE_OBC_REPORT_STORE=1 \
+	    -DCUBERANGE_OBC_BEACON=1 \
+	    -DEXTRA_CONF_FILE=$(CUBERANGE_REPO)/firmware/apps/obc/pus_auth.conf
+	@ls -l $(OUT)/build-obc-l03-vuln/zephyr/zephyr.elf $(OUT)/build-obc-l03-hard/zephyr/zephyr.elf
+
 firmware-l02:
 	# EX-L02's pair. Both halves sign reports and require authenticated telecommands - EX-D01 and
 	# EX-S02 are deployed. What differs is whether the spacecraft can send a report AGAIN when the

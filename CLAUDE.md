@@ -38,7 +38,7 @@ wrong: probe.sh's 1.5x four-node speed floor, which this eight-core machine clea
 looked like the obvious thing to blame on a two-vCPU runner. The probe passes there in 110
 seconds. Blaming the host was the comfortable guess, and it was the wrong one.
 
-Fourteen exercises work today. Seven cover an attack origin each: EX-B01 (internal bus), EX-L01
+Fifteen exercises work today. Seven cover an attack origin each: EX-B01 (internal bus), EX-L01
 (space link), EX-A01 (ADCS command envelope), EX-F01 (the OBC's own PUS 8 parser), EX-G01 (the
 ground segment that decides what to send), EX-X01 (the crosslink, where the attacker is a
 spacecraft in your own constellation) and EX-D01 (the downlink, where the target is the operator
@@ -100,7 +100,15 @@ never does however often you ask. Retransmission is the security control, which 
 anyone files a report buffer. The vulnerable half resends nothing, so the same procedure names all
 three as attacks - it fails confident rather than safe, and that is its own assertion.
 
-58 assertions, all measured. The last three each end by naming a limit the next one attacks, and
+EX-L03 is the fifteenth and it closes the detection arc from the other side. Total denial makes
+NO counter gaps - the same empty list a perfect pass makes - so only a schedule notices it, and a
+schedule needs something to expect. Four runs: with a beacon, the window says ok when nobody
+attacks and silent when everything is denied. WITHOUT a beacon it says silent either way, because
+a spacecraft that speaks only when spoken to is quiet by design. EX-D02's detector failed OPEN
+because its input was forgeable; this one fails CLOSED because its input does not exist, and both
+are the same mistake.
+
+63 assertions, all measured. The last three each end by naming a limit the next one attacks, and
 in each the fix turned out to be reading something already on the wire: a source id that was
 arriving and ignored, a virtual channel that was being stepped over, a refused request sitting in
 a local variable.
