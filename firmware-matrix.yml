@@ -112,3 +112,9 @@ pairs:
     flag: CUBERANGE_OBC_ACK_COMMANDS
     vuln: { value: "0", build: build-obc-u01-vuln }
     hard: { value: "1", build: build-obc-u01-hard }
+
+  - id: EX-U02
+    app: firmware/apps/obc
+    flag: CUBERANGE_OBC_TC_COUNTERS
+    vuln: { value: "0", build: build-obc-u02-vuln }
+    hard: { value: "1", build: build-obc-u02-hard }
