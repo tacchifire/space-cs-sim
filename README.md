@@ -89,9 +89,15 @@ mitigation admitted to:
   says something when nobody asked: without a beacon the same schedule reports a silent pass every
   time, including the ones nobody attacked.
 
-Seven attack origins are covered: the internal bus, the space link, the ADCS command envelope, the
+- **EX-U01** — deny the uplink instead. The beacon keeps arriving, the counter has no gaps, the
+  pass schedule says ok, and the commands simply never happen. EX-G04 gave the ground a way to
+  hear a refusal; nobody flipped the sign, so "accepted" and "never arrived" look the same. Five
+  exercises of scaffolding went onto the downlink because the downlink produced observations to
+  build on — which is the mechanism, not a coincidence.
+
+Eight attack origins are covered: the internal bus, the space link, the ADCS command envelope, the
 OBC's own command parser, the ground segment that decides what to send, a spacecraft in your
-own constellation, and the downlink the operator reads. EX-G02, EX-G03 and EX-G04 add no origin on purpose — a legitimate origin
+own constellation, the downlink the operator reads, and the uplink nobody watches. EX-G02, EX-G03 and EX-G04 add no origin on purpose — a legitimate origin
 exceeding its authority, a legitimate origin exceeding nothing at all, and a control that works
 and cannot be heard working.
 

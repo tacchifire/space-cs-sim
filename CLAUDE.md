@@ -38,11 +38,11 @@ wrong: probe.sh's 1.5x four-node speed floor, which this eight-core machine clea
 looked like the obvious thing to blame on a two-vCPU runner. The probe passes there in 110
 seconds. Blaming the host was the comfortable guess, and it was the wrong one.
 
-Fifteen exercises work today. Seven cover an attack origin each: EX-B01 (internal bus), EX-L01
+Sixteen exercises work today. Eight cover an attack origin each: EX-B01 (internal bus), EX-L01
 (space link), EX-A01 (ADCS command envelope), EX-F01 (the OBC's own PUS 8 parser), EX-G01 (the
 ground segment that decides what to send), EX-X01 (the crosslink, where the attacker is a
-spacecraft in your own constellation) and EX-D01 (the downlink, where the target is the operator
-rather than the spacecraft). Three add no new origin on purpose, and they are the
+spacecraft in your own constellation) EX-D01 (the downlink, where the target is the operator
+rather than the spacecraft) and EX-U01 (the uplink, where nothing was ever built to look). Three add no new origin on purpose, and they are the
 chain the others point at:
 
 - EX-G02, where the origin is legitimate - a real station sending a real command it has no
@@ -108,7 +108,15 @@ a spacecraft that speaks only when spoken to is quiet by design. EX-D02's detect
 because its input was forgeable; this one fails CLOSED because its input does not exist, and both
 are the same mistake.
 
-63 assertions, all measured. The last three each end by naming a limit the next one attacks, and
+EX-U01 is the sixteenth and it points at the direction five exercises of downlink scaffolding
+never watched. Deny the UPLINK and the beacon still arrives, the counter has no gaps and the pass
+schedule says ok - truthfully, about the only direction it can see. EX-G04 gave the ground a way
+to hear a refusal and the sign was never flipped, so an operator could tell refused from nothing
+and still not tell accepted from never-arrived. PUS 1,1 on acceptance closes it: four sent and
+four acknowledged, or four and zero. Attention follows evidence, and an attacker goes where there
+is no evidence to follow.
+
+67 assertions, all measured. The last three each end by naming a limit the next one attacks, and
 in each the fix turned out to be reading something already on the wire: a source id that was
 arriving and ignored, a virtual channel that was being stepped over, a refused request sitting in
 a local variable.
@@ -311,6 +319,11 @@ exist because checks 2 and 3 can pass while the flag does nothing:
 5. every translation unit is compiled with an identical command line apart from the declared `-D`,
    which is what stops a vulnerability being manufactured through compiler options. Kconfig says
    nothing about those.
+6. at least one translation unit in each half **actually carries** that `-D`, with the declared
+   value. Check 5 proves nothing ELSE differs, which an empty difference satisfies - so a flag
+   that reached no translation unit passed all six while check 5's evidence line reported it as
+   the difference. Measured on 2026-09-14: a flag added to the source and the build command but
+   not to `target_compile_definitions`, six passes, zero translation units carrying it.
 
 The gate carries `--self-test`, which feeds it seven known-bad pairs and requires each to be
 rejected **for its own stated reason**. Rejection alone is not enough: adding check 0 made every

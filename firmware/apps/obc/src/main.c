@@ -41,6 +41,9 @@
 #ifndef CUBERANGE_OBC_BEACON
 #define CUBERANGE_OBC_BEACON 0
 #endif
+#ifndef CUBERANGE_OBC_ACK_COMMANDS
+#define CUBERANGE_OBC_ACK_COMMANDS 0
+#endif
 #ifndef CUBERANGE_OBC_BEACON_MS
 #define CUBERANGE_OBC_BEACON_MS 2000
 #endif
@@ -603,6 +606,84 @@ static void send_housekeeping(uint16_t dest_id, const uint8_t *app_data, size_t 
 }
 #endif /* CUBERANGE_OBC_BEACON */
 
+#if CUBERANGE_OBC_ACK_COMMANDS
+/* PUS 1,1: this telecommand was accepted.
+ *
+ * EX-G04 taught this range that a refusal the ground cannot hear is indistinguishable from a
+ * frame that never arrived, and the answer was PUS 1,2. THE SIGN WAS NEVER FLIPPED. An operator
+ * can tell "refused" from "nothing" and still cannot tell "accepted" from "never arrived" - the
+ * same finding, and the gap an attacker who denies the UPLINK lives in.
+ *
+ * A near-copy of send_acceptance_failure, deliberately, for the reason send_housekeeping gives:
+ * these are the packets a ground station parses, and each one being visible as octets in one
+ * place is worth twenty lines.
+ */
+static void send_acceptance_success(uint16_t dest_id, const uint8_t *accepted_packet)
+{
+#if CUBERANGE_OBC_SIGN_REPORTS
+	/* Room for the trailer sign_report appends. Sized here rather than in sign_report because
+	 * the buffer is the caller's and C will not tell you it was too small. */
+	uint8_t body[SP_HEADER_LEN + PUS_TM_SEC_LEN + TIME_LEN + 4 + CR_PUS_AUTH_TRAILER];
+#else
+	uint8_t body[SP_HEADER_LEN + PUS_TM_SEC_LEN + TIME_LEN + 4];
+#endif
+	const size_t body_len = SP_HEADER_LEN + PUS_TM_SEC_LEN + TIME_LEN + 4;
+	uint32_t now = (uint32_t)k_uptime_get();
+	size_t data_len = PUS_TM_SEC_LEN + TIME_LEN + 4;
+
+	uint16_t word0 = (0 << 12) | (1 << 11) | OBC_APID;
+	uint16_t word1 = (uint16_t)((0x3u << 14) | (tm_seq_count++ & 0x3FFF));
+	uint16_t word2 = (uint16_t)(data_len - 1);
+
+	body[0] = (uint8_t)(word0 >> 8);  body[1] = (uint8_t)(word0 & 0xFF);
+	body[2] = (uint8_t)(word1 >> 8);  body[3] = (uint8_t)(word1 & 0xFF);
+	body[4] = (uint8_t)(word2 >> 8);  body[5] = (uint8_t)(word2 & 0xFF);
+
+	uint8_t *sec = body + SP_HEADER_LEN;
+	uint16_t counter = tm_msg_counter++;
+
+	sec[0] = PUS_VERSION << 4;
+	sec[1] = 1;                                    /* service 1, request verification */
+	sec[2] = 1;                                    /* subtype 1, acceptance SUCCESS   */
+	sec[3] = (uint8_t)(counter >> 8);   sec[4] = (uint8_t)(counter & 0xFF);
+	sec[5] = (uint8_t)(dest_id >> 8);   sec[6] = (uint8_t)(dest_id & 0xFF);
+	sec[7] = (uint8_t)(now >> 24); sec[8] = (uint8_t)(now >> 16);
+	sec[9] = (uint8_t)(now >> 8);  sec[10] = (uint8_t)(now & 0xFF);
+
+	uint8_t *app = sec + PUS_TM_SEC_LEN + TIME_LEN;
+
+	memcpy(app, accepted_packet, 4);               /* the request id, verbatim */
+
+	csp_packet_t *packet = csp_buffer_get(sizeof(body));
+
+	if (packet == NULL) {
+		printk("OBC: no CSP buffer for an acceptance success report\n");
+		return;
+	}
+	size_t blen = body_len;
+
+#if CUBERANGE_OBC_SIGN_REPORTS
+	blen = sign_report(body, blen);
+#endif
+#if CUBERANGE_OBC_REPORT_STORE
+	report_store_put(counter, body, blen);
+#endif
+	memcpy(packet->data, body, blen);
+	packet->length = (uint16_t)blen;
+
+	csp_conn_t *conn = csp_connect(CSP_PRIO_NORM, COMM_ADDR, CSP_PORT_PUS, 1000, CSP_O_NONE);
+
+	if (conn == NULL) {
+		printk("OBC: no CSP connection to COMM for the success report\n");
+		csp_buffer_free(packet);
+		return;
+	}
+	csp_send(conn, packet);
+	csp_close(conn);
+	printk("OBC: PUS 1,1 accepted, reported to source %u\n", dest_id);
+}
+#endif /* CUBERANGE_OBC_ACK_COMMANDS */
+
 static void send_test_report(uint16_t source_id)
 {
 #if CUBERANGE_OBC_SIGN_REPORTS
@@ -810,6 +891,19 @@ static void handle_space_packet(const uint8_t *raw, size_t len, uint16_t via)
 	uint16_t source_id = (uint16_t)((sec[3] << 8) | sec[4]);
 
 	printk("OBC: APID 0x%03x PUS %u,%u from source %u\n", apid, service, subtype, source_id);
+
+#if CUBERANGE_OBC_ACK_COMMANDS
+	/* Here, and not after the handler. ACCEPTANCE is a statement about the packet arriving and
+	 * being well-formed enough to dispatch - ECSS separates it from execution for exactly that
+	 * reason, and an operator needs the two apart: "it never arrived" and "it arrived and went
+	 * wrong" are different passes.
+	 *
+	 * So this fires for a command that is then REFUSED, too. That is correct and it is the part
+	 * worth reading twice: a refused command was heard. An operator who gets neither an
+	 * acceptance nor a refusal learns something a refusal alone could never tell them.
+	 */
+	send_acceptance_success(source_id, raw);
+#endif
 
 #if CUBERANGE_OBC_CROSSLINK_ORIGIN
 	/* Before the dispatch, and before the authority table, because this is not a question about

@@ -55,6 +55,13 @@ set(CUBERANGE_OBC_REPORT_STORE 0 CACHE STRING
 set(CUBERANGE_OBC_BEACON 0 CACHE STRING
     "send an unsolicited housekeeping report on a timer (PUS 3,25 subset)")
 
+# EX-U01's only difference. EX-G04 gave the ground a way to hear a REFUSAL and the sign was never
+# flipped: an operator could tell refused from nothing and still not tell accepted from
+# never-arrived, which is the gap an attacker denying the UPLINK lives in.
+#   west build ... -- -DCUBERANGE_OBC_ACK_COMMANDS=1
+set(CUBERANGE_OBC_ACK_COMMANDS 0 CACHE STRING
+    "send PUS 1,1 when a telecommand is accepted, so silence means it never arrived")
+
 include(${CMAKE_CURRENT_LIST_DIR}/../../common/identity.cmake)
 
 target_sources(app PRIVATE src/main.c ../../common/cuberange_proto.c
@@ -69,4 +76,5 @@ target_compile_definitions(app PRIVATE
   CUBERANGE_OBC_REQUIRE_PUS_AUTH=${CUBERANGE_OBC_REQUIRE_PUS_AUTH}
   CUBERANGE_OBC_SIGN_REPORTS=${CUBERANGE_OBC_SIGN_REPORTS}
   CUBERANGE_OBC_REPORT_STORE=${CUBERANGE_OBC_REPORT_STORE}
-  CUBERANGE_OBC_BEACON=${CUBERANGE_OBC_BEACON})
+  CUBERANGE_OBC_BEACON=${CUBERANGE_OBC_BEACON}
+  CUBERANGE_OBC_ACK_COMMANDS=${CUBERANGE_OBC_ACK_COMMANDS})

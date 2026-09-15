@@ -106,3 +106,9 @@ pairs:
     flag: CUBERANGE_OBC_BEACON
     vuln: { value: "0", build: build-obc-l03-vuln }
     hard: { value: "1", build: build-obc-l03-hard }
+
+  - id: EX-U01
+    app: firmware/apps/obc
+    flag: CUBERANGE_OBC_ACK_COMMANDS
+    vuln: { value: "0", build: build-obc-u01-vuln }
+    hard: { value: "1", build: build-obc-u01-hard }
