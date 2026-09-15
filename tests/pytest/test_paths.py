@@ -396,3 +396,62 @@ def test_every_module_is_imported_by_something_that_runs():
     assert not orphans, (
         "no test, exercise or tool names these, so nothing would notice them breaking:\n  "
         + "\n  ".join(orphans))
+
+
+def test_no_exercise_puts_its_own_directory_on_sys_path():
+    """Every exercise has a module called `solve`, and `sys.modules` is shared per session.
+
+    WHAT THIS CAUGHT, and it is the quiet half that matters. EX-U02's verifier put its own
+    directory on `sys.path` and did `from solve import ...`; EX-U03's did the same. Run one at a
+    time - `make verify EX=...`, one process each - both pass. Collected together by
+    `make verify-all`, the FIRST verifier to import `solve` puts it in `sys.modules` and every
+    later one silently gets that one.
+
+    Here it was loud: EX-U03 asked for a name EX-U02's solver does not define, so CI stopped with
+    an ImportError. The quiet version is two solvers that both define a name - `forge`, say, or a
+    constant - and then the second exercise's verifier measures the FIRST exercise's code and
+    passes. A verifier that measures the wrong exercise is worse than one that does not run.
+
+    The fix is to load the file by path under a name nothing else will claim, which both verifiers
+    now do. This test is here so the third one does not have to rediscover why.
+    """
+    offenders = []
+    for path in sorted(REPO.glob("exercises/*/*.py")):
+        for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+            stripped = line.lstrip()
+            if stripped.startswith("#"):
+                continue
+            if "sys.path.insert" in stripped and "__file__" in stripped \
+                    and "parents[2]" not in stripped:
+                offenders.append(f"{path.relative_to(REPO)}:{n}  {stripped[:80]}")
+    assert not offenders, (
+        "an exercise put its own directory on sys.path. Every exercise directory holds a "
+        "`solve.py`, so a bare `import solve` resolves to whichever exercise imported it first in "
+        "the session - use importlib.util.spec_from_file_location with a unique module name:\n  "
+        + "\n  ".join(offenders))
+
+
+def test_every_exercise_verifier_can_be_collected_alongside_every_other():
+    """The condition `make verify-all` needs and `make verify EX=...` cannot check.
+
+    Imports each verifier into ONE interpreter, in order, exactly as a single pytest session does.
+    A module-name collision between two exercises fails here in under a second instead of 25
+    minutes into CI, which is where it was found.
+    """
+    import importlib.util
+
+    loaded = []
+    for path in sorted(REPO.glob("exercises/*/verify_*.py")):
+        name = f"_collect_{path.parent.name.replace('-', '_')}_{path.stem}"
+        spec = importlib.util.spec_from_file_location(name, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except Exception as exc:                      # noqa: BLE001 - the report is the point
+            raise AssertionError(
+                f"{path.relative_to(REPO)} cannot be imported after "
+                f"{len(loaded)} other verifiers ({', '.join(loaded[-3:]) or 'none'}): "
+                f"{type(exc).__name__}: {exc}") from exc
+        loaded.append(path.parent.name)
+    assert len(loaded) >= 18, f"only {len(loaded)} verifiers found; exercises are missing one"

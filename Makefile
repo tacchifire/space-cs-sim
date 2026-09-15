@@ -235,7 +235,7 @@ verify:
 	    python3 -m pytest exercises/$(EX)/verify_*.py -v
 
 # Every exercise, both directions. This is the claim the product makes.
-verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01 firmware-u02)
+verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01 firmware-u02 firmware-u03)
 	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest exercises/*/verify_*.py -v
 
@@ -287,7 +287,7 @@ firmware-f01: firmware-p1
 # prerequisite once per invocation, so this is one pristine build of each of the seven images
 # rather than the four rounds `check` used to do.
 .PHONY: firmware-all
-firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-sdls firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01 firmware-u02
+firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-sdls firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01 firmware-u02 firmware-u03
 	@echo "all node images built:"
 	@ls -1 $(OUT)/build-*/zephyr/zephyr.elf
 
@@ -447,6 +447,28 @@ firmware-u02:
 	    -DCUBERANGE_OBC_TC_COUNTERS=1 \
 	    -DEXTRA_CONF_FILE=$(CUBERANGE_REPO)/firmware/apps/obc/pus_auth.conf
 	@ls -l $(OUT)/build-obc-u02-vuln/zephyr/zephyr.elf $(OUT)/build-obc-u02-hard/zephyr/zephyr.elf
+
+firmware-u03:
+	# EX-U03's pair, and it is a COMM pair rather than an OBC one: the controls this exercise is
+	# about all live at the link layer. Both halves verify SDLS, keep an anti-replay counter and
+	# refuse everything they should. What differs is whether the radio ever tells anyone.
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-comm-u03-vuln firmware/apps/comm -- \
+	    -DCUBERANGE_SAT_INDEX=0 \
+	    -DCUBERANGE_COMM_SDLS=1 -DCUBERANGE_COMM_CROSSLINK=1 \
+	    -DCUBERANGE_COMM_ANTIREPLAY=1 -DCUBERANGE_COMM_ANTIREPLAY_PER_VC=1 \
+	    -DCUBERANGE_COMM_LINK_STATS=0 \
+	    -DEXTRA_DTC_OVERLAY_FILE=$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.overlay \
+	    -DEXTRA_CONF_FILE="$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.conf;$(CUBERANGE_REPO)/firmware/apps/comm/sdls.conf"
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-comm-u03-hard firmware/apps/comm -- \
+	    -DCUBERANGE_SAT_INDEX=0 \
+	    -DCUBERANGE_COMM_SDLS=1 -DCUBERANGE_COMM_CROSSLINK=1 \
+	    -DCUBERANGE_COMM_ANTIREPLAY=1 -DCUBERANGE_COMM_ANTIREPLAY_PER_VC=1 \
+	    -DCUBERANGE_COMM_LINK_STATS=1 \
+	    -DEXTRA_DTC_OVERLAY_FILE=$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.overlay \
+	    -DEXTRA_CONF_FILE="$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.conf;$(CUBERANGE_REPO)/firmware/apps/comm/sdls.conf"
+	@ls -l $(OUT)/build-comm-u03-vuln/zephyr/zephyr.elf $(OUT)/build-comm-u03-hard/zephyr/zephyr.elf
 
 firmware-l03:
 	# EX-L03's pair. Both halves are everything EX-L02 deployed - signed reports, a report store,

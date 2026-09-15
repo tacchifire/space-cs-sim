@@ -173,6 +173,13 @@ def test_replay_transmits_the_captured_octets_and_not_a_re_encoding(wired):
     frame = bytes([0x00, 0xA9, 0x00, 0x07, 0x07, 0x01, 0x80, 0x2E])
     client.sendall(wrap(frame))
     assert chan.wait_for_uplink(1, timeout=5)
+    #: Wait for the SATELLITE, not for the channel. `wait_for_uplink` returns when the proxy has
+    #: RECORDED the frame; forwarding it onward is a separate write on the same thread and had not
+    #: necessarily happened. Taking `before` there made the slice below hold the original AND the
+    #: replay whenever the machine was loaded - one failure in a suite that had run clean for
+    #: hundreds of invocations, which is the worst kind. W48 and W52 are the same mistake: waiting
+    #: on an event that is adjacent to the one the assertion depends on.
+    assert sat.wait_for(len(wrap(frame))), "the forwarded frame never reached the satellite"
     before = len(sat.received)
 
     chan.replay(chan.uplink_frames[0])

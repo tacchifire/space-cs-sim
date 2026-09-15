@@ -49,8 +49,27 @@ from cuberange.ports import (channel as channel_port, link as link_port,   # noq
 from cuberange.renode.profile import profile_args                 # noqa: E402
 from cuberange.renode.supervisor import RenodeSupervisor          # noqa: E402
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from solve import INTRUDER_SOURCE_ID, INTRUDER_VCID, PROBE_SERVICE, PROBE_SUBTYPE  # noqa: E402
+def _load_sibling(module_name: str, filename: str):
+    """Import a file from this exercise's directory under a name nothing else will claim."""
+    import importlib.util
+    path = Path(__file__).resolve().parent / filename
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+#: Loaded BY PATH under a name of its own, not by putting this directory on sys.path.
+#: Every exercise here has a module called `solve`, and `sys.modules` is shared across a whole
+#: pytest session: the first verifier to import `solve` wins, and every later one silently gets
+#: that one. `make verify EX=...` runs one exercise per process and never sees it; `make
+#: verify-all` collects them together and does. The loud version is an ImportError, which is what
+#: happened. The quiet version is two exercises whose solvers both define a name - the second
+#: verifier then measures the first exercise's code and passes.
+_solve = _load_sibling("solve_u02", "solve.py")
+INTRUDER_SOURCE_ID = _solve.INTRUDER_SOURCE_ID
+INTRUDER_VCID = _solve.INTRUDER_VCID
+PROBE_SERVICE, PROBE_SUBTYPE = _solve.PROBE_SERVICE, _solve.PROBE_SUBTYPE
 
 RENODE_DIR = Path(os.environ.get(
     "RENODE_DIR", Path.home() / "tools" / "renode_1.16.1-dotnet_portable"))

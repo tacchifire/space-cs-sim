@@ -1,0 +1,86 @@
+:name: EX-U03 - twenty refusals nobody counted
+:description: Every control works. Every attack fails. Nobody finds out.
+
+# Execution profile (design 4.3; rules G1/G2 of section 9.2). FIRST, so a profile that cannot be
+# found takes the machines down loudly instead of leaving every node running with no quantum set.
+$profile?=@~/space-cs-sim/scripts/profiles/interactive.resc
+include $profile
+
+# Every path hangs off $out, which has NO default - see any other scenario in this repository for
+# why. Unset, LoadELF fails where you can see it.
+#
+#   renode -e '$out=@'"$(make -s out)" -e 'include @<this file>' -e start
+$comm?=$out/build-comm-u03-hard/zephyr/zephyr.elf
+$obc?=$out/build-obc-u02-hard/zephyr/zephyr.elf
+$eps?=$out/build-eps-hard/zephyr/zephyr.elf
+
+# THERE IS NO ATTACKER MACHINE IN THIS SCENARIO, for the reason EX-U02 has none: this attacker has
+# a radio and nothing else. Unlike EX-U02's they do NOT have the key, which is the ordinary case
+# and is why this exercise exists - every control below refuses them, correctly, completely, and
+# without telling anybody.
+#
+# The OBC is EX-U02's hardened build, on purpose. Its telecommand counters are ON throughout, and
+# they read ZERO for the whole attack: they count what the computer HEARD, and nothing this
+# attacker sends gets past the radio. A detector built to notice attackers, blind to one, because
+# it is behind the control that stopped them.
+$comm1?=$out/build-comm-s01-sat1/zephyr/zephyr.elf
+
+$comm0uart?=$out/u03-sat0-comm.uart
+$obc0uart?=$out/u03-sat0-obc.uart
+$eps0uart?=$out/u03-sat0-eps.uart
+$comm1uart?=$out/u03-sat1-comm.uart
+$linkport?=3777
+
+emulation CreateCANHub "canHub0"
+emulation CreateCANHub "canHub1"
+emulation CreateCANHub "crosslinkHub"
+
+# --- satellite 0: the victim. Everything hardened. ------------------------------------------------
+
+mach create "SAT0_COMM"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub0
+connector Connect sysbus.fdcan2 crosslinkHub
+sysbus LoadELF $comm
+sysbus.usart3 CreateFileBackend $comm0uart true
+emulation CreateServerSocketTerminal $linkport "spacelink0" false
+connector Connect sysbus.usart2 spacelink0
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+logLevel 3 fdcan2
+
+mach create "SAT0_OBC"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub0
+sysbus LoadELF $obc
+sysbus.usart3 CreateFileBackend $obc0uart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "SAT0_EPS"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub0
+sysbus LoadELF $eps
+sysbus.usart3 CreateFileBackend $eps0uart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+# --- satellite 1: the neighbour, so the crosslink has a far end. ----------------------------------
+#
+# Present for the same reason it is present in EX-L03 and EX-U01: this COMM image is built with the
+# crosslink on, and a crosslink attached to nothing is a node logging a failure at startup for a
+# reason that has nothing to do with the exercise.
+
+mach create "SAT1_COMM"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub1
+connector Connect sysbus.fdcan2 crosslinkHub
+sysbus LoadELF $comm1
+sysbus.usart3 CreateFileBackend $comm1uart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+logLevel 3 fdcan2

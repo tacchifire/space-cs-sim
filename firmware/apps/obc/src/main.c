@@ -97,6 +97,11 @@
 #define FUNC_SET_COMM_RAIL 1
 #define FUNC_MAINTENANCE   9
 #define CSP_PORT_POWER     11
+/* Link statistics from COMM. Not the PUS port, deliberately: what arrives here is not a
+ * telecommand, and letting it reach handle_space_packet would put the radio's own reports into
+ * the telecommand counter EX-U02 reads. A detector whose input includes its own output is not a
+ * detector. */
+#define CSP_PORT_LINKSTATS 12
 #ifndef ADDR_EPS
 #define ADDR_EPS           2
 #endif
@@ -391,8 +396,26 @@ static size_t sign_report(uint8_t *body, size_t len)
 #endif
 
 static csp_iface_t *can_iface;
+/* The most a housekeeping report's application data can be. Four octets of uptime, two counters
+ * of telecommands, two counters from the radio - and the check against it refuses rather than
+ * truncating, because a beacon that silently lost its last four octets would be a ground station
+ * reading two octets of nothing as a refusal count. */
+#define HK_APP_MAX 12
+
 static uint16_t tm_seq_count;
 static uint16_t tm_msg_counter;
+
+/* What COMM last said about the link, and whether it has ever said anything.
+ *
+ * Unconditional - no flag on this side. The radio decides whether it reports; the computer
+ * carries whatever it is told. `have_link_stats` is what keeps "the radio does not report" and
+ * "the radio reports zero" apart, and they are different: one is a spacecraft with no detector
+ * and the other is a quiet link. The beacon is four octets longer once it has something to say,
+ * and the ground reads the LENGTH as the feature test.
+ */
+static uint16_t link_rx;
+static uint16_t link_refused;
+static bool have_link_stats;
 
 #if CUBERANGE_OBC_TC_COUNTERS
 /* How many telecommands this spacecraft has HEARD, and how many of those it refused.
@@ -569,11 +592,11 @@ static void send_acceptance_failure(uint16_t dest_id, const uint8_t *failed_pack
 static void send_housekeeping(uint16_t dest_id, const uint8_t *app_data, size_t app_len)
 {
 #if CUBERANGE_OBC_SIGN_REPORTS
-	uint8_t body[SP_HEADER_LEN + PUS_TM_SEC_LEN + TIME_LEN + 8 + CR_PUS_AUTH_TRAILER];
+	uint8_t body[SP_HEADER_LEN + PUS_TM_SEC_LEN + TIME_LEN + HK_APP_MAX + CR_PUS_AUTH_TRAILER];
 #else
-	uint8_t body[SP_HEADER_LEN + PUS_TM_SEC_LEN + TIME_LEN + 8];
+	uint8_t body[SP_HEADER_LEN + PUS_TM_SEC_LEN + TIME_LEN + HK_APP_MAX];
 #endif
-	if (app_len > 8) {
+	if (app_len > HK_APP_MAX) {
 		printk("OBC: housekeeping payload of %u octets does not fit\n", (unsigned int)app_len);
 		return;
 	}
@@ -1008,22 +1031,32 @@ static void router_task(void *a, void *b, void *c)
 static void send_beacon(void)
 {
 	uint32_t now = (uint32_t)k_uptime_get();
-#if CUBERANGE_OBC_TC_COUNTERS
-	/* Eight octets, which is exactly what send_housekeeping's buffer holds - it refuses more
-	 * rather than truncating, and a beacon that silently lost its last two octets would be a
-	 * detector that reads two octets of uptime as a command count. */
-	uint8_t app[8] = {
-		(uint8_t)(now >> 24), (uint8_t)(now >> 16), (uint8_t)(now >> 8), (uint8_t)now,
-		(uint8_t)(tc_accepted >> 8), (uint8_t)tc_accepted,
-		(uint8_t)(tc_rejected >> 8), (uint8_t)tc_rejected,
-	};
-#else
-	uint8_t app[4] = {
+	uint8_t app[HK_APP_MAX] = {
 		(uint8_t)(now >> 24), (uint8_t)(now >> 16), (uint8_t)(now >> 8), (uint8_t)now,
 	};
-#endif
+	size_t app_len = 4;
 
-	send_housekeeping(GROUND_PRIMARY_ID, app, sizeof(app));
+#if CUBERANGE_OBC_TC_COUNTERS
+	app[4] = (uint8_t)(tc_accepted >> 8);  app[5] = (uint8_t)tc_accepted;
+	app[6] = (uint8_t)(tc_rejected >> 8);  app[7] = (uint8_t)tc_rejected;
+	app_len = 8;
+#endif
+	/* The radio's counts go on the end, and only once it has actually reported. The LENGTH is
+	 * the feature test on the ground - four octets is a spacecraft that counts nothing, eight is
+	 * one that counts telecommands, twelve is one whose radio counts what it refused. Padding to
+	 * twelve with zeros would tell a station "no frames were refused" about a spacecraft that has
+	 * no idea, which is the one answer worse than saying nothing. */
+	if (have_link_stats) {
+		if (app_len < 8) {
+			memset(app + app_len, 0, 8 - app_len);
+			app_len = 8;
+		}
+		app[8] = (uint8_t)(link_rx >> 8);       app[9] = (uint8_t)link_rx;
+		app[10] = (uint8_t)(link_refused >> 8); app[11] = (uint8_t)link_refused;
+		app_len = 12;
+	}
+
+	send_housekeeping(GROUND_PRIMARY_ID, app, app_len);
 }
 
 static void beacon_task(void *a, void *b, void *c)
@@ -1092,6 +1125,23 @@ static void app_task(void *a, void *b, void *c)
 				}
 #endif
 				handle_space_packet(packet->data, plen, csp_conn_src(conn));
+				csp_buffer_free(packet);
+			} else if (csp_conn_dport(conn) == CSP_PORT_LINKSTATS) {
+				/* Four octets from COMM: frames received, frames refused. Only
+				 * from COMM - a node that accepted these from anywhere would let
+				 * anything on the internal bus write the spacecraft's own account
+				 * of what the radio saw, which is EX-B01's premise pointed at
+				 * telemetry instead of at power. */
+				if (csp_conn_src(conn) == COMM_ADDR && packet->length >= 4) {
+					link_rx = (uint16_t)((packet->data[0] << 8)
+							     | packet->data[1]);
+					link_refused = (uint16_t)((packet->data[2] << 8)
+								  | packet->data[3]);
+					have_link_stats = true;
+				} else {
+					printk("OBC: ignoring link statistics from node %u\n",
+					       (unsigned int)csp_conn_src(conn));
+				}
 				csp_buffer_free(packet);
 			} else {
 				/* Takes ownership of the packet. */

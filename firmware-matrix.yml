@@ -118,3 +118,9 @@ pairs:
     flag: CUBERANGE_OBC_TC_COUNTERS
     vuln: { value: "0", build: build-obc-u02-vuln }
     hard: { value: "1", build: build-obc-u02-hard }
+
+  - id: EX-U03
+    app: firmware/apps/comm
+    flag: CUBERANGE_COMM_LINK_STATS
+    vuln: { value: "0", build: build-comm-u03-vuln }
+    hard: { value: "1", build: build-comm-u03-hard }
