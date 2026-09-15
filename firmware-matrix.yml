@@ -124,3 +124,9 @@ pairs:
     flag: CUBERANGE_COMM_LINK_STATS
     vuln: { value: "0", build: build-comm-u03-vuln }
     hard: { value: "1", build: build-comm-u03-hard }
+
+  - id: EX-S03
+    app: firmware/apps/comm
+    flag: CUBERANGE_COMM_SA_DEACTIVATION
+    vuln: { value: "0", build: build-comm-s03-vuln }
+    hard: { value: "1", build: build-comm-s03-hard }

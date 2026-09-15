@@ -14,13 +14,14 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 HEADER = REPO / "firmware" / "common" / "cuberange_keys.h"
 
-from cuberange.keys import SDLS_KEY, SDLS_SPI   # noqa: E402
+from cuberange.keys import (SDLS_KEY, SDLS_KEY_ROTATED, SDLS_SPI,   # noqa: E402
+                            SDLS_SPI_ROTATED)
 
 
-def _header_key() -> bytes:
+def _header_key(name: str = "cr_sdls_key") -> bytes:
     text = HEADER.read_text()
-    m = re.search(r"static const uint8_t cr_sdls_key\[32\] = \{(.*?)\};", text, re.S)
-    assert m, "cr_sdls_key is not in cuberange_keys.h in the shape this test parses"
+    m = re.search(rf"static const uint8_t {name}\[32\] = \{{(.*?)\}};", text, re.S)
+    assert m, f"{name} is not in cuberange_keys.h in the shape this test parses"
     octets = re.findall(r"0x([0-9A-Fa-f]{2})", m.group(1))
     return bytes(int(o, 16) for o in octets)
 
@@ -51,3 +52,29 @@ def test_the_key_says_what_it_is():
     """
     assert b"not-real" in SDLS_KEY, (
         "the key no longer spells out that it is not a real one; keys.py explains why it should")
+
+
+def test_the_firmware_and_the_host_hold_the_same_rotated_key():
+    """The second association, checked the same way and for the same reason.
+
+    A rotation whose two ends disagree about the new key is a spacecraft that refuses everything
+    after the rotation and an operator whose only evidence is silence - which is the failure
+    EX-G04 is about, arriving at the worst possible moment.
+    """
+    assert _header_key("cr_sdls_key_rotated") == SDLS_KEY_ROTATED, (
+        f"the rotated key differs.\n  header: {_header_key('cr_sdls_key_rotated').hex()}"
+        f"\n  keys.py: {SDLS_KEY_ROTATED.hex()}")
+    assert len(SDLS_KEY_ROTATED) == 32
+
+
+def test_the_firmware_and_the_host_agree_on_the_rotated_spi():
+    m = re.search(r"#define CR_SDLS_SPI_ROTATED\s+(\d+)", HEADER.read_text())
+    assert m, "CR_SDLS_SPI_ROTATED is not in cuberange_keys.h"
+    assert int(m.group(1)) == SDLS_SPI_ROTATED
+
+
+def test_the_two_associations_are_actually_different():
+    """A rotation to the same octets, or to the same SPI, is not a rotation."""
+    assert SDLS_KEY_ROTATED != SDLS_KEY
+    assert SDLS_SPI_ROTATED != SDLS_SPI
+    assert _header_key("cr_sdls_key_rotated") != _header_key("cr_sdls_key")

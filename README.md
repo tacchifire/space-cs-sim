@@ -104,6 +104,10 @@ mitigation admitted to:
   them perfectly and writes the result to a console that has never left the spacecraft. A defence
   that cannot report is not half a defence; it is a whole defence and no detection at all.
 
+- **EX-S03** — so change the key. Retiring a key is deactivating its Security Association, and a
+  rotation has two halves of which only the first has a symptom. A spacecraft that retired the key
+  and one that did not are identical until you transmit on the old association on purpose.
+
 Eight attack origins are covered: the internal bus, the space link, the ADCS command envelope, the
 OBC's own command parser, the ground segment that decides what to send, a spacecraft in your
 own constellation, the downlink the operator reads, and the uplink nobody watches. EX-G02, EX-G03 and EX-G04 add no origin on purpose — a legitimate origin

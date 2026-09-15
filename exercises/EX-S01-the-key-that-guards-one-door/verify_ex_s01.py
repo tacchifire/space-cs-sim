@@ -147,7 +147,10 @@ def test_an_unauthenticated_uplink_frame_is_refused():
         r.uplink(encode_tc_frame(_pus(17, 1, GROUND_STATIONS["primary"]), seq=0,
                                  scid=VICTIM.scid, vcid=0))
         comm, obc = r.console("s01-sat0-comm.uart"), r.console("s01-sat0-obc.uart")
-        assert "did not authenticate" in comm, comm
+        #: The specific reason, not just "refused". EX-S03 split COMM's refusals into four
+        #: named causes; a plain frame has no security header at all, so it fails the
+        #: LAYOUT check - which is a different finding from a MAC that does not verify.
+        assert "not a well-formed authenticated frame" in comm, comm
         assert "PUS 17,1 from source" not in obc, obc
 
 
@@ -159,7 +162,7 @@ def test_the_crosslink_attack_is_unaffected_by_the_uplink_mac():
         comm, obc = r.console("s01-sat0-comm.uart"), r.console("s01-sat0-obc.uart")
         #: The packet never reached the MAC check, so COMM has nothing to say about it at all.
         #: That silence is the finding: it did not fail a check, it never met one.
-        assert "did not authenticate" not in comm, (
+        assert "REFUSED a TC frame" not in comm, (
             "the crosslink packet met the uplink's MAC check, which would mean SDLS covers a "
             "path this test says it does not\n" + comm)
         assert f"from source {GROUND_STATIONS['primary']}" in obc, obc

@@ -43,10 +43,19 @@ set(CUBERANGE_COMM_SDLS 0 CACHE STRING
 set(CUBERANGE_COMM_LINK_STATS 0 CACHE STRING
     "count frames received and refused at the link layer and report them to the OBC")
 
+# EX-S03's only difference. The SA table exists in both halves and both carry both keys; what
+# differs is whether the RETIRED association is deactivated. A rotation that activates the new SA
+# and leaves the old one operational has moved the operator onto new key material and has retired
+# nothing, and the operator has no way to find out - their new commands work, and so do their old.
+#   west build ... -- -DCUBERANGE_COMM_SA_DEACTIVATION=1
+set(CUBERANGE_COMM_SA_DEACTIVATION 0 CACHE STRING
+    "mark the retired Security Association non-operational so frames on its SPI are refused")
+
 target_link_libraries(app PRIVATE csp)
 target_compile_definitions(app PRIVATE
   CUBERANGE_COMM_ANTIREPLAY=${CUBERANGE_COMM_ANTIREPLAY}
   CUBERANGE_COMM_ANTIREPLAY_PER_VC=${CUBERANGE_COMM_ANTIREPLAY_PER_VC}
   CUBERANGE_COMM_CROSSLINK=${CUBERANGE_COMM_CROSSLINK}
   CUBERANGE_COMM_SDLS=${CUBERANGE_COMM_SDLS}
-  CUBERANGE_COMM_LINK_STATS=${CUBERANGE_COMM_LINK_STATS})
+  CUBERANGE_COMM_LINK_STATS=${CUBERANGE_COMM_LINK_STATS}
+  CUBERANGE_COMM_SA_DEACTIVATION=${CUBERANGE_COMM_SA_DEACTIVATION})

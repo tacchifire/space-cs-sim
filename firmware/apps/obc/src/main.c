@@ -397,10 +397,10 @@ static size_t sign_report(uint8_t *body, size_t len)
 
 static csp_iface_t *can_iface;
 /* The most a housekeeping report's application data can be. Four octets of uptime, two counters
- * of telecommands, two counters from the radio - and the check against it refuses rather than
- * truncating, because a beacon that silently lost its last four octets would be a ground station
- * reading two octets of nothing as a refusal count. */
-#define HK_APP_MAX 12
+ * of telecommands, two counters from the radio and the association its last refusal named - and
+ * the check against it refuses rather than truncating, because a beacon that silently lost its
+ * last two octets would be a ground station reading half a counter as a whole one. */
+#define HK_APP_MAX 14
 
 static uint16_t tm_seq_count;
 static uint16_t tm_msg_counter;
@@ -415,6 +415,7 @@ static uint16_t tm_msg_counter;
  */
 static uint16_t link_rx;
 static uint16_t link_refused;
+static uint16_t link_refused_spi;
 static bool have_link_stats;
 
 #if CUBERANGE_OBC_TC_COUNTERS
@@ -1053,7 +1054,9 @@ static void send_beacon(void)
 		}
 		app[8] = (uint8_t)(link_rx >> 8);       app[9] = (uint8_t)link_rx;
 		app[10] = (uint8_t)(link_refused >> 8); app[11] = (uint8_t)link_refused;
-		app_len = 12;
+		app[12] = (uint8_t)(link_refused_spi >> 8);
+		app[13] = (uint8_t)link_refused_spi;
+		app_len = 14;
 	}
 
 	send_housekeeping(GROUND_PRIMARY_ID, app, app_len);
@@ -1132,11 +1135,13 @@ static void app_task(void *a, void *b, void *c)
 				 * anything on the internal bus write the spacecraft's own account
 				 * of what the radio saw, which is EX-B01's premise pointed at
 				 * telemetry instead of at power. */
-				if (csp_conn_src(conn) == COMM_ADDR && packet->length >= 4) {
+				if (csp_conn_src(conn) == COMM_ADDR && packet->length >= 6) {
 					link_rx = (uint16_t)((packet->data[0] << 8)
 							     | packet->data[1]);
 					link_refused = (uint16_t)((packet->data[2] << 8)
 								  | packet->data[3]);
+					link_refused_spi = (uint16_t)((packet->data[4] << 8)
+								      | packet->data[5]);
 					have_link_stats = true;
 				} else {
 					printk("OBC: ignoring link statistics from node %u\n",

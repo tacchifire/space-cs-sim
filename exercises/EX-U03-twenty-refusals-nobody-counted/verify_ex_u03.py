@@ -176,7 +176,11 @@ def test_the_radio_reports_what_it_threw_away():
         #: anybody off it can know - so the console must show them in BOTH halves, or the pair is
         #: measuring a difference in the attack rather than in the reporting.
         console = p.console("u03-sat0-comm.uart")
-        assert console.count("did not authenticate") == FORGERIES
+        #: "the MAC does not verify" and not merely "refused": a forged frame whose FECF
+        #: was recomputed passes every layout and integrity check this radio has, and the
+        #: MAC is the thing that stops it. An assertion on the generic word would pass on
+        #: a frame refused for its shape, which is not what this exercise sends.
+        assert console.count("the MAC does not verify") == FORGERIES
         assert console.count("REPLAY") == REPLAYS
 
 
@@ -196,7 +200,7 @@ def test_the_vulnerable_radio_refuses_everything_and_says_nothing():
         assert p.fly() == THROWN
         #: It DID refuse them. That is the exercise: the control worked perfectly.
         console = p.console("u03-sat0-comm.uart")
-        assert console.count("did not authenticate") == FORGERIES, (
+        assert console.count("the MAC does not verify") == FORGERIES, (
             "the vulnerable half did not refuse the forgeries, so the pair's flag changes the "
             "defence rather than the reporting")
         assert console.count("REPLAY") == REPLAYS

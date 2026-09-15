@@ -85,9 +85,14 @@ class GroundStation:
     def __init__(self, link: SpaceLink, station_id: int = GROUND_SOURCE_ID, *, vcid: int = 0,
                  target_apid: int = OBC_APID, target_scid: int = SCID,
                  require_signed_tm: bytes | None = None,
-                 uplink_key: bytes | None = None, sdls_spi: int | None = None):
+                 uplink_key: bytes | None = None, sdls_spi: int | None = None,
+                 sdls_key: bytes | None = None):
         self.link = link
         self.station_id = station_id
+        #: The key for the link-layer Security Association, when it is not the mission key.
+        #: None means "use `uplink_key`", which is what every station did before EX-S03 and what
+        #: this range's single constant made look inevitable. See `_sdls_key`.
+        self.sdls_key = sdls_key
         # The virtual channel this station transmits on. Every station used VC 0, and a spacecraft
         # keeping one sequence counter for the link then cannot tell two operators apart from one
         # operator replaying itself. CCSDS keeps that counter per VC for exactly this reason.
@@ -170,6 +175,27 @@ class GroundStation:
         self.link_rx: int | None = None
         self.link_refused: int | None = None
         self._link_baseline: tuple[int, int] | None = None
+        #: Which Security Association the radio's last refusal named, or None if it has not
+        #: refused anything - or is not built to say. "Somebody is using the key you retired" and
+        #: "somebody has no key at all" are different incidents and a refusal count carries
+        #: neither. EX-S03.
+        self.link_refused_spi: int | None = None
+
+    def _sdls_key(self) -> bytes:
+        """The key this station frames with, which is not necessarily the one it signs with.
+
+        These were one constant until EX-S03, and in a real system they never are: the
+        link-layer Security Association's key belongs to the SA and the mission-layer key belongs
+        to the mission. Keeping them separable is what makes a rotation expressible at all - an
+        operator who moves to a new SA has changed one of the two, and EX-S03's mitigation is
+        about the half that does not move.
+
+        Defaults to `uplink_key`, so every station written before this behaves as it did.
+        """
+        key = self.sdls_key or self.uplink_key or self.require_signed_tm
+        if key is None:
+            raise ValueError("framing an authenticated telecommand needs a key")
+        return key
 
     def _next_seq(self) -> int:
         seq = self._tc_seq
@@ -188,7 +214,7 @@ class GroundStation:
             #: A distinct IV per frame. GCM's nonce rule is not negotiable and this counter is the
             #: only thing varying here - see pus_auth.py's note on what reuse costs.
             iv = self._sdls_sn.to_bytes(sdls.IV_LEN, "big")
-            frame = sdls.encode_tc(raw, key=self.uplink_key or self.require_signed_tm,
+            frame = sdls.encode_tc(raw, key=self._sdls_key(),
                                    spi=self.sdls_spi, iv=iv, seq_num=self._sdls_sn,
                                    frame_seq=seq & 0xFF, scid=self.target_scid, vcid=self.vcid)
             self._sdls_sn += 1
@@ -336,6 +362,8 @@ class GroundStation:
         self.link_rx, self.link_refused = rx, refused
         if self._link_baseline is None:
             self._link_baseline = (rx, refused)
+        if len(app) >= 14:
+            self.link_refused_spi = int.from_bytes(app[12:14], "big")
 
     @staticmethod
     def _signed_step(now: int, then: int) -> int:
