@@ -1,0 +1,90 @@
+:name: EX-S03 - the key you retired
+:description: You rotated the key. Prove the old one no longer opens the door.
+
+# Execution profile (design 4.3; rules G1/G2 of section 9.2). FIRST, so a profile that cannot be
+# found takes the machines down loudly instead of leaving every node running with no quantum set.
+$profile?=@~/space-cs-sim/scripts/profiles/interactive.resc
+include $profile
+
+# Every path hangs off $out, which has NO default - see any other scenario in this repository for
+# why. Unset, LoadELF fails where you can see it.
+#
+#   renode -e '$out=@'"$(make -s out)" -e 'include @<this file>' -e start
+$comm?=$out/build-comm-s03-hard/zephyr/zephyr.elf
+$obc?=$out/build-obc-u02-hard/zephyr/zephyr.elf
+$eps?=$out/build-eps-hard/zephyr/zephyr.elf
+
+# THERE IS NO ATTACKER MACHINE IN THIS SCENARIO, and this time there is no attacker at all.
+#
+# The operator has rotated the uplink key: they have activated a second Security Association on
+# SPI 10 and they are commanding on it. The question the exercise asks is the one a rotation
+# always raises and almost nothing answers - IS THE OLD KEY STILL GOOD? - and the way to find out
+# is to transmit on the retired association on purpose and see what comes back.
+#
+# So the only thing on this link is the operator, testing their own control. The attacker is
+# implicit and is the reason the rotation happened; EX-U02 is that attacker, holding the key on
+# SPI 9. What this exercise measures is whether the door they were let in through is shut.
+#
+# Both halves carry BOTH keys and both entries of the SA table. The difference is one bit of
+# state: whether the retired association is still operational.
+$comm1?=$out/build-comm-s01-sat1/zephyr/zephyr.elf
+
+$comm0uart?=$out/s03-sat0-comm.uart
+$obc0uart?=$out/s03-sat0-obc.uart
+$eps0uart?=$out/s03-sat0-eps.uart
+$comm1uart?=$out/s03-sat1-comm.uart
+$linkport?=3777
+
+emulation CreateCANHub "canHub0"
+emulation CreateCANHub "canHub1"
+emulation CreateCANHub "crosslinkHub"
+
+# --- satellite 0: the victim. Everything hardened. ------------------------------------------------
+
+mach create "SAT0_COMM"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub0
+connector Connect sysbus.fdcan2 crosslinkHub
+sysbus LoadELF $comm
+sysbus.usart3 CreateFileBackend $comm0uart true
+emulation CreateServerSocketTerminal $linkport "spacelink0" false
+connector Connect sysbus.usart2 spacelink0
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+logLevel 3 fdcan2
+
+mach create "SAT0_OBC"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub0
+sysbus LoadELF $obc
+sysbus.usart3 CreateFileBackend $obc0uart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "SAT0_EPS"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub0
+sysbus LoadELF $eps
+sysbus.usart3 CreateFileBackend $eps0uart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+# --- satellite 1: the neighbour, so the crosslink has a far end. ----------------------------------
+#
+# Present for the same reason it is present in EX-L03 and EX-U01: this COMM image is built with the
+# crosslink on, and a crosslink attached to nothing is a node logging a failure at startup for a
+# reason that has nothing to do with the exercise.
+
+mach create "SAT1_COMM"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub1
+connector Connect sysbus.fdcan2 crosslinkHub
+sysbus LoadELF $comm1
+sysbus.usart3 CreateFileBackend $comm1uart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+logLevel 3 fdcan2

@@ -124,7 +124,7 @@ def test_an_authenticated_frame_is_verified_and_acted_on():
         r.send(frame)
         comm, obc = r.console("sdls-comm.uart"), r.console("sdls-obc.uart")
         assert f"authenticated frame, SPI {SDLS_SPI}" in comm, comm
-        assert "did not authenticate" not in comm, comm
+        assert "REFUSED a TC frame" not in comm, comm
         assert "PUS 17,1 from source" in obc, obc
         assert "PUS 17,2 report sent" in obc, (
             "the OBC received it and did not answer\n" + obc)
@@ -141,7 +141,7 @@ def test_a_tampered_payload_is_refused_with_the_fecf_repaired():
 
         r.send(bytes(frame))
         comm, obc = r.console("sdls-comm.uart"), r.console("sdls-obc.uart")
-        assert "did not authenticate" in comm, (
+        assert "the MAC does not verify" in comm, (
             "a frame with a valid FECF and an invalid MAC was accepted\n" + comm)
         assert "PUS 17,1 from source" not in obc, (
             "the OBC acted on a frame the MAC should have stopped\n" + obc)
@@ -169,7 +169,10 @@ def test_a_replayed_authenticated_frame_is_refused():
 
         r.send(frame)                                   # the same octets, again
         comm = r.console("sdls-comm.uart")
-        assert "REPLAY - authenticated frame with sequence 5" in comm, (
+        #: The SPI is in this message since EX-S03: anti-replay state belongs to the
+        #: Security Association, so a sequence number is only meaningful beside the SA it
+        #: belongs to.
+        assert "REPLAY - SPI 9 frame with sequence 5" in comm, (
             "a byte-identical authenticated frame was accepted twice\n" + comm)
 
 
@@ -192,6 +195,10 @@ def test_a_plain_unauthenticated_frame_is_refused():
     with Range() as r:
         r.send(encode_tc_frame(_pus17(), seq=0, scid=SAT.scid, vcid=0))
         comm, obc = r.console("sdls-comm.uart"), r.console("sdls-obc.uart")
-        assert "did not authenticate" in comm, (
+        #: The LAYOUT reason, not the MAC reason. A plain frame has no security header, so there
+        #: is nothing to compute a MAC over and the octets in those positions are payload - EX-S03
+        #: split COMM's refusals into four named causes precisely so this is not confusable with
+        #: a forgery, and asserting the wrong one here would pass for the wrong reason.
+        assert "not a well-formed authenticated frame" in comm, (
             "an unauthenticated frame reached the OBC on an SDLS build\n" + comm)
         assert "PUS 17,1 from source" not in obc, obc

@@ -150,29 +150,96 @@ static void link_write(const uint8_t *buf, size_t len)
  * mbedtls_gcm_auth_decrypt with a zero-length input is what authentication-only means: the
  * payload is additional authenticated data, there is no ciphertext, and the MAC is the GCM tag.
  */
-static bool sdls_verify(const uint8_t *frame, size_t len, struct cr_sdls_parts *parts)
+/* THE SECURITY ASSOCIATION TABLE, and it is the oldest thing this range had named and not built.
+ *
+ * Until EX-S03 this function verified against one SPI and one key, and the comment where the SPI
+ * was checked said so: "one association is all this range has". CCSDS 355.0-B-2 puts a key, a
+ * cipher mode, an anti-replay sequence number and a STATE in an SA, and a mission has several
+ * because that is how a key is retired: activate the new SA, deactivate the old one, and a frame
+ * on the old SPI stops opening the door. Both halves are controls, and EX-S03 is about a rotation
+ * that did only the first one.
+ *
+ * `operational` is the state field, reduced to the one bit this range needs. CryptoLib carries
+ * four states (unkeyed, keyed, operational, expired) and the distinction matters for key
+ * management this range does not do; what matters here is that a frame arriving for a
+ * deactivated SA is refused for a REASON, and the reason is reported.
+ *
+ * The table is const and compiled in. An SA that can be activated or deactivated by telecommand
+ * is what a real mission has, and a telecommand that can deactivate the operator's own SA is a
+ * denial-of-service with a valid MAC on it - that is named in EX-S03's mitigation as the next
+ * thing, not implemented here.
+ */
+#ifndef CUBERANGE_COMM_SA_DEACTIVATION
+#define CUBERANGE_COMM_SA_DEACTIVATION 0
+#endif
+
+struct cr_sdls_sa {
+	uint16_t spi;
+	const uint8_t *key;
+	bool operational;
+};
+
+static const struct cr_sdls_sa sa_table[] = {
+	/* The association every exercise before EX-S03 uses. Deactivated in exactly one build in
+	 * this repository - EX-S03's mitigated half - which is what makes that half a rotation
+	 * rather than an addition. */
+	{ CR_SDLS_SPI, cr_sdls_key, CUBERANGE_COMM_SA_DEACTIVATION ? false : true },
+	{ CR_SDLS_SPI_ROTATED, cr_sdls_key_rotated, true },
+};
+
+#define SA_COUNT ((int)ARRAY_SIZE(sa_table))
+
+/* Which SA the last refused frame claimed, and why it was refused. Reported to the OBC so it can
+ * reach the ground: "somebody is using the key you retired" and "somebody is guessing" are
+ * different messages, and a bare refusal count cannot carry either. */
+#if CUBERANGE_COMM_LINK_STATS
+static uint16_t link_refused_spi;
+#endif
+
+/* Returns the index of the SA that verified the frame, or a negative reason. The reason is
+ * negative and distinct per cause on purpose: the caller logs it, and "no such SA", "that SA is
+ * deactivated" and "the MAC does not verify" send an operator to three different places. */
+#define SA_ERR_MALFORMED   (-1)
+#define SA_ERR_NO_SUCH_SA  (-2)
+#define SA_ERR_DEACTIVATED (-3)
+#define SA_ERR_BAD_MAC     (-4)
+
+static int sdls_verify_sa(const uint8_t *frame, size_t len, struct cr_sdls_parts *parts)
 {
 	if (cr_sdls_split(frame, len, CR_SDLS_IV_LEN, CR_SDLS_SN_LEN, CR_SDLS_MAC_LEN, parts) != 0) {
-		return false;
+		return SA_ERR_MALFORMED;
 	}
-	if (parts->spi != CR_SDLS_SPI) {
-		/* Logged by the caller. One association is all this range has, and a frame for
-		 * another one is not an error in the frame - it is a frame for somebody else. */
-		return false;
+
+	int found = -1;
+
+	for (int i = 0; i < SA_COUNT; i++) {
+		if (sa_table[i].spi == parts->spi) {
+			found = i;
+			break;
+		}
+	}
+	if (found < 0) {
+		return SA_ERR_NO_SUCH_SA;
+	}
+	/* BEFORE the MAC, not after. A deactivated SA's key must not be used to verify anything -
+	 * checking the MAC first and the state second would mean the retired key still decides
+	 * whether a frame is well-formed, and an attacker holding it could tell a deactivated SA
+	 * from a nonexistent one by the timing. */
+	if (!sa_table[found].operational) {
+		return SA_ERR_DEACTIVATED;
 	}
 
 	mbedtls_gcm_context gcm;
 	mbedtls_gcm_init(&gcm);
 	bool ok = false;
 
-	if (mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, cr_sdls_key,
-			       8 * sizeof(cr_sdls_key)) == 0) {
+	if (mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, sa_table[found].key, 256) == 0) {
 		ok = mbedtls_gcm_auth_decrypt(&gcm, 0, parts->iv, parts->iv_len,
 					      parts->aad, parts->aad_len,
 					      parts->mac, parts->mac_len, NULL, NULL) == 0;
 	}
 	mbedtls_gcm_free(&gcm);
-	return ok;
+	return ok ? found : SA_ERR_BAD_MAC;
 }
 
 /* One published NIST AES-256-GCM vector, at boot, before anything depends on the answer.
@@ -239,7 +306,7 @@ static uint16_t link_frames_refused;
 
 static void send_link_stats(void)
 {
-	csp_packet_t *out = csp_buffer_get(4);
+	csp_packet_t *out = csp_buffer_get(6);
 
 	if (out == NULL) {
 		return;
@@ -248,7 +315,13 @@ static void send_link_stats(void)
 	out->data[1] = (uint8_t)link_frames_rx;
 	out->data[2] = (uint8_t)(link_frames_refused >> 8);
 	out->data[3] = (uint8_t)link_frames_refused;
-	out->length = 4;
+	/* Which association the last refused frame claimed. One value and not a histogram, which
+	 * EX-S03's mitigation names as the limit: a burst of refusals on two different SPIs reports
+	 * only the second. It is enough to tell "the key you retired" from "no key at all", which is
+	 * the question a rotation raises. */
+	out->data[4] = (uint8_t)(link_refused_spi >> 8);
+	out->data[5] = (uint8_t)link_refused_spi;
+	out->length = 6;
 
 	csp_conn_t *conn = csp_connect(CSP_PRIO_NORM, OBC_ADDR, CSP_PORT_LINKSTATS, 1000,
 				       CSP_O_NONE);
@@ -304,10 +377,38 @@ static void on_tc_frame(const uint8_t *frame, size_t len, void *ctx)
 	 */
 	struct cr_sdls_parts parts;
 
-	if (!sdls_verify(frame, len, &parts)) {
-		printk("COMM: dropping a TC frame that did not authenticate\n");
+	int sa = sdls_verify_sa(frame, len, &parts);
+
+	if (sa < 0) {
+		/* Named reasons, because a refusal an operator cannot read is the thing EX-G04 and
+		 * EX-U03 are both about. "The SA you retired" and "a MAC that does not verify" are
+		 * different incidents; one is a rotation that did not finish and the other is
+		 * somebody without the key. */
+		static const char *const why[] = {
+			[-SA_ERR_MALFORMED] = "not a well-formed authenticated frame",
+			[-SA_ERR_NO_SUCH_SA] = "no such security association",
+			[-SA_ERR_DEACTIVATED] = "that security association is DEACTIVATED",
+			[-SA_ERR_BAD_MAC] = "the MAC does not verify",
+		};
+
+		/* The SPI is printed only when the frame HAD one. A plain frame's security
+		 * header is whatever octets were in those positions, and "SPI 24" about a frame
+		 * with no security header sends an operator to look up an association nobody
+		 * used. Measured: an unauthenticated frame reported SPI 24. */
+		if (sa == SA_ERR_MALFORMED) {
+			printk("COMM: REFUSED a TC frame - %s\n", why[-sa]);
+		} else {
+			printk("COMM: REFUSED a TC frame, SPI %u - %s\n",
+			       (unsigned int)parts.spi, why[-sa]);
+		}
 #if CUBERANGE_COMM_LINK_STATS
 		link_frames_refused++;
+		/* Only when the frame said which SA it was for. A malformed frame's SPI field is
+		 * whatever octets happened to be there, and reporting it would have the ground
+		 * investigating an association nobody used. */
+		if (sa != SA_ERR_MALFORMED) {
+			link_refused_spi = parts.spi;
+		}
 #endif
 		return;
 	}
@@ -319,30 +420,36 @@ static void on_tc_frame(const uint8_t *frame, size_t len, void *ctx)
 	 * replayed with the counter advanced. The SDLS sequence number is INSIDE the authenticated
 	 * portion: changing it invalidates the MAC, and the MAC cannot be recomputed without the key.
 	 *
-	 * ONE counter, because this range has one Security Association. That is the same shape
-	 * EX-G03 is about, one layer up: a second ground station transmitting on this SA would be
-	 * locked out exactly as it was there. The difference is that SDLS has somewhere to put the
-	 * fix - anti-replay state belongs to the SA, so two stations get two SAs and two counters -
-	 * whereas EX-G03 had to move the counter to the virtual channel and hope those lined up.
-	 * That is not implemented here: one SA, one counter, and the limit is written down.
+	 * ONE COUNTER PER SECURITY ASSOCIATION, which is where CCSDS 355.0-B-2 puts anti-replay
+	 * state, and it is what this comment used to say was not implemented. EX-U02 measured what
+	 * the single-counter version cost: an intruder holding the operator's key advanced it, the
+	 * operator's next frames arrived behind it, and COMM refused the legitimate station at the
+	 * link layer with no acceptance and no refusal reaching the ground.
+	 *
+	 * Two SAs now get two counters. Note what that does NOT fix: two transmitters sharing ONE
+	 * SA still collide, because they share its counter - which is correct, and is exactly EX-U02
+	 * whose intruder stole the key to the SA the operator was using. The fix is per-SA, and a
+	 * stolen key does not give the thief a second SA.
 	 *
 	 * Strictly greater, not "not equal". A window would accept out-of-order frames within it, and
 	 * CCSDS 355.0-B-2 provides for one (the SA's arsnw); a single high-water mark is the
 	 * degenerate window of size one and is what this range needs to make the lesson visible.
 	 */
-	static uint32_t sdls_sn_seen;
-	static bool sdls_sn_have;
+	static uint32_t sdls_sn_seen[SA_COUNT];
+	static bool sdls_sn_have[SA_COUNT];
 
-	if (sdls_sn_have && parts.seq_num <= sdls_sn_seen) {
-		printk("COMM: REPLAY - authenticated frame with sequence %u, already seen %u\n",
-		       (unsigned int)parts.seq_num, (unsigned int)sdls_sn_seen);
+	if (sdls_sn_have[sa] && parts.seq_num <= sdls_sn_seen[sa]) {
+		printk("COMM: REPLAY - SPI %u frame with sequence %u, already seen %u\n",
+		       (unsigned int)parts.spi, (unsigned int)parts.seq_num,
+		       (unsigned int)sdls_sn_seen[sa]);
 #if CUBERANGE_COMM_LINK_STATS
 		link_frames_refused++;
+		link_refused_spi = parts.spi;
 #endif
 		return;
 	}
-	sdls_sn_seen = parts.seq_num;
-	sdls_sn_have = true;
+	sdls_sn_seen[sa] = parts.seq_num;
+	sdls_sn_have[sa] = true;
 
 	seq = frame[4];
 	packet = parts.payload;

@@ -455,3 +455,99 @@ def test_every_exercise_verifier_can_be_collected_alongside_every_other():
                 f"{type(exc).__name__}: {exc}") from exc
         loaded.append(path.parent.name)
     assert len(loaded) >= 18, f"only {len(loaded)} verifiers found; exercises are missing one"
+
+
+def _console_literals(path: Path) -> list[str]:
+    """String literals this test module searches for in a node's console output.
+
+    Found by AST rather than by grep: a variable assigned from `.console(...)` counts, and so
+    does the call used inline. Covers `"x" in console`, `"x" not in console`, `console.count("x")`
+    and the tuple form `comm, obc = r.console(a), r.console(b)`.
+    """
+    tree = ast.parse(path.read_text(errors="replace"))
+
+    def is_console_call(node) -> bool:
+        return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "console")
+
+    holders: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        for target, value in ((node.targets[0], node.value),):
+            if isinstance(target, ast.Tuple) and isinstance(value, ast.Tuple):
+                for t, v in zip(target.elts, value.elts):
+                    if isinstance(t, ast.Name) and is_console_call(v):
+                        holders.add(t.id)
+            elif isinstance(target, ast.Name) and is_console_call(value):
+                holders.add(target.id)
+
+    def reads_console(node) -> bool:
+        return is_console_call(node) or (isinstance(node, ast.Name) and node.id in holders)
+
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Compare) and len(node.ops) == 1 \
+                and isinstance(node.ops[0], (ast.In, ast.NotIn)) \
+                and isinstance(node.left, ast.Constant) and isinstance(node.left.value, str) \
+                and reads_console(node.comparators[0]):
+            found.append(node.left.value)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and node.func.attr == "count" and reads_console(node.func.value) \
+                and node.args and isinstance(node.args[0], ast.Constant) \
+                and isinstance(node.args[0].value, str):
+            found.append(node.args[0].value)
+    return found
+
+
+#: Console text this repository's firmware does not produce and is not responsible for. Zephyr
+#: prints its own banner, and a test may legitimately wait for it.
+_NOT_OURS = {"Booting Zephyr OS"}
+
+
+def test_every_console_word_a_test_looks_for_still_exists_in_the_firmware():
+    """A printk is an interface, and renaming one breaks whoever was reading it.
+
+    WHAT THIS CAUGHT. EX-S03 split COMM's refusals into four named causes and replaced
+    "dropping a TC frame that did not authenticate" with four specific messages. EIGHT assertions
+    - four in two exercises, four in tests/e2e - were searching for the old words. Three of them
+    failed in CI twenty minutes into `verify-all`, forty-seven minutes into the run, and every one
+    was a string comparison a host test could have checked in a fifth of a second.
+
+    The other five are why this is a test and not a note. An assertion of the form
+    `assert "x" not in console` PASSES when the message is renamed: EX-S01 and tests/e2e each had
+    one looking for text no build emits any more, asserting nothing and reporting success.
+
+    WHAT IT CHECKS, precisely. Every word of four or more characters in the searched text must
+    still appear AS A WHOLE WORD somewhere under firmware/. Whole-word matching is what makes it
+    work at all: "authenticate" must not be satisfied by "authenticated", which is exactly the
+    pair this rename produced.
+
+    WHAT IT DOES NOT CHECK, measured by mutating it both ways rather than assumed. Renaming
+    "the MAC does not verify" to "the MAC is no good" PASSES this test, because "verify" still
+    occurs elsewhere in comm/main.c - the word pool is the whole tree, not the one message. An
+    assertion on a word that exists nowhere fails it, which is the case above.
+
+    And the pool cannot be narrowed to the message, because a printk's output is not its format
+    string: "PUS 17,1 from source" is rendered from "PUS %u,%u from source %u". Modelling printf
+    exactly makes the check VACUOUS instead - any text at all is a substring of some rendering of
+    "COMM rail %s". So this is the strongest form available without a console capture to compare
+    against, and it is weaker than the failure that produced it.
+    """
+    words = set()
+    for path in sorted(REPO.glob("firmware/**/*.c")) + sorted(REPO.glob("firmware/**/*.h")):
+        words.update(re.findall(r"[A-Za-z_][A-Za-z_0-9]{3,}", path.read_text(errors="replace")))
+
+    missing = []
+    for path in sorted(REPO.glob("exercises/*/verify_*.py")) + sorted(REPO.glob("tests/e2e/*.py")):
+        for literal in _console_literals(path):
+            if literal in _NOT_OURS:
+                continue
+            for word in re.findall(r"[A-Za-z_][A-Za-z_0-9]{3,}", literal):
+                if word not in words:
+                    missing.append(f"{path.relative_to(REPO)}  {literal!r} -> {word!r}")
+    assert not missing, (
+        "a test searches a node's console for a word no firmware source contains. Either the "
+        "message was renamed and the test was not, or the test asserts on something that cannot "
+        "appear - and a `not in` assertion like that passes for free:\n  "
+        + "\n  ".join(missing))

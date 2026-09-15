@@ -38,7 +38,7 @@ wrong: probe.sh's 1.5x four-node speed floor, which this eight-core machine clea
 looked like the obvious thing to blame on a two-vCPU runner. The probe passes there in 110
 seconds. Blaming the host was the comfortable guess, and it was the wrong one.
 
-Eighteen exercises work today. Eight cover an attack origin each: EX-B01 (internal bus), EX-L01
+Nineteen exercises work today. Eight cover an attack origin each: EX-B01 (internal bus), EX-L01
 (space link), EX-A01 (ADCS command envelope), EX-F01 (the OBC's own PUS 8 parser), EX-G01 (the
 ground segment that decides what to send), EX-X01 (the crosslink, where the attacker is a
 spacecraft in your own constellation) EX-D01 (the downlink, where the target is the operator
@@ -142,7 +142,23 @@ happen and nobody had asked.
 Forging needs no key. The FECF is a CRC; anybody can change an octet and recompute it, which is
 what a checksum is for and exactly what it is not for.
 
-76 assertions, all measured. The last three each end by naming a limit the next one attacks, and
+EX-S03 is the nineteenth and it answers EX-U02's intruder: change the key. CCSDS 355.0-B-2 puts
+the key in a Security Association with a cipher mode, a sequence number and a STATE, so retiring
+a key is DEACTIVATING its SA - a rotation has two halves and only the first one has a symptom.
+The range had one association and COMM's source said so; it has two, and per-SA anti-replay came
+with them, which is the fix that source has promised since EX-S01.
+
+The measurement is the pair of rows nobody would think to take. A spacecraft that retired the key
+and one that did not are IDENTICAL to an operator who never transmits on the old association:
+four accepted, nothing refused, nothing on either console. An activation announces itself; a
+deactivation is silence in a direction nobody transmits. So the exercise is the negative test, and
+the radio naming SPI 9 as the association it refused is what makes it proof rather than four
+frames that could have been a bad link.
+
+A control you have not tested is a control you are assuming - and this one was performed,
+verified, and half done.
+
+80 assertions, all measured. The last three each end by naming a limit the next one attacks, and
 in each the fix turned out to be reading something already on the wire: a source id that was
 arriving and ignored, a virtual channel that was being stepped over, a refused request sitting in
 a local variable.
