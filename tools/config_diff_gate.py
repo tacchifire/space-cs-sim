@@ -15,12 +15,21 @@ This is that gate. It reads firmware-matrix.yml and, for every declared pair, as
   4. FLAG IS LIVE        the guarded symbol is actually referenced by the application source.
   5. SAME COMPILER       every application translation unit is compiled with an identical command
                          line apart from the declared -D.
+  6. THE FLAG IS THERE   at least one translation unit in each half actually carries the declared
+                         -D, with the declared value.
 
 Checks 3 and 4 exist because 1 and 2 can both pass while the flag does nothing whatsoever -- a
 misspelled cache variable produces two identical images and a perfectly clean diff, and the pair
 would then "prove" a mitigation that was never compiled in. That is a vacuous pass, and this
 project has shipped one before: an earlier probe.sh reported PASS for all 34 checks when its output
 directory was missing, because grep on a nonexistent file finds no error.
+
+Check 6 closes the hole check 5 leaves open, and it was found the way these always are. Check 5
+asserts that NOTHING ELSE differs between the two compile lines, which an empty difference
+satisfies - so a flag that reaches no translation unit at all passes, and the evidence line then
+reports it as the difference. Measured on 2026-09-14: a flag added to the source and to the build
+command but not to target_compile_definitions produced six passes and zero translation units
+carrying it.
 
 Check 5 closes the hole the first four leave open. Kconfig and the CMake cache say nothing about
 compiler options, so a CMakeLists that added `-fno-stack-protector` or dropped an optimisation
@@ -242,7 +251,34 @@ def check_pair(pair: dict, out_dir: Path) -> list[str]:
             raise GateError(
                 f"{pid}: {Path(src).name} compile lines differ in length ({len(a)} vs {len(b)}) "
                 f"with no unexpected argument - an argument is repeated a different number of times")
+    # 6. The declared -D IS THERE. Check 5 asserts that nothing ELSE differs, which an empty
+    #    symmetric difference satisfies - so a flag that reaches no translation unit at all passed
+    #    every check above while the evidence line claimed it was the difference.
+    #
+    #    That happened on 2026-09-14: CUBERANGE_OBC_ACK_COMMANDS was added to the source and to
+    #    the build command and NOT to target_compile_definitions, so CMake held it as an
+    #    UNINITIALIZED cache entry, the compiler never saw it, and this gate reported six passes
+    #    including "3 translation units compiled identically apart from -DCUBERANGE_OBC_ACK_COMMANDS".
+    #    Zero translation units carried it.
+    #
+    #    Check 3 did not save it either. The ELFs differed - for reasons unrelated to the flag,
+    #    which is a weakness of asserting inequality rather than a property.
+    seen_v = {arg for args in ccv.values() for arg in args if arg.startswith(f"-D{flag}=")}
+    seen_h = {arg for args in cch.values() for arg in args if arg.startswith(f"-D{flag}=")}
+    want_v, want_h = f"-D{flag}={pair['vuln']['value']}", f"-D{flag}={pair['hard']['value']}"
+    carrying_v = sum(1 for args in ccv.values() if want_v in args)
+    carrying_h = sum(1 for args in cch.values() if want_h in args)
+    if not carrying_v or not carrying_h:
+        raise GateError(
+            f"{pid}: the compiler never sees {flag}. Vulnerable build: "
+            f"{sorted(seen_v) or 'nothing'}; mitigated: {sorted(seen_h) or 'nothing'}. "
+            f"A flag declared in the matrix and passed on the build command line still has to "
+            f"reach target_compile_definitions, or the source's #ifndef default wins and both "
+            f"halves are the same spacecraft.")
+
     evidence.append(f"{len(ccv)} translation units compiled identically apart from -D{flag}")
+    evidence.append(f"{carrying_v} vulnerable and {carrying_h} mitigated translation units "
+                    f"actually carry it")
 
     return evidence
 
@@ -276,7 +312,8 @@ def run(matrix_path: Path, out_dir: Path) -> int:
 # --------------------------------------------------------------------------- self-test
 
 def _fake_build(root: Path, name: str, kconfig: dict[str, str], cache: dict[str, str],
-                elf: bytes, cflags: str = "", home: str = "/somewhere/else") -> Path:
+                elf: bytes, cflags: str = "", home: str = "/somewhere/else",
+                carry_flag: bool = True) -> Path:
     build = root / name
     (build / "zephyr").mkdir(parents=True, exist_ok=True)
     (build / "zephyr" / ".config").write_text(
@@ -289,7 +326,8 @@ def _fake_build(root: Path, name: str, kconfig: dict[str, str], cache: dict[str,
     flagval = cache.get("CUBERANGE_TEST_FLAG", "0")
     (build / "compile_commands.json").write_text(json.dumps([{
         "file": "/repo/firmware/apps/x/src/main.c",
-        "command": f"cc -Os -DCUBERANGE_TEST_FLAG={flagval}{cflags} -c main.c",
+        "command": (f"cc -Os -DCUBERANGE_TEST_FLAG={flagval}{cflags} -c main.c"
+                    if carry_flag else f"cc -Os{cflags} -c main.c"),
         "directory": str(build),
     }]))
     return build
@@ -311,7 +349,7 @@ def self_test() -> int:
         (app / "main.c").write_text("#if CUBERANGE_TEST_FLAG\nint hardened;\n#endif\n")
 
         def mk(root: Path, name: str, kconfig: dict, cache: dict, elf: bytes,
-               cflags: str = "", home: Path | None = None) -> Path:
+               cflags: str = "", home: Path | None = None, carry_flag: bool = True) -> Path:
             """_fake_build with the source tree defaulting to the app the case declares.
 
             Without this every case below would be rejected by check 0 (provenance) instead of by
@@ -321,7 +359,8 @@ def self_test() -> int:
             test, so a new first check silently captures all of them.
             """
             return _fake_build(root, name, kconfig, cache, elf, cflags,
-                               home=str(home if home is not None else app))
+                               home=str(home if home is not None else app),
+                               carry_flag=carry_flag)
 
         def pair(build_v: str, build_h: str) -> dict:
             return {"id": "SELFTEST", "app": str(app), "flag": "CUBERANGE_TEST_FLAG",
@@ -395,6 +434,20 @@ def self_test() -> int:
         mk(root, "h", base_kconfig, {"CUBERANGE_TEST_FLAG": "1"}, b"\x02hard")
         cases.append(("the artifacts came from a different checkout", pair("v", "h"), root,
                       "was produced from"))
+
+        # (h) The flag never reaches the compiler. Kconfig matches, one cache variable moves, the
+        #     ELFs differ, the source references it, and NOTHING ELSE differs in the compile lines
+        #     - because the -D is in neither of them. Checks 1 to 5 all pass on that, and check 5's
+        #     evidence line then reports the flag as the difference.
+        #
+        #     This is not hypothetical either: it is what EX-U01 looked like on 2026-09-14, when
+        #     CUBERANGE_OBC_ACK_COMMANDS was added to the source and the build command but not to
+        #     target_compile_definitions. Six passes, zero translation units carrying it.
+        root = tmp / "h"
+        mk(root, "v", base_kconfig, {"CUBERANGE_TEST_FLAG": "0"}, b"\x01vuln", carry_flag=False)
+        mk(root, "h", base_kconfig, {"CUBERANGE_TEST_FLAG": "1"}, b"\x02hard", carry_flag=False)
+        cases.append(("the flag reaches no translation unit", pair("v", "h"), root,
+                      "the compiler never sees"))
 
         print(f"{BOLD}== self-test: these must all be REJECTED, each for its own reason =={RESET}")
         for label, p, root, expect in cases:

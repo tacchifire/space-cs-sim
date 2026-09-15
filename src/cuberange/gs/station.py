@@ -18,7 +18,8 @@ from dataclasses import dataclass
 from ..proto import pus_auth
 from ..proto.frame import SCID, decode_tm_frame, encode_tc_frame
 from ..proto.pus import (FAILURE_NAMES, PusTc, PusTm, SERVICE_TEST, SERVICE_VERIFICATION,
-                         SUBTYPE_ACCEPTANCE_FAILURE, SUBTYPE_CONNECTION_TEST,
+                         SUBTYPE_ACCEPTANCE_FAILURE, SUBTYPE_ACCEPTANCE_SUCCESS,
+                         SUBTYPE_CONNECTION_TEST,
                          parse_request_id,
                          SUBTYPE_CONNECTION_TEST_REPORT)
 from ..proto.spacepacket import PacketType, SpacePacket
@@ -63,6 +64,13 @@ class Refusal:
     def __str__(self) -> str:
         return (f"refused APID 0x{self.apid:03X} seq {self.seq_count}: {self.reason} "
                 f"(to station 0x{self.dest_id:04X})")
+
+
+def decode_request_id(tm: PusTm):
+    """The (apid, seq_count) a PUS 1,1 acceptance names, from the accepted packet's own header."""
+    if len(tm.app_data) < 4:
+        raise ValueError(f"a PUS 1,1 carries a four-octet request id; got {len(tm.app_data)}")
+    return parse_request_id(tm.app_data[:4])
 
 
 def decode_refusal(tm: PusTm) -> Refusal:
@@ -138,6 +146,10 @@ class GroundStation:
         #: cannot hear is indistinguishable from a command that never arrived, which
         #: is where EX-G02 and EX-G03 both end.
         self.refusals: list = []
+        #: PUS 1,1 acceptances: the commands this station knows the spacecraft HEARD. A command
+        #: with neither an acceptance nor a refusal is one that never landed - which is the only
+        #: way to see an uplink that is being denied.
+        self.acknowledged: list = []
 
     def _next_seq(self) -> int:
         seq = self._tc_seq
@@ -206,6 +218,15 @@ class GroundStation:
                 continue
             if tm.dest_id == self.station_id:
                 self._advance(tm.msg_counter)
+            if (tm.service, tm.subtype) == (SERVICE_VERIFICATION, SUBTYPE_ACCEPTANCE_SUCCESS):
+                #: "I heard you." EX-G04 gave the ground a way to hear a REFUSAL and the sign was
+                #: never flipped, so an operator could tell refused from nothing and still not
+                #: tell accepted from never-arrived. EX-U01 is the gap that left.
+                if tm.dest_id == self.station_id:
+                    self.acknowledged.append(decode_request_id(tm))
+                else:
+                    self.not_for_us.append(tm)
+                continue
             if (tm.service, tm.subtype) == (SERVICE_VERIFICATION, SUBTYPE_ACCEPTANCE_FAILURE):
                 if tm.dest_id == self.station_id:
                     self.refusals.append(decode_refusal(tm))

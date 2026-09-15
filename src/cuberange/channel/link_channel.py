@@ -68,7 +68,7 @@ from .. import ports
 
 class LinkChannel:
     def __init__(self, listen_port: int, sat_host: str = "127.0.0.1", sat_port: int = ports.link(0),
-                 listen_host: str = "127.0.0.1", downlink_filter=None,
+                 listen_host: str = "127.0.0.1", downlink_filter=None, uplink_filter=None,
                  frame_loss: float = 0.0, seed: int = 20260914):
         self.listen_addr = (listen_host, listen_port)
         self.sat_addr = (sat_host, sat_port)
@@ -77,6 +77,11 @@ class LinkChannel:
         #: passthrough this channel has always had - see the module docstring for why that
         #: distinction is not cosmetic.
         self.downlink_filter = downlink_filter
+        #: The same thing pointing the other way. EX-U01 needs it because denying the UPLINK looks
+        #: nothing like denying the downlink from the operator's chair: the spacecraft keeps
+        #: beaconing, the pass schedule says ok, and every command silently fails to happen.
+        self.uplink_filter = uplink_filter
+        self.uplink_suppressed: List[bytes] = []
         #: Probability that any one downlink frame is dropped, independently. 0.0 is the default
         #: and keeps the raw byte passthrough; anything above it forwards frame by frame, the same
         #: switch `downlink_filter` throws and for the same reason.
@@ -175,8 +180,21 @@ class LinkChannel:
             if not chunk:
                 break
             self.uplink_bytes.extend(chunk)
-            self.uplink_frames.extend(self._up_deframer.feed(chunk))
-            self._to_satellite(chunk)
+            frames = self._up_deframer.feed(chunk)
+            self.uplink_frames.extend(frames)
+            if self.uplink_filter is None:
+                self._to_satellite(chunk)
+                continue
+            #: Frame by frame and re-wrapped, the same switch downlink_filter throws and with the
+            #: same consequence: octets between frames do not survive.
+            kept = []
+            for frame in frames:
+                if self.uplink_filter(frame):
+                    kept.append(wrap(frame))
+                else:
+                    self.uplink_suppressed.append(frame)
+            if kept:
+                self._to_satellite(b"".join(kept))
         with self._clients_lock:
             if client in self._clients:
                 self._clients.remove(client)
