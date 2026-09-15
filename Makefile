@@ -235,7 +235,7 @@ verify:
 	    python3 -m pytest exercises/$(EX)/verify_*.py -v
 
 # Every exercise, both directions. This is the claim the product makes.
-verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01)
+verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01 firmware-u02)
 	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest exercises/*/verify_*.py -v
 
@@ -287,7 +287,7 @@ firmware-f01: firmware-p1
 # prerequisite once per invocation, so this is one pristine build of each of the seven images
 # rather than the four rounds `check` used to do.
 .PHONY: firmware-all
-firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-sdls firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01
+firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-sdls firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01 firmware-u02
 	@echo "all node images built:"
 	@ls -1 $(OUT)/build-*/zephyr/zephyr.elf
 
@@ -424,6 +424,29 @@ firmware-u01:
 	    -DCUBERANGE_OBC_BEACON=1 -DCUBERANGE_OBC_ACK_COMMANDS=1 \
 	    -DEXTRA_CONF_FILE=$(CUBERANGE_REPO)/firmware/apps/obc/pus_auth.conf
 	@ls -l $(OUT)/build-obc-u01-vuln/zephyr/zephyr.elf $(OUT)/build-obc-u01-hard/zephyr/zephyr.elf
+
+firmware-u02:
+	# EX-U02's pair. EX-U01's acknowledgement is ON in both halves, which is the point: an
+	# acknowledgement is addressed to the sender, so it answers "did MY command arrive" and can
+	# never answer "did anybody else's". What differs is whether the spacecraft carries a count of
+	# every telecommand it heard - the one number on board that an intruder moves and cannot read.
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-obc-u02-vuln firmware/apps/obc -- \
+	    -DCUBERANGE_OBC_PUS8_LENGTH_CHECK=1 -DCUBERANGE_OBC_REQUIRE_AUTHORITY=1 \
+	    -DCUBERANGE_OBC_VERIFY_REPORTS=1 -DCUBERANGE_OBC_REQUIRE_PUS_AUTH=1 \
+	    -DCUBERANGE_OBC_SIGN_REPORTS=1 -DCUBERANGE_OBC_REPORT_STORE=1 \
+	    -DCUBERANGE_OBC_BEACON=1 -DCUBERANGE_OBC_ACK_COMMANDS=1 \
+	    -DCUBERANGE_OBC_TC_COUNTERS=0 \
+	    -DEXTRA_CONF_FILE=$(CUBERANGE_REPO)/firmware/apps/obc/pus_auth.conf
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-obc-u02-hard firmware/apps/obc -- \
+	    -DCUBERANGE_OBC_PUS8_LENGTH_CHECK=1 -DCUBERANGE_OBC_REQUIRE_AUTHORITY=1 \
+	    -DCUBERANGE_OBC_VERIFY_REPORTS=1 -DCUBERANGE_OBC_REQUIRE_PUS_AUTH=1 \
+	    -DCUBERANGE_OBC_SIGN_REPORTS=1 -DCUBERANGE_OBC_REPORT_STORE=1 \
+	    -DCUBERANGE_OBC_BEACON=1 -DCUBERANGE_OBC_ACK_COMMANDS=1 \
+	    -DCUBERANGE_OBC_TC_COUNTERS=1 \
+	    -DEXTRA_CONF_FILE=$(CUBERANGE_REPO)/firmware/apps/obc/pus_auth.conf
+	@ls -l $(OUT)/build-obc-u02-vuln/zephyr/zephyr.elf $(OUT)/build-obc-u02-hard/zephyr/zephyr.elf
 
 firmware-l03:
 	# EX-L03's pair. Both halves are everything EX-L02 deployed - signed reports, a report store,

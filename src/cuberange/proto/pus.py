@@ -27,6 +27,14 @@ SERVICE_VERIFICATION = 1
 SUBTYPE_ACCEPTANCE_SUCCESS = 1
 SUBTYPE_ACCEPTANCE_FAILURE = 2
 
+#: Service 3, housekeeping (ECSS-E-ST-70-41C 6.3). 3,25 is a housekeeping parameter report, which
+#: is what this range's beacon is: uptime, and - when the spacecraft is built to count them - how
+#: many telecommands it has heard and how many it refused. The counts are what EX-U02 is about;
+#: the station reads DIFFERENCES between two reports and never the value, because sixteen bits
+#: wrap and an absolute read is a detector that is wrong once every 65536 commands.
+SERVICE_HOUSEKEEPING = 3
+SUBTYPE_HK_REPORT = 25
+
 #: Failure codes are mission-defined; ECSS specifies the field, not the values. Small and named,
 #: because a report carrying only "refused" sends the operator to the same place a silent refusal
 #: does - looking for the reason somewhere else.

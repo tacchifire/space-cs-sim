@@ -17,9 +17,10 @@ from dataclasses import dataclass
 
 from ..proto import pus_auth
 from ..proto.frame import SCID, decode_tm_frame, encode_tc_frame
-from ..proto.pus import (FAILURE_NAMES, PusTc, PusTm, SERVICE_TEST, SERVICE_VERIFICATION,
+from ..proto.pus import (FAILURE_NAMES, PusTc, PusTm, SERVICE_HOUSEKEEPING, SERVICE_TEST,
+                         SERVICE_VERIFICATION,
                          SUBTYPE_ACCEPTANCE_FAILURE, SUBTYPE_ACCEPTANCE_SUCCESS,
-                         SUBTYPE_CONNECTION_TEST,
+                         SUBTYPE_CONNECTION_TEST, SUBTYPE_HK_REPORT,
                          parse_request_id,
                          SUBTYPE_CONNECTION_TEST_REPORT)
 from ..proto.spacepacket import PacketType, SpacePacket
@@ -150,6 +151,18 @@ class GroundStation:
         #: with neither an acceptance nor a refusal is one that never landed - which is the only
         #: way to see an uplink that is being denied.
         self.acknowledged: list = []
+        #: Every telecommand THIS station has put on the link, acknowledged or not. Half of the
+        #: arithmetic in `unexplained_commands`; the spacecraft's own count is the other half.
+        self.commands_sent: int = 0
+        #: The counters from the most recent housekeeping report that carried them, or None if
+        #: this spacecraft does not count. Absolute values, kept for display; nothing decides
+        #: anything on them - see `unexplained_commands`.
+        self.tc_accepted: int | None = None
+        self.tc_rejected: int | None = None
+        #: The first pair this station saw, and what it had sent at that moment. A station that
+        #: joins a spacecraft already in orbit cannot know how many commands preceded it, so it
+        #: measures from where it started rather than claiming to know the whole history.
+        self._tc_baseline: tuple[int, int, int] | None = None
 
     def _next_seq(self) -> int:
         seq = self._tc_seq
@@ -158,6 +171,7 @@ class GroundStation:
 
     def _send(self, tc: PusTc) -> int:
         seq = self._next_seq()
+        self.commands_sent += 1
         raw = SpacePacket(apid=self.target_apid, ptype=PacketType.TC, sec_hdr=True,
                           seq_count=seq, data=tc.encode()).encode()
         if self.uplink_key is not None:
@@ -190,6 +204,47 @@ class GroundStation:
         app_data = FUNC_SET_COMM_RAIL.to_bytes(2, "big") + bytes([1 if on else 0])
         return self._send(PusTc(service=SERVICE_FUNCTION, subtype=SUBTYPE_PERFORM,
                                 source_id=self.station_id, app_data=app_data))
+
+    def observe_uplink_sequence(self, frame: bytes) -> None:
+        """Read the SDLS sequence number out of somebody else's frame and transmit after it.
+
+        AN ATTACKER CAPABILITY, on the class a legitimate station uses, because in EX-U02 those
+        are the same thing: an intruder holding the key IS a ground station, and the exercise is
+        about there being nothing to distinguish them.
+
+        It exists because this range has ONE Security Association, so its anti-replay counter is
+        one counter for the link - the limit COMM's own source names and says is not fixed. Two
+        transmitters sharing it collide, and the one behind is logged as a REPLAY. An intruder who
+        transmits blindly from sequence 1 is refused by a control aimed at somebody else and never
+        reaches the spacecraft; one who listens first is not. Measured: twelve probes from
+        sequence 1 got eight through and four refused, which is neither the attack nor the
+        defence, just noise.
+
+        The consequence runs the other way too and it is the point of the exercise: after the
+        intruder has advanced the counter, the legitimate station's next frames are BEHIND it and
+        COMM refuses them. That refusal is at the link layer, so the OBC never sees the command
+        and no acceptance and no refusal report comes back - which on the ground is exactly what
+        EX-U01's denied uplink looks like.
+        """
+        from ..proto import sdls
+        key = self.uplink_key or self.require_signed_tm
+        if key is None:
+            raise ValueError("reading an authenticated sequence number needs the key")
+        self._sdls_sn = sdls.decode_tc(frame, key=key).seq_num + 1
+
+    def send_pus(self, service: int, subtype: int, app_data: bytes = b"") -> int:
+        """Send an arbitrary PUS telecommand. Returns the TC sequence used.
+
+        Operators send more than the three commands this class names, and an exercise about
+        counting what a spacecraft HEARD needs to be able to send something it does nothing with.
+        A service/subtype this OBC does not implement is answered by a printk on a console nobody
+        off the spacecraft can read - no report, no refusal, no state change. On the downlink it
+        is indistinguishable from never having been transmitted, which is what makes it the shape
+        an intruder enumerating a service tree would use, and what makes EX-U02's counter the only
+        witness there is.
+        """
+        return self._send(PusTc(service=service, subtype=subtype, source_id=self.station_id,
+                                app_data=app_data))
 
     def collect(self) -> list:
         """Read whatever has arrived, classify it, and transmit nothing.
@@ -240,6 +295,8 @@ class GroundStation:
             #: A station that only counts the replies to its own questions cannot answer that.
             if tm.dest_id == self.station_id:
                 self.telemetry.append(tm)
+                if (tm.service, tm.subtype) == (SERVICE_HOUSEKEEPING, SUBTYPE_HK_REPORT):
+                    self._read_tc_counters(tm)
             if (tm.service, tm.subtype) != (SERVICE_TEST, SUBTYPE_CONNECTION_TEST_REPORT):
                 continue
             if packet.apid != self.target_apid or tm.dest_id != self.station_id:
@@ -247,6 +304,98 @@ class GroundStation:
                 continue
             mine.append(tm)
         return mine
+
+    def _read_tc_counters(self, tm: PusTm) -> None:
+        """Pick the telecommand counts out of a housekeeping report, if it carries them.
+
+        Four octets of uptime is a spacecraft that does not count; eight is one that does. The
+        length IS the feature test, and it is checked rather than assumed: a build without
+        CUBERANGE_OBC_TC_COUNTERS sends the short form, and reading two octets of nothing as a
+        command count would give this station a detector that fires on a spacecraft with no
+        detector in it.
+        """
+        app = tm.app_data
+        if len(app) < 8:
+            return
+        accepted = int.from_bytes(app[4:6], "big")
+        rejected = int.from_bytes(app[6:8], "big")
+        self.tc_accepted, self.tc_rejected = accepted, rejected
+        if self._tc_baseline is None:
+            self._tc_baseline = (accepted, rejected, self.commands_sent)
+
+    @staticmethod
+    def _signed_step(now: int, then: int) -> int:
+        """A 16-bit difference, signed. `_advance` uses the same half-range convention."""
+        step = (now - then) & 0xFFFF
+        return step - 0x10000 if step >= 0x8000 else step
+
+    @property
+    def unexplained_commands(self) -> int | None:
+        """Telecommands the spacecraft heard that this station did not send. None if it cannot tell.
+
+        WHAT THIS IS FOR, and it is the only detector in this range that sees an attacker who
+        never sends this station anything. Every other one reads something the attacker
+        transmitted TO the ground - a forged refusal, a missing report, a frame off the link. An
+        attacker probing the uplink transmits only to the spacecraft, and the spacecraft's own
+        count of what it heard is the single place that shows up.
+
+        The number is SIGNED and both signs mean something:
+
+          > 0   somebody else is transmitting to this spacecraft. An attacker, or - and this is
+                not a smaller possibility - a second legitimate station. EX-G03 is the whole
+                exercise about mistaking the second for the first, and this detector cannot tell
+                them apart. It says "you are not alone", never "you are under attack".
+
+        IT IS A NET, and the two causes cancel. EX-U02 measures an intruder sending twelve probes
+        whose effect is to lock this station's next four commands out of the link; the reading is
+        +8, not +12. Read `commands_heard` and `commands_sent` alongside it, or an operator will
+        take a partial cancellation for a small intrusion.
+          < 0   the spacecraft heard FEWER than this station sent, so the uplink is eating
+                commands. That is EX-U01, which ends by saying no counter exists to see it.
+          = 0   every command the spacecraft heard is one this station sent.
+
+        It is read from DIFFERENCES between two housekeeping reports, never from the absolute
+        value, because the counter is sixteen bits. A spacecraft reboot resets it and shows up as
+        a large negative step; that is honest, and a station reporting "someone else sent 65000
+        commands" after a reboot would not be.
+
+        TIMING IS PART OF THE READING. `commands_sent` counts what this station put on the link;
+        the counter reflects what the spacecraft had processed when the beacon was BUILT. A
+        command still in flight reads as -1. Call this after the acknowledgements are in and a
+        beacon has arrived since, or it will report the link's latency as an attack.
+        """
+        if self._tc_baseline is None or self.tc_accepted is None:
+            return None
+        accepted0, _rejected0, sent0 = self._tc_baseline
+        return self._signed_step(self.tc_accepted, accepted0) - (self.commands_sent - sent0)
+
+    @property
+    def commands_heard(self) -> int | None:
+        """How many telecommands the spacecraft accepted since this station started watching.
+
+        Everybody's, including ours. Exposed beside `unexplained_commands` because that one is a
+        NET and a net hides its own terms: an operator reading +8 cannot tell sixteen-heard-of-
+        eight-sent from twelve-heard-of-four. Measured in EX-U02: an intruder's twelve probes and
+        four commands of ours that never arrived read out as +8, and the two numbers that make it
+        are the difference between "somebody else is transmitting" and "somebody else is
+        transmitting AND my uplink is gone".
+        """
+        if self._tc_baseline is None or self.tc_accepted is None:
+            return None
+        return self._signed_step(self.tc_accepted, self._tc_baseline[0])
+
+    @property
+    def commands_refused(self) -> int | None:
+        """How many telecommands the spacecraft refused since this station started watching.
+
+        Separate from `unexplained_commands` and not derivable from it: a refusal is a command
+        that ARRIVED, so this is the count that answers EX-U01's other open question - silence
+        after a command means it did not arrive, or it arrived and was refused, and those are
+        different attacks. It counts everybody's refusals, including this station's own.
+        """
+        if self._tc_baseline is None or self.tc_rejected is None:
+            return None
+        return self._signed_step(self.tc_rejected, self._tc_baseline[1])
 
     def _advance(self, counter: int) -> None:
         """Record this report's counter and note anything missing between it and the last.

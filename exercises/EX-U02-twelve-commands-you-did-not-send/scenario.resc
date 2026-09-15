@@ -1,0 +1,88 @@
+:name: EX-U02 - twelve commands you did not send
+:description: Every control passes. The intruder has the key. The only witness is a number.
+
+# Execution profile (design 4.3; rules G1/G2 of section 9.2). FIRST, so a profile that cannot be
+# found takes the machines down loudly instead of leaving every node running with no quantum set.
+$profile?=@~/space-cs-sim/scripts/profiles/interactive.resc
+include $profile
+
+# Every path hangs off $out, which has NO default - see any other scenario in this repository for
+# why. Unset, LoadELF fails where you can see it.
+#
+#   renode -e '$out=@'"$(make -s out)" -e 'include @<this file>' -e start
+$comm?=$out/build-comm-s01-sat0/zephyr/zephyr.elf
+$obc?=$out/build-obc-u02-hard/zephyr/zephyr.elf
+$eps?=$out/build-eps-hard/zephyr/zephyr.elf
+
+# THERE IS NO ATTACKER MACHINE IN THIS SCENARIO, and that is the exercise rather than an omission.
+#
+# Every other exercise here gives the attacker a position the defender does not have: a seat on the
+# internal CAN bus (EX-B01), a compromised peer on the crosslink (EX-X01), a proxy in the middle of
+# the space link (EX-D01, EX-L02, EX-U01). EX-U02's attacker has none of those. They have a radio,
+# and they have the key, and that is all - so they transmit exactly the frames a ground station
+# transmits, through exactly the path a ground station transmits through.
+#
+# Which means there is nothing to add to this file. The intruder is a second client on the same
+# link channel the operator uses, built in solve.py out of the same GroundStation class, and every
+# control on board answers it the way it answers the operator: correctly.
+$comm1?=$out/build-comm-s01-sat1/zephyr/zephyr.elf
+
+$comm0uart?=$out/u02-sat0-comm.uart
+$obc0uart?=$out/u02-sat0-obc.uart
+$eps0uart?=$out/u02-sat0-eps.uart
+$comm1uart?=$out/u02-sat1-comm.uart
+$linkport?=3777
+
+emulation CreateCANHub "canHub0"
+emulation CreateCANHub "canHub1"
+emulation CreateCANHub "crosslinkHub"
+
+# --- satellite 0: the victim. Everything hardened. ------------------------------------------------
+
+mach create "SAT0_COMM"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub0
+connector Connect sysbus.fdcan2 crosslinkHub
+sysbus LoadELF $comm
+sysbus.usart3 CreateFileBackend $comm0uart true
+emulation CreateServerSocketTerminal $linkport "spacelink0" false
+connector Connect sysbus.usart2 spacelink0
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+logLevel 3 fdcan2
+
+mach create "SAT0_OBC"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub0
+sysbus LoadELF $obc
+sysbus.usart3 CreateFileBackend $obc0uart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "SAT0_EPS"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub0
+sysbus LoadELF $eps
+sysbus.usart3 CreateFileBackend $eps0uart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+# --- satellite 1: the neighbour, so the crosslink has a far end. ----------------------------------
+#
+# Present for the same reason it is present in EX-L03 and EX-U01: this COMM image is built with the
+# crosslink on, and a crosslink attached to nothing is a node logging a failure at startup for a
+# reason that has nothing to do with the exercise.
+
+mach create "SAT1_COMM"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub1
+connector Connect sysbus.fdcan2 crosslinkHub
+sysbus LoadELF $comm1
+sysbus.usart3 CreateFileBackend $comm1uart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+logLevel 3 fdcan2

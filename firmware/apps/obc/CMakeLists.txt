@@ -62,6 +62,14 @@ set(CUBERANGE_OBC_BEACON 0 CACHE STRING
 set(CUBERANGE_OBC_ACK_COMMANDS 0 CACHE STRING
     "send PUS 1,1 when a telecommand is accepted, so silence means it never arrived")
 
+# EX-U02's only difference. The acknowledgement above answers "did MY command arrive". It cannot
+# answer "did anybody else's", because an acknowledgement is addressed to the sender and an
+# attacker who transmits without listening is never addressed. A counter of every telecommand the
+# spacecraft heard is - it is the one number on board that an attacker moves and cannot read.
+#   west build ... -- -DCUBERANGE_OBC_TC_COUNTERS=1
+set(CUBERANGE_OBC_TC_COUNTERS 0 CACHE STRING
+    "carry counts of accepted and refused telecommands in the housekeeping beacon")
+
 include(${CMAKE_CURRENT_LIST_DIR}/../../common/identity.cmake)
 
 target_sources(app PRIVATE src/main.c ../../common/cuberange_proto.c
@@ -77,4 +85,5 @@ target_compile_definitions(app PRIVATE
   CUBERANGE_OBC_SIGN_REPORTS=${CUBERANGE_OBC_SIGN_REPORTS}
   CUBERANGE_OBC_REPORT_STORE=${CUBERANGE_OBC_REPORT_STORE}
   CUBERANGE_OBC_BEACON=${CUBERANGE_OBC_BEACON}
-  CUBERANGE_OBC_ACK_COMMANDS=${CUBERANGE_OBC_ACK_COMMANDS})
+  CUBERANGE_OBC_ACK_COMMANDS=${CUBERANGE_OBC_ACK_COMMANDS}
+  CUBERANGE_OBC_TC_COUNTERS=${CUBERANGE_OBC_TC_COUNTERS})

@@ -38,7 +38,7 @@ wrong: probe.sh's 1.5x four-node speed floor, which this eight-core machine clea
 looked like the obvious thing to blame on a two-vCPU runner. The probe passes there in 110
 seconds. Blaming the host was the comfortable guess, and it was the wrong one.
 
-Sixteen exercises work today. Eight cover an attack origin each: EX-B01 (internal bus), EX-L01
+Seventeen exercises work today. Eight cover an attack origin each: EX-B01 (internal bus), EX-L01
 (space link), EX-A01 (ADCS command envelope), EX-F01 (the OBC's own PUS 8 parser), EX-G01 (the
 ground segment that decides what to send), EX-X01 (the crosslink, where the attacker is a
 spacecraft in your own constellation) EX-D01 (the downlink, where the target is the operator
@@ -116,7 +116,21 @@ and still not tell accepted from never-arrived. PUS 1,1 on acceptance closes it:
 four acknowledged, or four and zero. Attention follows evidence, and an attacker goes where there
 is no evidence to follow.
 
-67 assertions, all measured. The last three each end by naming a limit the next one attacks, and
+EX-U02 is the seventeenth and it builds the counter EX-U01 ended by saying did not exist. The
+premise is key compromise, which no control here covers and none was ever going to: the SDLS MAC
+verifies, the telecommand authentication verifies, the anti-replay sequence is fresh. Every
+control in this range asks whether a frame is LEGITIMATE and none asks whether it is YOURS, and
+the first thing that asks is a two-octet counter riding four octets of an existing beacon.
+
+Three measured findings the exercise would not have without being run. The reading is +8 for
+twelve probes, because it is a NET and the intrusion caused the denial that subtracts from it.
+The lockout is real: one Security Association means one anti-replay counter, so an intruder who
+transmits puts the legitimate station BEHIND it and COMM refuses the operator at the link layer -
+COMM's source has named that limit since EX-S01 and nobody had measured what it costs. And an
+intruder using your key looks exactly like EX-U01's denied uplink from the ground; the sign of
+the counter is the only thing that separates them.
+
+72 assertions, all measured. The last three each end by naming a limit the next one attacks, and
 in each the fix turned out to be reading something already on the wire: a source id that was
 arriving and ignored, a virtual channel that was being stepped over, a refused request sitting in
 a local variable.

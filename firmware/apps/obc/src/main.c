@@ -394,6 +394,31 @@ static csp_iface_t *can_iface;
 static uint16_t tm_seq_count;
 static uint16_t tm_msg_counter;
 
+#if CUBERANGE_OBC_TC_COUNTERS
+/* How many telecommands this spacecraft has HEARD, and how many of those it refused.
+ *
+ * EX-U01 ends by saying there is no uplink counter and that its absence is the uplink's version
+ * of EX-D02. This is that counter. Two properties make it worth more than it looks:
+ *
+ * It counts EVERY transmitter, not just the one reading it. A ground station that knows it sent
+ * four and sees the accepted count move by sixteen has just detected twelve telecommands from
+ * somebody whose frames it never received - which is the only kind of evidence there is about an
+ * attacker who transmits and does not listen.
+ *
+ * And the difference is SIGNED. Fewer than you sent means your uplink is being eaten; more means
+ * you are not alone. One counter, both directions.
+ *
+ * `accepted` is ECSS acceptance, so a telecommand that is then refused counts in BOTH - the same
+ * semantics send_acceptance_success already has, and for the same reason: a refused command was
+ * heard. Any other split would make "arrived" unanswerable, which is the question.
+ *
+ * Sixteen bits, so it wraps, and the ground reads DIFFERENCES between reports rather than the
+ * value. A counter read as an absolute is a counter that lies once every 65536.
+ */
+static uint16_t tc_accepted;
+static uint16_t tc_rejected;
+#endif
+
 #if CUBERANGE_OBC_REPORT_STORE
 /* The last few reports, verbatim, so one can be sent again.
  *
@@ -793,6 +818,9 @@ static void handle_function(const uint8_t *app_data, size_t len, uint16_t source
 	if (!source_may_perform(source_id, function_id)) {
 		printk("OBC: REJECTED PUS 8 function %u from source %u - not authorised\n",
 		       (unsigned int)function_id, (unsigned int)source_id);
+#if CUBERANGE_OBC_TC_COUNTERS
+		tc_rejected++;
+#endif
 #if CUBERANGE_OBC_VERIFY_REPORTS
 		send_acceptance_failure(source_id, failed_request_id, 1 /* not authorised */);
 #endif
@@ -892,6 +920,13 @@ static void handle_space_packet(const uint8_t *raw, size_t len, uint16_t via)
 
 	printk("OBC: APID 0x%03x PUS %u,%u from source %u\n", apid, service, subtype, source_id);
 
+#if CUBERANGE_OBC_TC_COUNTERS
+	/* Counted here for the same reason the acceptance report is sent here, and counted
+	 * SEPARATELY from it: the two flags are independent, and a build that counts without
+	 * reporting is the one where the operator finds out from the beacon instead. */
+	tc_accepted++;
+#endif
+
 #if CUBERANGE_OBC_ACK_COMMANDS
 	/* Here, and not after the handler. ACCEPTANCE is a statement about the packet arriving and
 	 * being well-formed enough to dispatch - ECSS separates it from execution for exactly that
@@ -912,6 +947,9 @@ static void handle_space_packet(const uint8_t *raw, size_t len, uint16_t via)
 	if (!origin_permits_claim(source_id, via)) {
 		printk("OBC: REJECTED a packet claiming source %u that arrived from node %u\n",
 		       (unsigned int)source_id, (unsigned int)via);
+#if CUBERANGE_OBC_TC_COUNTERS
+		tc_rejected++;
+#endif
 #if CUBERANGE_OBC_VERIFY_REPORTS
 		/* Reported to the claimed source, not to the sender. A ground station receiving a
 		 * refusal for a request id it never issued is being told its name is in use. */
@@ -970,9 +1008,20 @@ static void router_task(void *a, void *b, void *c)
 static void send_beacon(void)
 {
 	uint32_t now = (uint32_t)k_uptime_get();
+#if CUBERANGE_OBC_TC_COUNTERS
+	/* Eight octets, which is exactly what send_housekeeping's buffer holds - it refuses more
+	 * rather than truncating, and a beacon that silently lost its last two octets would be a
+	 * detector that reads two octets of uptime as a command count. */
+	uint8_t app[8] = {
+		(uint8_t)(now >> 24), (uint8_t)(now >> 16), (uint8_t)(now >> 8), (uint8_t)now,
+		(uint8_t)(tc_accepted >> 8), (uint8_t)tc_accepted,
+		(uint8_t)(tc_rejected >> 8), (uint8_t)tc_rejected,
+	};
+#else
 	uint8_t app[4] = {
 		(uint8_t)(now >> 24), (uint8_t)(now >> 16), (uint8_t)(now >> 8), (uint8_t)now,
 	};
+#endif
 
 	send_housekeeping(GROUND_PRIMARY_ID, app, sizeof(app));
 }
