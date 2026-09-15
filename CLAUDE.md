@@ -38,7 +38,7 @@ wrong: probe.sh's 1.5x four-node speed floor, which this eight-core machine clea
 looked like the obvious thing to blame on a two-vCPU runner. The probe passes there in 110
 seconds. Blaming the host was the comfortable guess, and it was the wrong one.
 
-Seventeen exercises work today. Eight cover an attack origin each: EX-B01 (internal bus), EX-L01
+Eighteen exercises work today. Eight cover an attack origin each: EX-B01 (internal bus), EX-L01
 (space link), EX-A01 (ADCS command envelope), EX-F01 (the OBC's own PUS 8 parser), EX-G01 (the
 ground segment that decides what to send), EX-X01 (the crosslink, where the attacker is a
 spacecraft in your own constellation) EX-D01 (the downlink, where the target is the operator
@@ -130,7 +130,19 @@ COMM's source has named that limit since EX-S01 and nobody had measured what it 
 intruder using your key looks exactly like EX-U01's denied uplink from the ground; the sign of
 the counter is the only thing that separates them.
 
-72 assertions, all measured. The last three each end by naming a limit the next one attacks, and
+EX-U02's mitigation named the blind spot on the other side of its own detector, and EX-U03 is it.
+An attacker with no key - the ordinary case - throws ten replays and ten forgeries at the
+spacecraft. Every control refuses them correctly and completely, and `unexplained_commands` reads
+ZERO throughout, because it counts what the COMPUTER heard and the radio is in front of it: the
+control that stopped the attack is the same thing that hid it from the detector built one exercise
+earlier to see attacks. The vulnerable and mitigated rows of a run with no attacker at all differ
+in nothing an operator can see. That is EX-G04 arriving a layer below PUS, where most refusals
+happen and nobody had asked.
+
+Forging needs no key. The FECF is a CRC; anybody can change an octet and recompute it, which is
+what a checksum is for and exactly what it is not for.
+
+76 assertions, all measured. The last three each end by naming a limit the next one attacks, and
 in each the fix turned out to be reading something already on the wire: a source id that was
 arriving and ignored, a virtual channel that was being stepped over, a refused request sitting in
 a local variable.

@@ -163,6 +163,13 @@ class GroundStation:
         #: joins a spacecraft already in orbit cannot know how many commands preceded it, so it
         #: measures from where it started rather than claiming to know the whole history.
         self._tc_baseline: tuple[int, int, int] | None = None
+        #: What the RADIO last said, and the first pair of it this station saw. Separate from the
+        #: telecommand counters because they are separate detectors on separate nodes: these count
+        #: frames that never reached the computer, and a spacecraft can have either, both or
+        #: neither. EX-U03.
+        self.link_rx: int | None = None
+        self.link_refused: int | None = None
+        self._link_baseline: tuple[int, int] | None = None
 
     def _next_seq(self) -> int:
         seq = self._tc_seq
@@ -296,7 +303,7 @@ class GroundStation:
             if tm.dest_id == self.station_id:
                 self.telemetry.append(tm)
                 if (tm.service, tm.subtype) == (SERVICE_HOUSEKEEPING, SUBTYPE_HK_REPORT):
-                    self._read_tc_counters(tm)
+                    self._read_hk_counters(tm)
             if (tm.service, tm.subtype) != (SERVICE_TEST, SUBTYPE_CONNECTION_TEST_REPORT):
                 continue
             if packet.apid != self.target_apid or tm.dest_id != self.station_id:
@@ -305,14 +312,14 @@ class GroundStation:
             mine.append(tm)
         return mine
 
-    def _read_tc_counters(self, tm: PusTm) -> None:
-        """Pick the telecommand counts out of a housekeeping report, if it carries them.
+    def _read_hk_counters(self, tm: PusTm) -> None:
+        """Pick whatever counts a housekeeping report carries out of it.
 
-        Four octets of uptime is a spacecraft that does not count; eight is one that does. The
-        length IS the feature test, and it is checked rather than assumed: a build without
-        CUBERANGE_OBC_TC_COUNTERS sends the short form, and reading two octets of nothing as a
-        command count would give this station a detector that fires on a spacecraft with no
-        detector in it.
+        THE LENGTH IS THE FEATURE TEST, and it is checked rather than assumed. Four octets of
+        uptime is a spacecraft that counts nothing; eight is one that counts telecommands; twelve
+        is one whose radio also counts what it refused. Reading two octets of nothing as a command
+        count would give this station a detector that fires on a spacecraft with no detector in
+        it, which is worse than having none.
         """
         app = tm.app_data
         if len(app) < 8:
@@ -322,6 +329,13 @@ class GroundStation:
         self.tc_accepted, self.tc_rejected = accepted, rejected
         if self._tc_baseline is None:
             self._tc_baseline = (accepted, rejected, self.commands_sent)
+        if len(app) < 12:
+            return
+        rx = int.from_bytes(app[8:10], "big")
+        refused = int.from_bytes(app[10:12], "big")
+        self.link_rx, self.link_refused = rx, refused
+        if self._link_baseline is None:
+            self._link_baseline = (rx, refused)
 
     @staticmethod
     def _signed_step(now: int, then: int) -> int:
@@ -383,6 +397,35 @@ class GroundStation:
         if self._tc_baseline is None or self.tc_accepted is None:
             return None
         return self._signed_step(self.tc_accepted, self._tc_baseline[0])
+
+    @property
+    def link_frames_refused(self) -> int | None:
+        """Frames the RADIO threw away since this station started watching. None if it cannot tell.
+
+        THE OTHER SIDE OF EX-U02, and the more common attacker. `unexplained_commands` counts
+        telecommands the on-board computer HEARD, which puts it behind the link-layer
+        authentication: an attacker without the key is refused by COMM, never reaches the OBC, and
+        reads as zero on a detector built specifically to notice attackers. Measured in EX-U03:
+        twenty refused frames, `unexplained_commands` == 0 throughout.
+
+        Read it beside `link_frames_received`. Twenty refused is not a sentence - twenty refused
+        out of twenty-four is - because no station on the ground knows what this link's frame rate
+        should be.
+
+        It does NOT separate an adversary from bad weather. A corrupted frame and a forged one are
+        one number here; the refusal reason is what would tell them apart and the spacecraft does
+        not carry it. EX-U03's mitigation says so rather than leaving it to be assumed.
+        """
+        if self._link_baseline is None or self.link_refused is None:
+            return None
+        return self._signed_step(self.link_refused, self._link_baseline[1])
+
+    @property
+    def link_frames_received(self) -> int | None:
+        """Frames that arrived at the radio at all since this station started watching."""
+        if self._link_baseline is None or self.link_rx is None:
+            return None
+        return self._signed_step(self.link_rx, self._link_baseline[0])
 
     @property
     def commands_refused(self) -> int | None:

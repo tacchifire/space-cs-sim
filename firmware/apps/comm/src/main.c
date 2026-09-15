@@ -33,6 +33,11 @@
  * number silently dropped every uplink packet while csp_ping on port 1 kept working - a mnemonic
  * is not worth resizing the library's port table. */
 #define CSP_PORT_PUS  10
+/* Link statistics, COMM -> OBC. A port of its own rather than a PUS service on port 10: what
+ * crosses here is not a telecommand and must not reach handle_space_packet, which counts what it
+ * is given. A radio reporting its own refusals into the telecommand counter would be a detector
+ * whose readings are its own. */
+#define CSP_PORT_LINKSTATS 12
 #define CAN_BITRATE   1000000
 
 /* Anti-replay on the space link. The TC transfer frame carries an 8-bit sequence number; the
@@ -54,6 +59,30 @@
 #endif
 #ifndef CUBERANGE_COMM_SDLS
 #define CUBERANGE_COMM_SDLS 0
+#endif
+
+/* EX-U03's only difference: whether the radio ever tells anyone what it refused.
+ *
+ * Every link-layer control this range has - the FECF check, the anti-replay counter, the SDLS MAC
+ * - ends in a printk on a console nobody off the spacecraft can read. They WORK. A forged frame
+ * is refused, a replay is refused, a truncated frame is refused, and the attack fails completely
+ * and leaves no record anywhere a human will ever look.
+ *
+ * That is EX-G04's finding - a control that cannot report is a control the ground cannot use -
+ * arriving at the layer below everything EX-G04 was about. And it is the opposite blind spot from
+ * EX-U02's: that counter is on the OBC, BEHIND this check, so it sees only the attacker who has
+ * the key. This one sees the attacker who does not, which is the more common attacker by a wide
+ * margin.
+ *
+ * The counts go to the OBC over CSP and ride the housekeeping beacon, rather than COMM growing a
+ * telemetry path of its own. A radio that originates its own APID is what a real mission would
+ * do; the OBC aggregating subsystem housekeeping is also what a real mission would do, and it is
+ * the one that needs no new plumbing. The limit is written down in EX-U03's mitigation. */
+#ifndef CUBERANGE_COMM_LINK_STATS
+#define CUBERANGE_COMM_LINK_STATS 0
+#endif
+#ifndef CUBERANGE_COMM_LINK_STATS_MS
+#define CUBERANGE_COMM_LINK_STATS_MS 2000
 #endif
 
 /* Included after the default above, not beside the other headers. A `#if` on a macro that has not
@@ -192,10 +221,70 @@ static void sdls_selftest(void)
 #endif /* CUBERANGE_COMM_SDLS */
 
 /* One deframed TC frame: strip the frame header and hand the Space Packet to the OBC. */
+#if CUBERANGE_COMM_LINK_STATS
+/* Sixteen bits each, read by the ground as differences for the reason EX-U02's are: an absolute
+ * read of a wrapping counter is wrong once every 65536. `refused` counts frames this radio threw
+ * away; `rx` counts frames that arrived at all. The PAIR is the signal - twenty refused out of
+ * twenty-four is a sentence, twenty refused is not - because a ratio survives a link whose frame
+ * rate nobody on the ground knows.
+ *
+ * It does NOT separate an adversary from bad weather, and it would be easy to write here that it
+ * does. A bad FECF is noise and a valid FECF with a bad MAC is somebody, but this counter is one
+ * number for both: in the SDLS build the FECF check lives inside sdls_verify, so the refusal
+ * reason is gone by the time anything counts it. Carrying the reason is what would make that
+ * distinction, and it is written down in EX-U03's mitigation as missing rather than implied
+ * here as present. */
+static uint16_t link_frames_rx;
+static uint16_t link_frames_refused;
+
+static void send_link_stats(void)
+{
+	csp_packet_t *out = csp_buffer_get(4);
+
+	if (out == NULL) {
+		return;
+	}
+	out->data[0] = (uint8_t)(link_frames_rx >> 8);
+	out->data[1] = (uint8_t)link_frames_rx;
+	out->data[2] = (uint8_t)(link_frames_refused >> 8);
+	out->data[3] = (uint8_t)link_frames_refused;
+	out->length = 4;
+
+	csp_conn_t *conn = csp_connect(CSP_PRIO_NORM, OBC_ADDR, CSP_PORT_LINKSTATS, 1000,
+				       CSP_O_NONE);
+
+	if (conn == NULL) {
+		csp_buffer_free(out);
+		return;
+	}
+	csp_send(conn, out);
+	csp_close(conn);
+}
+
+static void stats_task(void *a, void *b, void *c)
+{
+	ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
+
+	while (1) {
+		k_sleep(K_MSEC(CUBERANGE_COMM_LINK_STATS_MS));
+		send_link_stats();
+	}
+}
+
+/* Unconditional, not "when something changed". A report that only appears when there is
+ * something to report makes its own absence ambiguous, and this range has an exercise about
+ * exactly that: EX-L03's beacon exists because silence has to mean something. */
+#define STATS_STACK 2048
+K_THREAD_DEFINE(stats_id, STATS_STACK, stats_task, NULL, NULL, NULL, 2, 0, K_TICKS_FOREVER);
+#endif /* CUBERANGE_COMM_LINK_STATS */
+
 static void on_tc_frame(const uint8_t *frame, size_t len, void *ctx)
 {
 	ARG_UNUSED(ctx);
 
+#if CUBERANGE_COMM_LINK_STATS
+	link_frames_rx++;
+#endif
 	uint8_t seq;
 	const uint8_t *packet;
 	size_t packet_len;
@@ -217,6 +306,9 @@ static void on_tc_frame(const uint8_t *frame, size_t len, void *ctx)
 
 	if (!sdls_verify(frame, len, &parts)) {
 		printk("COMM: dropping a TC frame that did not authenticate\n");
+#if CUBERANGE_COMM_LINK_STATS
+		link_frames_refused++;
+#endif
 		return;
 	}
 	/* Anti-replay on the AUTHENTICATED sequence number, and this is the part that makes SDLS
@@ -244,6 +336,9 @@ static void on_tc_frame(const uint8_t *frame, size_t len, void *ctx)
 	if (sdls_sn_have && parts.seq_num <= sdls_sn_seen) {
 		printk("COMM: REPLAY - authenticated frame with sequence %u, already seen %u\n",
 		       (unsigned int)parts.seq_num, (unsigned int)sdls_sn_seen);
+#if CUBERANGE_COMM_LINK_STATS
+		link_frames_refused++;
+#endif
 		return;
 	}
 	sdls_sn_seen = parts.seq_num;
@@ -258,6 +353,9 @@ static void on_tc_frame(const uint8_t *frame, size_t len, void *ctx)
 #else
 	if (cr_decode_tc_frame(frame, len, &seq, &packet, &packet_len) != 0) {
 		printk("COMM: dropping a TC frame that failed its FECF or length check\n");
+#if CUBERANGE_COMM_LINK_STATS
+		link_frames_refused++;
+#endif
 		return;
 	}
 #endif
@@ -278,6 +376,9 @@ static void on_tc_frame(const uint8_t *frame, size_t len, void *ctx)
 
 	if (vc > 63) {
 		printk("COMM: REJECTED frame with no readable virtual channel\n");
+#if CUBERANGE_COMM_LINK_STATS
+		link_frames_refused++;
+#endif
 		return;
 	}
 	if (have_vc[vc]) {
@@ -286,6 +387,9 @@ static void on_tc_frame(const uint8_t *frame, size_t len, void *ctx)
 		if (ahead <= 0) {
 			printk("COMM: REJECTED replayed frame seq=%u on VC %u (last accepted %u)\n",
 			       seq, vc, last_seq_vc[vc]);
+#if CUBERANGE_COMM_LINK_STATS
+			link_frames_refused++;
+#endif
 			return;
 		}
 	}
@@ -301,6 +405,9 @@ static void on_tc_frame(const uint8_t *frame, size_t len, void *ctx)
 		if (ahead <= 0) {
 			printk("COMM: REJECTED replayed frame seq=%u (last accepted %u)\n",
 			       seq, last_seq);
+#if CUBERANGE_COMM_LINK_STATS
+			link_frames_refused++;
+#endif
 			return;
 		}
 	}
@@ -567,6 +674,13 @@ int main(void)
 
 	k_thread_start(link_id);
 	k_thread_start(down_id);
+#if CUBERANGE_COMM_LINK_STATS
+	/* K_TICKS_FOREVER on the definition means the thread exists and does not run until
+	 * something starts it. The first version of this omitted the line and produced a build that
+	 * counted twenty refusals correctly and reported none of them - a silent half-feature, which
+	 * is the shape W47 keeps taking here. Caught by measuring, not by reading. */
+	k_thread_start(stats_id);
+#endif
 
 #if CUBERANGE_COMM_SDLS
 	sdls_selftest();

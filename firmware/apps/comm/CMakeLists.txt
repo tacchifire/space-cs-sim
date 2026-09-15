@@ -35,9 +35,18 @@ set(CUBERANGE_COMM_CROSSLINK 0 CACHE STRING
 set(CUBERANGE_COMM_SDLS 0 CACHE STRING
     "verify a CCSDS 355.0-B-2 authentication MAC on every uplink frame")
 
+# EX-U03's only difference. Every link-layer control above ends in a printk on a console nobody
+# off the spacecraft can read: the forged frame is refused, the replay is refused, the attack
+# fails completely and leaves no record anywhere a human will look. This counts them and sends
+# the counts to the OBC, which carries them in the housekeeping beacon.
+#   west build ... -- -DCUBERANGE_COMM_LINK_STATS=1
+set(CUBERANGE_COMM_LINK_STATS 0 CACHE STRING
+    "count frames received and refused at the link layer and report them to the OBC")
+
 target_link_libraries(app PRIVATE csp)
 target_compile_definitions(app PRIVATE
   CUBERANGE_COMM_ANTIREPLAY=${CUBERANGE_COMM_ANTIREPLAY}
   CUBERANGE_COMM_ANTIREPLAY_PER_VC=${CUBERANGE_COMM_ANTIREPLAY_PER_VC}
   CUBERANGE_COMM_CROSSLINK=${CUBERANGE_COMM_CROSSLINK}
-  CUBERANGE_COMM_SDLS=${CUBERANGE_COMM_SDLS})
+  CUBERANGE_COMM_SDLS=${CUBERANGE_COMM_SDLS}
+  CUBERANGE_COMM_LINK_STATS=${CUBERANGE_COMM_LINK_STATS})
