@@ -142,3 +142,13 @@ pairs:
     flag: CUBERANGE_COMM_SA_MGMT_AUTHORITY
     vuln: { value: "0", build: build-comm-s04-vuln }
     hard: { value: "1", build: build-comm-s04-hard }
+
+  # EX-S05. The detection exercise to EX-S04's prevention: both halves hold authorisation OFF (a
+  # partner's retirement lands, so there is something to attribute) and SA_DEACTIVATION at 0. What
+  # differs is whether COMM reports WHO retired which SA on the beacon - so a stolen retirement and
+  # the operator's own rotation stop being the same SPI-9-goes-dark observation from the ground.
+  - id: EX-S05
+    app: firmware/apps/comm
+    flag: CUBERANGE_COMM_SA_MGMT_REPORT
+    vuln: { value: "0", build: build-comm-s05-vuln }
+    hard: { value: "1", build: build-comm-s05-hard }

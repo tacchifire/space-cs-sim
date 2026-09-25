@@ -62,6 +62,15 @@ set(CUBERANGE_COMM_SA_DEACTIVATION 0 CACHE STRING
 set(CUBERANGE_COMM_SA_MGMT_AUTHORITY 0 CACHE STRING
     "require a STOP_SA directive to share the target SA's owner before it may retire it")
 
+# EX-S05's only difference. Both halves retire SAs by telecommand (authority held off in this pair,
+# so a partner's retirement lands and there is something to attribute). What differs is whether COMM
+# REPORTS who retired which SA to the OBC, which puts it on the signed beacon: OFF, the retirement
+# is silent to the ground and a theft looks like the operator's own rotation; ON, the beacon names
+# the target SPI and the retiring SPI. It rides EX-D01's report signing rather than adding its own.
+#   west build ... -- -DCUBERANGE_COMM_SA_MGMT_REPORT=1
+set(CUBERANGE_COMM_SA_MGMT_REPORT 0 CACHE STRING
+    "report the target and requester SPI of the last SA retirement to the OBC for the beacon")
+
 target_link_libraries(app PRIVATE csp)
 target_compile_definitions(app PRIVATE
   CUBERANGE_COMM_ANTIREPLAY=${CUBERANGE_COMM_ANTIREPLAY}
@@ -70,4 +79,5 @@ target_compile_definitions(app PRIVATE
   CUBERANGE_COMM_SDLS=${CUBERANGE_COMM_SDLS}
   CUBERANGE_COMM_LINK_STATS=${CUBERANGE_COMM_LINK_STATS}
   CUBERANGE_COMM_SA_DEACTIVATION=${CUBERANGE_COMM_SA_DEACTIVATION}
-  CUBERANGE_COMM_SA_MGMT_AUTHORITY=${CUBERANGE_COMM_SA_MGMT_AUTHORITY})
+  CUBERANGE_COMM_SA_MGMT_AUTHORITY=${CUBERANGE_COMM_SA_MGMT_AUTHORITY}
+  CUBERANGE_COMM_SA_MGMT_REPORT=${CUBERANGE_COMM_SA_MGMT_REPORT})

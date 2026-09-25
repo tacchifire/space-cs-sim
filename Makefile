@@ -235,7 +235,7 @@ verify:
 	    python3 -m pytest exercises/$(EX)/verify_*.py -v
 
 # Every exercise, both directions. This is the claim the product makes.
-verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01 firmware-u02 firmware-u03 firmware-s03 firmware-s04)
+verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01 firmware-u02 firmware-u03 firmware-s03 firmware-s04 firmware-s05)
 	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest exercises/*/verify_*.py -v
 
@@ -287,7 +287,7 @@ firmware-f01: firmware-p1
 # prerequisite once per invocation, so this is one pristine build of each of the seven images
 # rather than the four rounds `check` used to do.
 .PHONY: firmware-all
-firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-sdls firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01 firmware-u02 firmware-u03 firmware-s03 firmware-s04
+firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-sdls firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01 firmware-u02 firmware-u03 firmware-s03 firmware-s04 firmware-s05
 	@echo "all node images built:"
 	@ls -1 $(OUT)/build-*/zephyr/zephyr.elf
 
@@ -522,6 +522,34 @@ firmware-s04:
 	    -DEXTRA_DTC_OVERLAY_FILE=$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.overlay \
 	    -DEXTRA_CONF_FILE="$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.conf;$(CUBERANGE_REPO)/firmware/apps/comm/sdls.conf"
 	@ls -l $(OUT)/build-comm-s04-vuln/zephyr/zephyr.elf $(OUT)/build-comm-s04-hard/zephyr/zephyr.elf
+
+firmware-s05:
+	# EX-S05's pair. This is the DETECTION exercise to EX-S04's prevention, so both halves hold
+	# EX-S04's authorisation OFF (CUBERANGE_COMM_SA_MGMT_AUTHORITY=0) - a partner CAN retire the
+	# operator's SA here, on purpose, so there is a retirement to attribute. What differs is
+	# whether COMM REPORTS who retired which SA: the vulnerable half retires in silence (only the
+	# console, which never leaves the spacecraft, so a theft and a rotation look identical from the
+	# ground), the hardened half puts the target SPI and the retiring SPI on the beacon. The report
+	# rides EX-D01's signed beacon, so attribution is authenticated rather than asserted.
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-comm-s05-vuln firmware/apps/comm -- \
+	    -DCUBERANGE_SAT_INDEX=0 \
+	    -DCUBERANGE_COMM_SDLS=1 -DCUBERANGE_COMM_CROSSLINK=1 \
+	    -DCUBERANGE_COMM_ANTIREPLAY=1 -DCUBERANGE_COMM_ANTIREPLAY_PER_VC=1 \
+	    -DCUBERANGE_COMM_LINK_STATS=1 -DCUBERANGE_COMM_SA_DEACTIVATION=0 \
+	    -DCUBERANGE_COMM_SA_MGMT_AUTHORITY=0 -DCUBERANGE_COMM_SA_MGMT_REPORT=0 \
+	    -DEXTRA_DTC_OVERLAY_FILE=$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.overlay \
+	    -DEXTRA_CONF_FILE="$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.conf;$(CUBERANGE_REPO)/firmware/apps/comm/sdls.conf"
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-comm-s05-hard firmware/apps/comm -- \
+	    -DCUBERANGE_SAT_INDEX=0 \
+	    -DCUBERANGE_COMM_SDLS=1 -DCUBERANGE_COMM_CROSSLINK=1 \
+	    -DCUBERANGE_COMM_ANTIREPLAY=1 -DCUBERANGE_COMM_ANTIREPLAY_PER_VC=1 \
+	    -DCUBERANGE_COMM_LINK_STATS=1 -DCUBERANGE_COMM_SA_DEACTIVATION=0 \
+	    -DCUBERANGE_COMM_SA_MGMT_AUTHORITY=0 -DCUBERANGE_COMM_SA_MGMT_REPORT=1 \
+	    -DEXTRA_DTC_OVERLAY_FILE=$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.overlay \
+	    -DEXTRA_CONF_FILE="$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.conf;$(CUBERANGE_REPO)/firmware/apps/comm/sdls.conf"
+	@ls -l $(OUT)/build-comm-s05-vuln/zephyr/zephyr.elf $(OUT)/build-comm-s05-hard/zephyr/zephyr.elf
 
 firmware-l03:
 	# EX-L03's pair. Both halves are everything EX-L02 deployed - signed reports, a report store,
