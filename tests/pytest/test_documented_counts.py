@@ -71,7 +71,7 @@ ACTUAL = {
 #: that it cannot match an unrelated sentence - a loose pattern here produces failures nobody can
 #: act on, and a guard people cannot act on gets deleted.
 CLAIMS = [
-    ("exercises",      "CLAUDE.md",            r"(\w+) exercises work today"),
+    ("exercises",      "CLAUDE.md",            r"([\w-]+) exercises work today"),
     ("assertions",     "CLAUDE.md",            r"(\d+) assertions, all measured"),
     #: `つ` is optional because 「10 つ」 is not Japanese - the prose says 「10 の演習」,
     #: and the regex accommodates the language rather than the reverse.
@@ -83,11 +83,14 @@ CLAIMS = [
 ]
 
 #: English prose counts in words up to a point and then stops; this follows it rather than forcing
-#: the prose to say "11 exercises". Extended when the range passed ten.
+#: the prose to say "11 exercises". Extended when the range passed ten, and again at twenty-one -
+#: the first compound, where the count no longer fits a bare \w+. That misparse is why the CLAUDE.md
+#: regex above captures [\w-]+: `(\w+)` on "twenty-one" silently returns "one", so the guard read a
+#: valid sentence as the number 1 and failed confident rather than safe. Capture the whole token.
 WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
          "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
          "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
-         "nineteen": 19, "twenty": 20}
+         "nineteen": 19, "twenty": 20, "twenty-one": 21}
 
 
 def _as_int(text: str) -> int:
