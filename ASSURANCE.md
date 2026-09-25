@@ -44,6 +44,15 @@ This document exists so that mistake has to be made deliberately.
     tests exercise: widening the TM VCID mask from three bits to six changes no committed vector,
     because a VCID above 7 is refused before it reaches the mask. This was measured, after a first
     version of the test claimed the opposite.
+  - The SDLS **Extended Procedures** directive EX-S04 carries — a `STOP_SA` PDU on a reserved
+    control virtual channel, used to retire a Security Association by telecommand — is an honest
+    gap. The OUTER authenticated frame is covered by the SDLS row above; the INNER directive layout
+    (a directive type and a target SPI) has no independent oracle in this repository. NASA CryptoLib
+    implements Extended Procedures and is the oracle this would use, but wiring it up as a golden
+    source is unbuilt. Until then the directive is cross-checked C-against-Python by
+    `test_c_matches_python.py`, including that both parsers refuse the same short PDUs — and two
+    self-written parsers agreeing is exactly what the golden layer exists to say is not proof, which
+    is why this is written down rather than counted as coverage.
 
   All committed vectors are produced by `tools/gen_golden.py` from oracles that
   `tools/oracles/build.sh` builds — and until 2026-09-09 neither of those oracles was in the

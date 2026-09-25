@@ -279,6 +279,39 @@ class GroundStation:
         return self._send(PusTc(service=service, subtype=subtype, source_id=self.station_id,
                                 app_data=app_data))
 
+    def send_sa_stop(self, target_spi: int, *, directive: int | None = None) -> int:
+        """Put an SDLS Extended-Procedures STOP_SA directive on the control virtual channel.
+
+        This is NOT a telecommand. SA management is a link-layer function - COMM holds the Security
+        Associations and does not parse PUS - so the directive travels as the authenticated payload
+        of a transfer frame on `SDLS_CONTROL_VCID`, and COMM acts on it itself rather than
+        forwarding it to the OBC. It is authenticated under THIS station's current SA
+        (`sdls_spi`/`sdls_key`), and that is the whole of EX-S04: a valid MAC proves possession of
+        *a* key, not authority over the SA being retired. A partner station holding SPI 11 can frame
+        a STOP for the operator's SPI 9 that passes every cryptographic check on board, and only an
+        authorisation bound to the SA's OWNER refuses it.
+
+        `directive` overrides the directive type, for the negative tests a solver needs (an unknown
+        type, a short PDU); it defaults to STOP_SA. Returns the TC frame sequence used.
+        """
+        from ..identity import SDLS_CONTROL_VCID
+        from ..proto import sdls
+        if self.sdls_spi is None:
+            raise ValueError("a STOP_SA directive must be authenticated; set sdls_spi and sdls_key")
+        pdu = sdls.encode_sa_directive(sdls.DIR_STOP_SA if directive is None else directive,
+                                       target_spi)
+        seq = self._next_seq()
+        self.commands_sent += 1
+        #: The IV is the per-SA sequence number, exactly as `_send` frames it - one nonce per frame
+        #: under this SA, which GCM requires and which this counter is the only thing varying.
+        iv = self._sdls_sn.to_bytes(sdls.IV_LEN, "big")
+        frame = sdls.encode_tc(pdu, key=self._sdls_key(), spi=self.sdls_spi, iv=iv,
+                               seq_num=self._sdls_sn, frame_seq=seq & 0xFF,
+                               scid=self.target_scid, vcid=SDLS_CONTROL_VCID)
+        self._sdls_sn += 1
+        self.link.send_frame(frame)
+        return seq
+
     def collect(self) -> list:
         """Read whatever has arrived, classify it, and transmit nothing.
 

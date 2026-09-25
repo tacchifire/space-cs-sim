@@ -164,27 +164,45 @@ static void link_write(const uint8_t *buf, size_t len)
  * management this range does not do; what matters here is that a frame arriving for a
  * deactivated SA is refused for a REASON, and the reason is reported.
  *
- * The table is const and compiled in. An SA that can be activated or deactivated by telecommand
+ * The table was const and compiled in until EX-S04. An SA that can be deactivated by telecommand
  * is what a real mission has, and a telecommand that can deactivate the operator's own SA is a
- * denial-of-service with a valid MAC on it - that is named in EX-S03's mitigation as the next
- * thing, not implemented here.
+ * denial of service with a valid MAC on it - which is what EX-S04 measures. So the table is mutable
+ * now (its `operational` bits change at runtime), it carries an OWNER per SA, and STOP_SA
+ * directives arrive on the control virtual channel (see handle_sa_directive below). EX-S03's
+ * compile-time deactivation stays but only sets the INITIAL state; EX-S04 starts every SA
+ * operational and retires one on the wire.
  */
 #ifndef CUBERANGE_COMM_SA_DEACTIVATION
 #define CUBERANGE_COMM_SA_DEACTIVATION 0
 #endif
 
+/* EX-S04's whole difference. OFF: a STOP_SA directive that verified under ANY operational SA
+ * retires ANY SA it names, so a partner holding SPI 11 switches the operator's SPI 9 off with a
+ * valid MAC. ON: a directive may retire an SA only when it authenticated under an SA with the SAME
+ * owner. Authenticating the sender and authorising it are different questions - EX-G02, one layer
+ * down, in key management. */
+#ifndef CUBERANGE_COMM_SA_MGMT_AUTHORITY
+#define CUBERANGE_COMM_SA_MGMT_AUTHORITY 0
+#endif
+
 struct cr_sdls_sa {
 	uint16_t spi;
 	const uint8_t *key;
+	uint8_t owner;
 	bool operational;
 };
 
-static const struct cr_sdls_sa sa_table[] = {
-	/* The association every exercise before EX-S03 uses. Deactivated in exactly one build in
-	 * this repository - EX-S03's mitigated half - which is what makes that half a rotation
-	 * rather than an addition. */
-	{ CR_SDLS_SPI, cr_sdls_key, CUBERANGE_COMM_SA_DEACTIVATION ? false : true },
-	{ CR_SDLS_SPI_ROTATED, cr_sdls_key_rotated, true },
+/* Mutable, because EX-S04 retires an SA at runtime. Three associations: two are the operator's - a
+ * key and the key it rotates to (EX-S03) - and one belongs to a PARTNER station, a different owner,
+ * which is what lets a valid MAC come from someone who is not the operator. */
+static struct cr_sdls_sa sa_table[] = {
+	/* The association every exercise before EX-S03 uses. Deactivated at BUILD time in exactly one
+	 * image here - EX-S03's mitigated half - which only sets its initial state; EX-S04 leaves it
+	 * operational and retires it on the wire instead. */
+	{ CR_SDLS_SPI, cr_sdls_key, CR_SDLS_OWNER_OPERATOR,
+	  CUBERANGE_COMM_SA_DEACTIVATION ? false : true },
+	{ CR_SDLS_SPI_ROTATED, cr_sdls_key_rotated, CR_SDLS_OWNER_OPERATOR, true },
+	{ CR_SDLS_SPI_PARTNER, cr_sdls_key_partner, CR_SDLS_OWNER_PARTNER, true },
 };
 
 #define SA_COUNT ((int)ARRAY_SIZE(sa_table))
@@ -351,6 +369,77 @@ static void stats_task(void *a, void *b, void *c)
 K_THREAD_DEFINE(stats_id, STATS_STACK, stats_task, NULL, NULL, NULL, 2, 0, K_TICKS_FOREVER);
 #endif /* CUBERANGE_COMM_LINK_STATS */
 
+#if CUBERANGE_COMM_SDLS
+/* Act on an SDLS Extended-Procedures directive that arrived on the control VC. `requester` is the
+ * SA index the frame authenticated under - already verified by the caller, so the sender's identity
+ * is proven; whether they are AUTHORISED to retire the SA they name is decided here, and it is the
+ * whole of EX-S04. STOP_SA is the only directive; anything else is refused for a distinct reason so
+ * the console can tell them apart, the way every other refusal here does. */
+static void handle_sa_directive(int requester, const uint8_t *pdu, size_t pdu_len)
+{
+	uint8_t directive;
+	uint16_t target_spi;
+
+	if (cr_sdls_directive(pdu, pdu_len, &directive, &target_spi) != 0) {
+		printk("COMM: SA directive REFUSED - malformed (%u octets)\n",
+		       (unsigned int)pdu_len);
+#if CUBERANGE_COMM_LINK_STATS
+		link_frames_refused++;
+#endif
+		return;
+	}
+	if (directive != CR_SDLS_DIR_STOP_SA) {
+		printk("COMM: SA directive REFUSED - unknown type 0x%02x\n", directive);
+#if CUBERANGE_COMM_LINK_STATS
+		link_frames_refused++;
+#endif
+		return;
+	}
+
+	int target = -1;
+
+	for (int i = 0; i < SA_COUNT; i++) {
+		if (sa_table[i].spi == target_spi) {
+			target = i;
+			break;
+		}
+	}
+	if (target < 0) {
+		printk("COMM: SA STOP REFUSED - no such SA, SPI %u\n", (unsigned int)target_spi);
+#if CUBERANGE_COMM_LINK_STATS
+		link_frames_refused++;
+		link_refused_spi = target_spi;
+#endif
+		return;
+	}
+
+#if CUBERANGE_COMM_SA_MGMT_AUTHORITY
+	/* THE authorisation, and EX-S04's whole difference. A valid MAC proved the sender holds
+	 * sa_table[requester]'s key; it proved nothing about their authority over the SA they are
+	 * retiring. Only an SA with the same owner may. Without this check a partner holding SPI 11
+	 * switches the operator's SPI 9 off with a frame that passes every cryptographic control. */
+	if (sa_table[requester].owner != sa_table[target].owner) {
+		printk("COMM: SA STOP REFUSED - SPI %u (owner %u) may not retire SPI %u (owner %u)\n",
+		       (unsigned int)sa_table[requester].spi, (unsigned int)sa_table[requester].owner,
+		       (unsigned int)target_spi, (unsigned int)sa_table[target].owner);
+#if CUBERANGE_COMM_LINK_STATS
+		link_frames_refused++;
+		/* Name the REQUESTER, not the target. "SPI 11 tried to retire an SA" is the
+		 * attribution the ground needs, and the target is still operational - nothing about
+		 * SPI 9 changed, so naming SPI 9 would send the operator to the wrong incident. */
+		link_refused_spi = sa_table[requester].spi;
+#endif
+		return;
+	}
+#endif
+
+	sa_table[target].operational = false;
+	printk("COMM: SA STOP - SPI %u DEACTIVATED by SPI %u (owner %u)\n",
+	       (unsigned int)target_spi, (unsigned int)sa_table[requester].spi,
+	       (unsigned int)sa_table[requester].owner);
+}
+#endif /* CUBERANGE_COMM_SDLS */
+
 static void on_tc_frame(const uint8_t *frame, size_t len, void *ctx)
 {
 	ARG_UNUSED(ctx);
@@ -457,6 +546,16 @@ static void on_tc_frame(const uint8_t *frame, size_t len, void *ctx)
 	printk("COMM: authenticated frame, SPI %u seq %u, %u octets of payload\n",
 	       (unsigned int)parts.spi, (unsigned int)parts.seq_num,
 	       (unsigned int)parts.payload_len);
+
+	/* An SA-management directive travels on the control VC, authenticated like any other frame.
+	 * COMM acts on it here rather than forwarding it, because SA management is a link-layer
+	 * function and the OBC does not parse it. Everything on the station VCs falls through to the
+	 * forward below, unchanged. `sa` is the verified requester; handle_sa_directive decides
+	 * whether it may retire the SA it names. EX-S04. */
+	if (cr_tc_frame_vcid(frame, len) == CR_SDLS_CONTROL_VCID) {
+		handle_sa_directive(sa, parts.payload, parts.payload_len);
+		return;
+	}
 #else
 	if (cr_decode_tc_frame(frame, len, &seq, &packet, &packet_len) != 0) {
 		printk("COMM: dropping a TC frame that failed its FECF or length check\n");

@@ -94,6 +94,11 @@ def clib(tmp_path_factory):
                                   ctypes.c_size_t, ctypes.c_size_t,
                                   ctypes.POINTER(CrSdlsParts)]
 
+    lib.cr_sdls_directive.restype = ctypes.c_int
+    lib.cr_sdls_directive.argtypes = [ctypes.c_char_p, ctypes.c_size_t,
+                                      ctypes.POINTER(ctypes.c_uint8),
+                                      ctypes.POINTER(ctypes.c_uint16)]
+
     lib.cr_pus_auth_split.restype = ctypes.c_int
     lib.cr_pus_auth_split.argtypes = [ctypes.c_char_p, ctypes.c_size_t,
                                       ctypes.POINTER(CrPusAuthParts)]
@@ -577,3 +582,48 @@ def test_the_c_signer_and_the_python_signer_produce_the_same_packet(clib):
         assert built == pus_auth.sign(inner, key=key, seq=5), (
             f"C-prepared and Python-signed differ\n  C:      {built.hex()}\n"
             f"  Python: {pus_auth.sign(inner, key=key, seq=5).hex()}")
+
+
+# --- SDLS Extended-Procedures directive (EX-S04) ------------------------------------------------
+#
+# The OUTER authenticated frame is oracle-checked in test_golden_sdls.py; this is the INNER
+# directive PDU, which has no CryptoLib oracle yet and is an honest gap named in ASSURANCE.md. Two
+# self-written parsers agreeing is not proof - the golden layer exists to say exactly that - so what
+# earns its keep here is the second test: that C and Python REFUSE the same malformed PDUs, because
+# a C parser that reads past a short directive the Python one rejected is a spacecraft acting on
+# octets the ground would have discarded.
+
+def _c_directive(clib, pdu: bytes):
+    d = ctypes.c_uint8()
+    t = ctypes.c_uint16()
+    rc = clib.cr_sdls_directive(pdu, len(pdu), ctypes.byref(d), ctypes.byref(t))
+    return rc, d.value, t.value
+
+
+@pytest.mark.parametrize("spi", [9, 10, 11, 1, 0xFFFE])
+def test_sa_directive_agrees(clib, spi):
+    pdu = sdls.encode_sa_directive(sdls.DIR_STOP_SA, spi)
+    rc, d, t = _c_directive(clib, pdu)
+    assert rc == 0, "the C parser refused a well-formed directive"
+    assert (d, t) == sdls.decode_sa_directive(pdu) == (sdls.DIR_STOP_SA, spi)
+
+
+@pytest.mark.parametrize("pdu", [b"", b"\x01", b"\x01\x00"])
+def test_sa_directive_parsers_refuse_the_same_short_pdus(clib, pdu):
+    rc, _d, _t = _c_directive(clib, pdu)
+    assert rc == -1, "the C parser accepted a PDU too short to hold a directive"
+    with pytest.raises(ValueError):
+        sdls.decode_sa_directive(pdu)
+
+
+def test_the_control_vcid_agrees_between_c_and_python():
+    """COMM keys 'act on this locally' on the control VC; if the header and identity.py disagreed,
+    the firmware would forward SA directives to the OBC (which cannot parse them) or treat station
+    traffic as directives. Compared by parsing the header, like the keys are."""
+    import re
+
+    from cuberange.identity import SDLS_CONTROL_VCID
+    text = (COMMON / "cuberange_sdls.h").read_text()
+    m = re.search(r"#define CR_SDLS_CONTROL_VCID\s+(\d+)", text)
+    assert m, "CR_SDLS_CONTROL_VCID is not in cuberange_sdls.h"
+    assert int(m.group(1)) == SDLS_CONTROL_VCID

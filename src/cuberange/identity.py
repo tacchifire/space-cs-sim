@@ -55,6 +55,19 @@ GROUND_SOURCE_ID = GROUND_STATIONS["primary"]
 #: station appear without a firmware build.
 GROUND_VCIDS = {"primary": 0, "backup": 1}
 
+#: The virtual channel SDLS Extended-Procedures directives ride on, and NOT a telecommand channel.
+#:
+#: SA management is a link-layer function - COMM holds the Security Associations and does not parse
+#: PUS - so a "retire this SA" directive cannot be a Space Packet the OBC dispatches; it has to be
+#: something COMM itself recognises. CCSDS 355.1 carries Extended Procedures on the transfer frame,
+#: and this range gives them a reserved VC: a frame that verifies AND arrives on this channel is an
+#: SA-management directive COMM acts on locally, and everything on the station VCs is forwarded to
+#: the OBC exactly as before. EX-S04.
+#:
+#: 7, clear of the station VCs (0, 1) and of 63, which CCSDS 232.0 reserves for the OID (idle)
+#: frame. Defined in cuberange_sdls.h too; tests/pytest/test_c_matches_python.py asserts they agree.
+SDLS_CONTROL_VCID = 7
+
 
 @dataclass(frozen=True)
 class Spacecraft:

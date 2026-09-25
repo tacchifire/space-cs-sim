@@ -8,3 +8,4 @@ build/
 .venv/
 tests/native/test_proto
 tests/native/test_proto_asan
+tests/native/fuzz_proto

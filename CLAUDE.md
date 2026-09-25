@@ -38,7 +38,7 @@ wrong: probe.sh's 1.5x four-node speed floor, which this eight-core machine clea
 looked like the obvious thing to blame on a two-vCPU runner. The probe passes there in 110
 seconds. Blaming the host was the comfortable guess, and it was the wrong one.
 
-Nineteen exercises work today. Eight cover an attack origin each: EX-B01 (internal bus), EX-L01
+Twenty exercises work today. Eight cover an attack origin each: EX-B01 (internal bus), EX-L01
 (space link), EX-A01 (ADCS command envelope), EX-F01 (the OBC's own PUS 8 parser), EX-G01 (the
 ground segment that decides what to send), EX-X01 (the crosslink, where the attacker is a
 spacecraft in your own constellation) EX-D01 (the downlink, where the target is the operator
@@ -158,7 +158,18 @@ frames that could have been a bad link.
 A control you have not tested is a control you are assuming - and this one was performed,
 verified, and half done.
 
-80 assertions, all measured. The last three each end by naming a limit the next one attacks, and
+EX-S04 is the twentieth and it retires a key the way a mission does - by TELECOMMAND, the SDLS
+Extended-Procedures STOP_SA directive EX-S03 named and did not build. A PARTNER station, a second
+party holding its own Security Association on the same link, switches the operator's SPI 9 off with
+a frame that verifies, because the vulnerable build asks whether a directive is AUTHENTIC and never
+whether its sender OWNS the SA it names. The fix is an owner on every SA and one equality -
+EX-G02's authenticated-is-not-authorised, a layer down in key management - and SA_DEACTIVATION is
+held equal across the pair so the one flag that differs is the authorisation. It ends where the
+chain keeps ending: from the ground a stolen retirement and a deliberate one are the same SPI 9
+going dark, and the only witness to which is a console that never leaves the spacecraft. That
+witness - attribution of a deactivation, on the downlink - is what EX-S05 is.
+
+84 assertions, all measured. Three of them each end by naming a limit the next one attacks, and
 in each the fix turned out to be reading something already on the wire: a source id that was
 arriving and ignored, a virtual channel that was being stepped over, a refused request sitting in
 a local variable.
