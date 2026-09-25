@@ -185,6 +185,21 @@ static void link_write(const uint8_t *buf, size_t len)
 #define CUBERANGE_COMM_SA_MGMT_AUTHORITY 0
 #endif
 
+/* EX-S05's whole difference. EX-S04 refused an unauthorised retirement but reported nothing an
+ * operator could see: a retirement, stolen or deliberate, was SPI 9 going dark and a line on a
+ * console that never leaves the spacecraft. OFF: the retirement is silent to the ground, so a
+ * partner's theft and the operator's own rotation are the same observation - EX-S04's blind spot.
+ * ON: COMM reports WHO retired WHICH SA on the beacon, and the ground can tell them apart. It is
+ * EX-G04/EX-U03's "a control that works has to be heard working", arriving for SA management.
+ *
+ * The report's authenticity is not this flag's concern: the beacon is signed by EX-D01's control
+ * (CUBERANGE_OBC_SIGN_REPORTS) and required by the ground, and this rides that. What this does NOT
+ * do is keep a history - only the LAST retirement is carried, the same single-value limit
+ * EX-S03's link_refused_spi has, and the next exercise is welcome to it. */
+#ifndef CUBERANGE_COMM_SA_MGMT_REPORT
+#define CUBERANGE_COMM_SA_MGMT_REPORT 0
+#endif
+
 struct cr_sdls_sa {
 	uint16_t spi;
 	const uint8_t *key;
@@ -212,6 +227,17 @@ static struct cr_sdls_sa sa_table[] = {
  * different messages, and a bare refusal count cannot carry either. */
 #if CUBERANGE_COMM_LINK_STATS
 static uint16_t link_refused_spi;
+#endif
+
+#if CUBERANGE_COMM_SA_MGMT_REPORT
+/* The last SA retirement, for the ground: which association was retired, and the SPI whose frame
+ * ordered it. `have_sa_retire` keeps "no retirement has happened" apart from "retired by SPI 0",
+ * and the beacon carries these only once it is true - the LENGTH is the feature test on the
+ * ground, exactly as the link counts are. The requester SPI is what the SDLS MAC PROVED, not what
+ * a header asserted, so "retired by SPI 11" is attribution rather than a claim. */
+static uint16_t sa_retired_target;
+static uint16_t sa_retired_by;
+static bool have_sa_retire;
 #endif
 
 /* Returns the index of the SA that verified the frame, or a negative reason. The reason is
@@ -324,7 +350,11 @@ static uint16_t link_frames_refused;
 
 static void send_link_stats(void)
 {
+#if CUBERANGE_COMM_SA_MGMT_REPORT
+	csp_packet_t *out = csp_buffer_get(10);
+#else
 	csp_packet_t *out = csp_buffer_get(6);
+#endif
 
 	if (out == NULL) {
 		return;
@@ -340,6 +370,18 @@ static void send_link_stats(void)
 	out->data[4] = (uint8_t)(link_refused_spi >> 8);
 	out->data[5] = (uint8_t)link_refused_spi;
 	out->length = 6;
+#if CUBERANGE_COMM_SA_MGMT_REPORT
+	/* The attribution goes on the end, and only once a retirement has happened. Ten octets is a
+	 * radio that has reported who retired an SA; six is one that has not - the ground reads the
+	 * LENGTH, the same feature test the OBC beacon uses one layer up. */
+	if (have_sa_retire) {
+		out->data[6] = (uint8_t)(sa_retired_target >> 8);
+		out->data[7] = (uint8_t)sa_retired_target;
+		out->data[8] = (uint8_t)(sa_retired_by >> 8);
+		out->data[9] = (uint8_t)sa_retired_by;
+		out->length = 10;
+	}
+#endif
 
 	csp_conn_t *conn = csp_connect(CSP_PRIO_NORM, OBC_ADDR, CSP_PORT_LINKSTATS, 1000,
 				       CSP_O_NONE);
@@ -437,6 +479,14 @@ static void handle_sa_directive(int requester, const uint8_t *pdu, size_t pdu_le
 	printk("COMM: SA STOP - SPI %u DEACTIVATED by SPI %u (owner %u)\n",
 	       (unsigned int)target_spi, (unsigned int)sa_table[requester].spi,
 	       (unsigned int)sa_table[requester].owner);
+#if CUBERANGE_COMM_SA_MGMT_REPORT
+	/* Attribution for the ground. Without this the line above is the whole record and it never
+	 * leaves the spacecraft, so the operator sees only that SPI 9 stopped answering - which is
+	 * identical whether they retired it or a partner did. EX-S05. */
+	sa_retired_target = target_spi;
+	sa_retired_by = sa_table[requester].spi;
+	have_sa_retire = true;
+#endif
 }
 #endif /* CUBERANGE_COMM_SDLS */
 

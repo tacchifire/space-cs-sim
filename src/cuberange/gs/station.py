@@ -180,6 +180,13 @@ class GroundStation:
         #: "somebody has no key at all" are different incidents and a refusal count carries
         #: neither. EX-S03.
         self.link_refused_spi: int | None = None
+        #: The last SA retirement the spacecraft reported: which association was retired, and the
+        #: SPI whose frame ordered it. None until a beacon carries the attribution - which a
+        #: spacecraft that does not report SA-management events never sends. "Retired by my own
+        #: SPI 10" and "retired by SPI 11" are the operator's own rotation and a theft, and telling
+        #: them apart is the whole of EX-S05.
+        self.sa_retired_target: int | None = None
+        self.sa_retired_by: int | None = None
 
     def _sdls_key(self) -> bytes:
         """The key this station frames with, which is not necessarily the one it signs with.
@@ -397,6 +404,12 @@ class GroundStation:
             self._link_baseline = (rx, refused)
         if len(app) >= 14:
             self.link_refused_spi = int.from_bytes(app[12:14], "big")
+        #: Eighteen octets is a spacecraft that reports WHO retired an SA (EX-S05); fourteen is one
+        #: that retires in silence, and reading four octets of nothing as an attribution would
+        #: invent a retirer for a spacecraft that named none.
+        if len(app) >= 18:
+            self.sa_retired_target = int.from_bytes(app[14:16], "big")
+            self.sa_retired_by = int.from_bytes(app[16:18], "big")
 
     @staticmethod
     def _signed_step(now: int, then: int) -> int:
