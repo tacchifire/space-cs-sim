@@ -235,7 +235,7 @@ verify:
 	    python3 -m pytest exercises/$(EX)/verify_*.py -v
 
 # Every exercise, both directions. This is the claim the product makes.
-verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01 firmware-u02 firmware-u03 firmware-s03)
+verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01 firmware-u02 firmware-u03 firmware-s03 firmware-s04)
 	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest exercises/*/verify_*.py -v
 
@@ -287,7 +287,7 @@ firmware-f01: firmware-p1
 # prerequisite once per invocation, so this is one pristine build of each of the seven images
 # rather than the four rounds `check` used to do.
 .PHONY: firmware-all
-firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-sdls firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01 firmware-u02 firmware-u03 firmware-s03
+firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-sdls firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01 firmware-u02 firmware-u03 firmware-s03 firmware-s04
 	@echo "all node images built:"
 	@ls -1 $(OUT)/build-*/zephyr/zephyr.elf
 
@@ -493,6 +493,35 @@ firmware-s03:
 	    -DEXTRA_DTC_OVERLAY_FILE=$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.overlay \
 	    -DEXTRA_CONF_FILE="$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.conf;$(CUBERANGE_REPO)/firmware/apps/comm/sdls.conf"
 	@ls -l $(OUT)/build-comm-s03-vuln/zephyr/zephyr.elf $(OUT)/build-comm-s03-hard/zephyr/zephyr.elf
+
+firmware-s04:
+	# EX-S04's pair. Both halves carry the SA table with all THREE associations and the STOP_SA
+	# directive handler - SA management by telecommand is not the difference, it is the feature.
+	# What differs is whether a directive is AUTHORISED: the vulnerable half lets any authenticated
+	# SA retire any SA (so a partner holding SPI 11 switches the operator's SPI 9 off with a valid
+	# MAC), the hardened half requires the retiring frame to share the target's owner. SA
+	# deactivation is 0 in BOTH halves - every SA starts operational and EX-S04 retires one on the
+	# wire rather than at build time, which is what EX-S03 did. Link statistics are on in both,
+	# because the exercise needs the radio to name WHO was refused.
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-comm-s04-vuln firmware/apps/comm -- \
+	    -DCUBERANGE_SAT_INDEX=0 \
+	    -DCUBERANGE_COMM_SDLS=1 -DCUBERANGE_COMM_CROSSLINK=1 \
+	    -DCUBERANGE_COMM_ANTIREPLAY=1 -DCUBERANGE_COMM_ANTIREPLAY_PER_VC=1 \
+	    -DCUBERANGE_COMM_LINK_STATS=1 -DCUBERANGE_COMM_SA_DEACTIVATION=0 \
+	    -DCUBERANGE_COMM_SA_MGMT_AUTHORITY=0 \
+	    -DEXTRA_DTC_OVERLAY_FILE=$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.overlay \
+	    -DEXTRA_CONF_FILE="$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.conf;$(CUBERANGE_REPO)/firmware/apps/comm/sdls.conf"
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-comm-s04-hard firmware/apps/comm -- \
+	    -DCUBERANGE_SAT_INDEX=0 \
+	    -DCUBERANGE_COMM_SDLS=1 -DCUBERANGE_COMM_CROSSLINK=1 \
+	    -DCUBERANGE_COMM_ANTIREPLAY=1 -DCUBERANGE_COMM_ANTIREPLAY_PER_VC=1 \
+	    -DCUBERANGE_COMM_LINK_STATS=1 -DCUBERANGE_COMM_SA_DEACTIVATION=0 \
+	    -DCUBERANGE_COMM_SA_MGMT_AUTHORITY=1 \
+	    -DEXTRA_DTC_OVERLAY_FILE=$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.overlay \
+	    -DEXTRA_CONF_FILE="$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.conf;$(CUBERANGE_REPO)/firmware/apps/comm/sdls.conf"
+	@ls -l $(OUT)/build-comm-s04-vuln/zephyr/zephyr.elf $(OUT)/build-comm-s04-hard/zephyr/zephyr.elf
 
 firmware-l03:
 	# EX-L03's pair. Both halves are everything EX-L02 deployed - signed reports, a report store,

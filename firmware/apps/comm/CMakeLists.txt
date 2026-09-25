@@ -51,6 +51,17 @@ set(CUBERANGE_COMM_LINK_STATS 0 CACHE STRING
 set(CUBERANGE_COMM_SA_DEACTIVATION 0 CACHE STRING
     "mark the retired Security Association non-operational so frames on its SPI are refused")
 
+# EX-S04's only difference. Both halves carry all three Security Associations and the STOP_SA
+# directive handler - SA management by telecommand is the feature, not the flaw. What differs is
+# whether a directive is AUTHORISED: OFF, any frame that verifies retires any SA it names, so a
+# partner holding SPI 11 switches the operator's SPI 9 off with a valid MAC; ON, a directive may
+# retire an SA only when it authenticated under an SA with the SAME owner. SA_DEACTIVATION is held
+# at 0 in both halves of this pair, so every SA boots operational and the retirement happens on the
+# wire.
+#   west build ... -- -DCUBERANGE_COMM_SA_MGMT_AUTHORITY=1
+set(CUBERANGE_COMM_SA_MGMT_AUTHORITY 0 CACHE STRING
+    "require a STOP_SA directive to share the target SA's owner before it may retire it")
+
 target_link_libraries(app PRIVATE csp)
 target_compile_definitions(app PRIVATE
   CUBERANGE_COMM_ANTIREPLAY=${CUBERANGE_COMM_ANTIREPLAY}
@@ -58,4 +69,5 @@ target_compile_definitions(app PRIVATE
   CUBERANGE_COMM_CROSSLINK=${CUBERANGE_COMM_CROSSLINK}
   CUBERANGE_COMM_SDLS=${CUBERANGE_COMM_SDLS}
   CUBERANGE_COMM_LINK_STATS=${CUBERANGE_COMM_LINK_STATS}
-  CUBERANGE_COMM_SA_DEACTIVATION=${CUBERANGE_COMM_SA_DEACTIVATION})
+  CUBERANGE_COMM_SA_DEACTIVATION=${CUBERANGE_COMM_SA_DEACTIVATION}
+  CUBERANGE_COMM_SA_MGMT_AUTHORITY=${CUBERANGE_COMM_SA_MGMT_AUTHORITY})

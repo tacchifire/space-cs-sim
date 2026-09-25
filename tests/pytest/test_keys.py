@@ -14,8 +14,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 HEADER = REPO / "firmware" / "common" / "cuberange_keys.h"
 
-from cuberange.keys import (SDLS_KEY, SDLS_KEY_ROTATED, SDLS_SPI,   # noqa: E402
-                            SDLS_SPI_ROTATED)
+from cuberange.keys import (SDLS_KEY, SDLS_KEY_PARTNER, SDLS_KEY_ROTATED,   # noqa: E402
+                            SDLS_SPI, SDLS_SPI_PARTNER, SDLS_SPI_ROTATED)
 
 
 def _header_key(name: str = "cr_sdls_key") -> bytes:
@@ -73,8 +73,45 @@ def test_the_firmware_and_the_host_agree_on_the_rotated_spi():
     assert int(m.group(1)) == SDLS_SPI_ROTATED
 
 
-def test_the_two_associations_are_actually_different():
-    """A rotation to the same octets, or to the same SPI, is not a rotation."""
+def test_the_firmware_and_the_host_hold_the_same_partner_key():
+    """The partner association, checked the same way. EX-S04.
+
+    The partner is a DIFFERENT party holding its own SA on the same link, and the exercise turns on
+    its frames verifying while its authority does not extend to the operator's SA. If the two copies
+    of this key disagreed, the partner's frames would fail the MAC and the exercise would measure a
+    wrong key rather than a wrong authority - which are different lessons and different fixes.
+    """
+    assert _header_key("cr_sdls_key_partner") == SDLS_KEY_PARTNER, (
+        f"the partner key differs.\n  header: {_header_key('cr_sdls_key_partner').hex()}"
+        f"\n  keys.py: {SDLS_KEY_PARTNER.hex()}")
+    assert len(SDLS_KEY_PARTNER) == 32
+
+
+def test_the_firmware_and_the_host_agree_on_the_partner_spi():
+    m = re.search(r"#define CR_SDLS_SPI_PARTNER\s+(\d+)", HEADER.read_text())
+    assert m, "CR_SDLS_SPI_PARTNER is not in cuberange_keys.h"
+    assert int(m.group(1)) == SDLS_SPI_PARTNER
+
+
+def test_the_firmware_and_the_host_agree_on_the_sa_owners():
+    """The owner tags decide EX-S04's authorisation, so a divergence is a spacecraft that authorises
+    the wrong party. Compared by parsing the header, like the keys and SPIs above."""
+    from cuberange.keys import SA_OWNER_OPERATOR, SA_OWNER_PARTNER
+    text = HEADER.read_text()
+    for name, want in (("CR_SDLS_OWNER_OPERATOR", SA_OWNER_OPERATOR),
+                       ("CR_SDLS_OWNER_PARTNER", SA_OWNER_PARTNER)):
+        m = re.search(rf"#define {name}\s+(\d+)", text)
+        assert m, f"{name} is not in cuberange_keys.h"
+        assert int(m.group(1)) == want
+
+
+def test_the_three_associations_are_actually_different():
+    """A rotation to the same octets, or to the same SPI, is not a rotation - and a partner that
+    shares the operator's key or SPI is not a different party."""
     assert SDLS_KEY_ROTATED != SDLS_KEY
     assert SDLS_SPI_ROTATED != SDLS_SPI
     assert _header_key("cr_sdls_key_rotated") != _header_key("cr_sdls_key")
+    assert len({SDLS_KEY, SDLS_KEY_ROTATED, SDLS_KEY_PARTNER}) == 3
+    assert len({SDLS_SPI, SDLS_SPI_ROTATED, SDLS_SPI_PARTNER}) == 3
+    assert len({_header_key("cr_sdls_key"), _header_key("cr_sdls_key_rotated"),
+                _header_key("cr_sdls_key_partner")}) == 3

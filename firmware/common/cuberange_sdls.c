@@ -84,3 +84,20 @@ int cr_sdls_split(const uint8_t *frame, size_t len, size_t iv_len, size_t sn_len
 	out->aad_len = mac_at;
 	return 0;
 }
+
+int cr_sdls_directive(const uint8_t *pdu, size_t len, uint8_t *directive, uint16_t *target_spi)
+{
+	if (pdu == NULL || directive == NULL || target_spi == NULL) {
+		return -1;
+	}
+	/* Refused rather than read past. This PDU is attacker-controlled - it is the payload of a
+	 * frame that verified, which proves who framed it and nothing about how long they made the
+	 * payload - so a short one is a refusal, and src/cuberange/proto/sdls.py refuses it at the
+	 * same length for the same reason. */
+	if (len < CR_SDLS_DIR_LEN) {
+		return -1;
+	}
+	*directive = pdu[0];
+	*target_spi = (uint16_t)(((uint16_t)pdu[1] << 8) | pdu[2]);
+	return 0;
+}

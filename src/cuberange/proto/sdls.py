@@ -188,3 +188,42 @@ def decode_tc(frame: bytes, *, key: bytes, expect_scid: int | None = None,
 
     return Authenticated(spi=spi, iv=iv, seq_num=seq_num, payload=payload,
                          scid=scid, vcid=vcid, frame_seq=frame[4])
+
+
+# --- SDLS Extended Procedures: the one directive EX-S04 needs, and ONLY the layout. -------------
+#
+# CCSDS 355.1-B defines Extended Procedures - starting, stopping and rekeying a Security
+# Association by command. This range implements a single directive, STOP_SA, carried as the
+# authenticated payload of an ordinary transfer frame on the reserved control virtual channel
+# (`identity.SDLS_CONTROL_VCID`). The OUTER frame is the same one `tools/oracles/sdls_oracle.c`
+# checks against NASA CryptoLib; this small inner directive has NO such oracle yet, so it is an
+# honest gap: `ASSURANCE.md` names CryptoLib's Extended-Procedures parser as the oracle it does not
+# have, and `tests/pytest/test_c_matches_python.py` cross-checks the C and Python layouts against
+# each other in the meantime - agreement between two implementations, which the golden layer exists
+# to say is not proof, and is exactly why the gap is written down rather than dressed up.
+#
+# The directive is deliberately tiny, because authority is the lesson and the wire format is not:
+
+DIR_STOP_SA = 0x01    #: deactivate the Security Association named by `target_spi`
+DIR_LEN = 3           #: directive type (1 octet) | target SPI (2 octets, big-endian)
+
+
+def encode_sa_directive(directive: int, target_spi: int) -> bytes:
+    """One SDLS Extended-Procedures directive PDU: `directive` over `target_spi`."""
+    if not 0 <= directive < 1 << 8:
+        raise ValueError(f"a directive type is one octet: {directive}")
+    if not 0 <= target_spi < 1 << 16:
+        raise ValueError(f"an SPI is 16 bits: {target_spi}")
+    return bytes([directive]) + target_spi.to_bytes(2, "big")
+
+
+def decode_sa_directive(pdu: bytes) -> tuple[int, int]:
+    """Take apart a directive PDU, returning (directive, target_spi).
+
+    Refuses a short PDU rather than reading past it - the same refusal the firmware makes, because
+    this is attacker-controlled input and the two parsers proving they reject the same malformed
+    octets is the half of `test_c_matches_python.py` that matters.
+    """
+    if len(pdu) < DIR_LEN:
+        raise ValueError(f"an SA directive is {DIR_LEN} octets, got {len(pdu)}")
+    return pdu[0], int.from_bytes(pdu[1:3], "big")

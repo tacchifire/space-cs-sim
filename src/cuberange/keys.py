@@ -54,6 +54,43 @@ SDLS_KEY_ROTATED = bytes.fromhex(
 #: before this one keeps measuring what it measured.
 SDLS_SPI_ROTATED = 10
 
+#: A THIRD association, and a DIFFERENT party, which is the whole of EX-S04.
+#:
+#: SPI 9 and SPI 10 are both the operator's - a key and the key it rotates to. This one belongs to
+#: someone else: a partner or cross-support station that legitimately holds its own Security
+#: Association on the same space link. Shared and cross-supported ground networks are ordinary, and
+#: CCSDS 355.0-B-2 has several SAs precisely so several parties can each hold one.
+#:
+#: It exists so that "a valid MAC" and "the operator" can be two different things. EX-S04 is SA
+#: management by telecommand - CCSDS 355.1 Extended Procedures, the STOP_SA directive - and the
+#: lesson is EX-G02's, one layer down in key management: authenticating the sender (this station
+#: holds SPI 11's key and its frames verify) is a different question from authorising it (may it
+#: retire the OPERATOR's SPI 9?). A control that answers only the first lets a partner switch the
+#: operator off with a frame that passes every cryptographic check on board.
+SDLS_KEY_PARTNER = bytes.fromhex(
+    "6375626572616e67652d73646c732d706172746e65722d6e6f742d7265616c21"
+)
+
+#: SPI 11, next to 9 and 10, and a key that is obviously the same family of synthetic constant.
+SDLS_SPI_PARTNER = 11
+
+#: SA owners, mirrored into cuberange_keys.h. An owner is the party a Security Association belongs
+#: to, and it is the whole of EX-S04's authorisation check: the hardened build lets a STOP_SA
+#: directive retire an SA only when the frame carrying it authenticated under an SA with the SAME
+#: owner. The values are arbitrary tags; only equality is ever compared.
+SA_OWNER_OPERATOR = 1     #: SPI 9 and SPI 10 - the operator's key and the one it rotates to
+SA_OWNER_PARTNER = 2      #: SPI 11 - the partner / cross-support station
+
+#: Which owner each SPI belongs to. keys.py is the host-side mirror of the firmware's sa_table[],
+#: and a solver reads this to know which SA is authorised to retire which.
+SA_OWNERS = {SDLS_SPI: SA_OWNER_OPERATOR,
+             SDLS_SPI_ROTATED: SA_OWNER_OPERATOR,
+             SDLS_SPI_PARTNER: SA_OWNER_PARTNER}
+
 assert len(SDLS_KEY) == 32, "AES-256 needs 32 octets"
 assert len(SDLS_KEY_ROTATED) == 32, "AES-256 needs 32 octets"
+assert len(SDLS_KEY_PARTNER) == 32, "AES-256 needs 32 octets"
 assert SDLS_KEY_ROTATED != SDLS_KEY, "a rotation to the same octets is not a rotation"
+assert len({SDLS_KEY, SDLS_KEY_ROTATED, SDLS_KEY_PARTNER}) == 3, "three SAs need three keys"
+assert len({SDLS_SPI, SDLS_SPI_ROTATED, SDLS_SPI_PARTNER}) == 3, "three SAs need three SPIs"
+assert SA_OWNER_OPERATOR != SA_OWNER_PARTNER, "the partner is a different party or there is no EX-S04"

@@ -130,3 +130,15 @@ pairs:
     flag: CUBERANGE_COMM_SA_DEACTIVATION
     vuln: { value: "0", build: build-comm-s03-vuln }
     hard: { value: "1", build: build-comm-s03-hard }
+
+  # EX-S04. Both halves carry all three Security Associations and the STOP_SA directive handler -
+  # SA management by telecommand is the feature, not the flaw. What differs is whether a directive
+  # is AUTHORISED: the vulnerable half retires whatever SA a valid frame names, the hardened half
+  # requires the retiring frame to share the target SA's owner. SA_DEACTIVATION is held at 0 across
+  # both halves (every SA starts operational; EX-S04 retires one on the wire), so this flag is the
+  # only CUBERANGE_* that differs.
+  - id: EX-S04
+    app: firmware/apps/comm
+    flag: CUBERANGE_COMM_SA_MGMT_AUTHORITY
+    vuln: { value: "0", build: build-comm-s04-vuln }
+    hard: { value: "1", build: build-comm-s04-hard }

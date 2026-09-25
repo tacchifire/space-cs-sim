@@ -67,4 +67,29 @@ size_t cr_sdls_iv_at(void);
 size_t cr_sdls_sn_at(size_t iv_len);
 size_t cr_sdls_pdu_at(size_t iv_len, size_t sn_len);
 
+/* SDLS Extended Procedures: the one directive this range carries, and only the layout.
+ *
+ * CCSDS 355.1-B defines Extended Procedures for managing a Security Association by command. This
+ * range implements STOP_SA and nothing else. It rides the authenticated payload of a transfer
+ * frame on the reserved control virtual channel, and COMM deactivates the named SA - so it is
+ * SA management by telecommand, which EX-S03's mitigation named as the next thing and did not
+ * build. The OUTER frame is the one sdls_oracle.c checks against CryptoLib; this inner PDU has no
+ * such oracle yet and is an honest gap named in ASSURANCE.md, cross-checked against
+ * src/cuberange/proto/sdls.py by test_c_matches_python.py.
+ *
+ *     directive(1) | target SPI(2, big-endian)
+ */
+#define CR_SDLS_DIR_STOP_SA 0x01
+#define CR_SDLS_DIR_LEN     3
+
+/* The virtual channel SDLS control directives arrive on. Mirrored from
+ * src/cuberange/identity.py (SDLS_CONTROL_VCID); test_c_matches_python.py asserts they agree. */
+#define CR_SDLS_CONTROL_VCID 7
+
+/* Parse a directive PDU. Returns 0 and fills *directive and *target_spi, or -1 if the PDU is too
+ * short to hold them. Layout only - no policy and no crypto: the caller has already verified the
+ * MAC over the frame this PDU came out of, and authorisation is the caller's decision, not this
+ * function's. */
+int cr_sdls_directive(const uint8_t *pdu, size_t len, uint8_t *directive, uint16_t *target_spi);
+
 #endif /* CUBERANGE_SDLS_H */
