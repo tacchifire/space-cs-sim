@@ -557,15 +557,36 @@ class GroundStation:
                                 source_id=self.station_id,
                                 app_data=counter.to_bytes(2, "big")))
 
+    def collect_until(self, ready, timeout: float = 20.0, poll: float = 0.1):
+        """Drain the link repeatedly until `ready()` is truthy, or the deadline passes.
+
+        Returns whatever `ready()` last returned - the event on success, its falsy value on
+        timeout - so a caller can both branch on it and read it.
+
+        THE PATIENT SIBLING OF collect(), and the reason it exists. A caller that does
+        `time.sleep(N); collect()` has guessed how long the spacecraft, the link and the host
+        socket will take and then looked exactly once. On a loaded runner the guess is short and
+        the single look finds nothing - which is not a mitigation failure, it is the frame still in
+        flight, and a test that calls it one is the gate `alive()` warns about: people re-run it
+        until it is green and stop reading what it says. This looks repeatedly and returns the
+        instant the event the caller named arrives, so a fast host is not slowed and a slow one is
+        not failed. ping(), alive() and await_refusal() already wait this way; this is the
+        primitive they were each open-coding.
+        """
+        deadline = time.time() + timeout
+        while True:
+            self.collect()
+            result = ready()
+            if result:
+                return result
+            if time.time() >= deadline:
+                return result
+            time.sleep(poll)
+
     def await_refusal(self, timeout: float = 10.0):
         """Wait for the spacecraft to say it refused something. None if it never does."""
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            self.collect()
-            if self.refusals:
-                return self.refusals[-1]
-            time.sleep(0.1)
-        return None
+        return self.collect_until(lambda: self.refusals[-1] if self.refusals else None,
+                                  timeout=timeout)
 
     def ping(self, timeout: float = 10.0):
         """Send PUS 17,1 and return the report addressed to this station, or None on timeout.

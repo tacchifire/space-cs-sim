@@ -47,6 +47,12 @@ VULN = OUT / "build-obc-d01-vuln" / "zephyr" / "zephyr.elf"
 HARD = OUT / "build-obc-d01-hard" / "zephyr" / "zephyr.elf"
 COMM = OUT / "build-comm-s01-sat0" / "zephyr" / "zephyr.elf"
 BOOT_TIMEOUT_S = float(os.environ.get("CUBERANGE_BOOT_TIMEOUT_S", "40"))
+#: How long to wait for a forged frame to cross the crosslink, be downlinked by COMM and reach the
+#: host socket. This used to be a fixed six-second sleep followed by a single collect(); on the
+#: two-vCPU CI runner that guess was sometimes short and the one look found nothing, and the test
+#: read a frame still in flight as "the operator saw nothing". It is a deadline now, not a sleep -
+#: the wait returns the instant the event arrives - so this only bounds the pathological case.
+SETTLE_TIMEOUT_S = float(os.environ.get("CUBERANGE_SETTLE_TIMEOUT_S", "25"))
 
 VICTIM, PEER = spacecraft(0), spacecraft(1)
 CSP_PORT_PUS, SPORT = 10, 20
@@ -113,7 +119,16 @@ class Range:
         p = OUT / name
         return p.read_text(errors="replace") if p.exists() else ""
 
-    def forge(self, settle: float = 6.0) -> None:
+    def forge(self, until=None, timeout: float = SETTLE_TIMEOUT_S) -> None:
+        """Inject the forged report on the crosslink, then wait until `until()` holds.
+
+        `until` is the event the caller is about to assert on - a refusal reaching the station, a
+        frame recorded as unauthenticated - because that is the only thing that proves the forged
+        frame finished its trip; a fixed sleep proves only that time passed. It defaults to COMM's
+        downlink line, the one event every forge shares, for a caller (test 5) that reads only a
+        console. If the event never arrives the wait still returns after `timeout`, and the caller's
+        own assertion then fails with the evidence attached - a real failure, not a silent one.
+        """
         sock = socket.create_connection(("127.0.0.1", crosslink_injector()), timeout=5)
         try:
             for f in encode_packet(src=PEER.comm, dst=VICTIM.comm, dport=CSP_PORT_PUS,
@@ -121,11 +136,17 @@ class Range:
                 sock.sendall(f"{f.can_id:x} {f.data.hex()}\n".encode())
         finally:
             sock.close()
-        time.sleep(settle)
-        self.station.collect()
+        if until is None:
+            until = lambda: (f"downlink 22 octets from node {PEER.comm}"
+                             in self.console("d01-sat0-comm.uart"))
+        self.station.collect_until(until, timeout=timeout)
 
-    def real_ping(self, settle: float = 6.0) -> list:
-        """An authenticated PUS 17,1 the OBC answers - both layers, because both are deployed."""
+    def real_ping(self, timeout: float = SETTLE_TIMEOUT_S) -> list:
+        """An authenticated PUS 17,1 the OBC answers - both layers, because both are deployed.
+
+        Waits for the answer to arrive rather than sleeping a fixed guess and looking once; the
+        report is accumulated across polls because each collect() returns only what that call read.
+        """
         inner = SpacePacket(apid=VICTIM.apid, ptype=PacketType.TC, sec_hdr=True, seq_count=0,
                             data=PusTc(service=17, subtype=1,
                                        source_id=GROUND_STATIONS["primary"]).encode()).encode()
@@ -133,13 +154,18 @@ class Range:
                                             key=SDLS_KEY, spi=SDLS_SPI,
                                             iv=bytes(range(0xA0, 0xAC)), seq_num=1,
                                             frame_seq=0, scid=VICTIM.scid, vcid=0))
-        time.sleep(settle)
-        return self.station.collect()
+        got: list = []
+        deadline = time.time() + timeout
+        while True:
+            got += self.station.collect()
+            if got or time.time() >= deadline:
+                return got
+            time.sleep(0.2)
 
 
 def test_a_peer_puts_a_refusal_in_the_operators_console():
     with Range(VULN, require_signed=False) as r:
-        r.forge()
+        r.forge(until=lambda: r.station.refusals)
         assert r.station.refusals, (
             "the operator saw nothing; the forged report did not reach them\n"
             + r.console("d01-sat0-comm.uart"))
@@ -154,7 +180,10 @@ def test_a_peer_puts_a_refusal_in_the_operators_console():
 
 def test_the_signed_build_and_a_requiring_station_refuse_it():
     with Range(HARD, require_signed=True) as r:
-        r.forge()
+        #: Wait on the anti-vacuous signal, not on refusals: the forged frame DOES arrive here, it
+        #: is rejected for want of a trailer. When that rejection is recorded the frame has landed,
+        #: and only then is "refusals stayed empty" a fact rather than a frame still in flight.
+        r.forge(until=lambda: r.station.unauthenticated)
         assert not r.station.refusals, (
             f"the operator still believes a forged refusal: {r.station.refusals}")
         assert r.station.unauthenticated, (
@@ -177,7 +206,7 @@ def test_the_real_reports_still_arrive_and_verify():
 def test_optional_authentication_is_no_authentication():
     """The signed build, and a station that verifies only when a trailer happens to be there."""
     with Range(HARD, require_signed=False) as r:
-        r.forge()
+        r.forge(until=lambda: r.station.refusals)
         assert r.station.refusals, (
             "this should still be fooled: the attacker attaches no trailer, and a station that "
             "does not require one has nothing to check")
