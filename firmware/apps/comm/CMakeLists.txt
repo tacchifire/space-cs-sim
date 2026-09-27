@@ -71,6 +71,16 @@ set(CUBERANGE_COMM_SA_MGMT_AUTHORITY 0 CACHE STRING
 set(CUBERANGE_COMM_SA_MGMT_REPORT 0 CACHE STRING
     "report the target and requester SPI of the last SA retirement to the OBC for the beacon")
 
+# EX-S06's only difference. Both halves keep the SA-management ring and report to the OBC
+# (SA_MGMT_REPORT held on in this pair, authority held off, so the retirements land and there is a
+# sequence to report). What differs is the transmit DEPTH: OFF, COMM sends only the last recorded
+# event - the single snapshot EX-S05 sent, which a later retirement of the same SPI overwrites and
+# reattributes; ON, COMM sends the whole log oldest-first, so a theft that a legitimate retirement
+# overwrote is still on the beacon. It rides EX-S05's report path, one field widened to a list.
+#   west build ... -- -DCUBERANGE_COMM_SA_MGMT_HISTORY=1
+set(CUBERANGE_COMM_SA_MGMT_HISTORY 0 CACHE STRING
+    "report the whole SA-management event log to the OBC, not only the last retirement")
+
 target_link_libraries(app PRIVATE csp)
 target_compile_definitions(app PRIVATE
   CUBERANGE_COMM_ANTIREPLAY=${CUBERANGE_COMM_ANTIREPLAY}
@@ -80,4 +90,5 @@ target_compile_definitions(app PRIVATE
   CUBERANGE_COMM_LINK_STATS=${CUBERANGE_COMM_LINK_STATS}
   CUBERANGE_COMM_SA_DEACTIVATION=${CUBERANGE_COMM_SA_DEACTIVATION}
   CUBERANGE_COMM_SA_MGMT_AUTHORITY=${CUBERANGE_COMM_SA_MGMT_AUTHORITY}
-  CUBERANGE_COMM_SA_MGMT_REPORT=${CUBERANGE_COMM_SA_MGMT_REPORT})
+  CUBERANGE_COMM_SA_MGMT_REPORT=${CUBERANGE_COMM_SA_MGMT_REPORT}
+  CUBERANGE_COMM_SA_MGMT_HISTORY=${CUBERANGE_COMM_SA_MGMT_HISTORY})

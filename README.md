@@ -9,7 +9,7 @@ attacks you can actually land, and mitigations proven to stop them.
 It is the space analogue of Toyota's [RAMN](https://github.com/ToyotaInfoTech/RAMN) board, which
 made automotive security learnable by putting four MCUs and a CAN bus on one PCB.
 
-**Status: twenty-one exercises, two spacecraft.** A ground station sends a real ECSS PUS 17,1 and
+**Status: twenty-two exercises, two spacecraft.** A ground station sends a real ECSS PUS 17,1 and
 gets a real 17,2 back through CCSDS framing, an emulated UART link, and CSP over CAN between
 emulated STM32H753 nodes. The exercises chain, and each one attacks a limit the previous one's
 mitigation admitted to:
@@ -120,6 +120,13 @@ mitigation admitted to:
   SA. Without it a theft and the operator's own rotation are both SPI 9 going dark and nothing else;
   with it the signed beacon names the retiring SPI, and the two come apart. A control that works has
   to be heard working — EX-G04 and EX-U03, arriving for key management.
+
+- **EX-S06** — but that name is only the *last* one, overwritten on the beacon each time. A partner
+  retires SPI 9 (a theft), then the operator retires the same SPI 9 (a routine rotation), and the
+  snapshot keeps only the last: the theft is reattributed to the operator's own key and vanishes. A
+  control that reports only the latest state is defeated by a second event — and the second event
+  can be your own routine action. The fix is a log, not a snapshot: the whole sequence, oldest
+  first, so the retirement before yours is still on the downlink.
 
 Eight attack origins are covered: the internal bus, the space link, the ADCS command envelope, the
 OBC's own command parser, the ground segment that decides what to send, a spacecraft in your

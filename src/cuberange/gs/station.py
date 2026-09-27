@@ -187,6 +187,10 @@ class GroundStation:
         #: them apart is the whole of EX-S05.
         self.sa_retired_target: int | None = None
         self.sa_retired_by: int | None = None
+        #: The SA-management events the beacon reported, in arrival order, each (retired SPI,
+        #: retiring SPI). EX-S05 carried only the last (a snapshot, still in sa_retired_* above);
+        #: EX-S06 carries the sequence, so a theft a later retirement overwrote is still readable.
+        self.sa_retire_log: list = []
 
     def _sdls_key(self) -> bytes:
         """The key this station frames with, which is not necessarily the one it signs with.
@@ -404,12 +408,18 @@ class GroundStation:
             self._link_baseline = (rx, refused)
         if len(app) >= 14:
             self.link_refused_spi = int.from_bytes(app[12:14], "big")
-        #: Eighteen octets is a spacecraft that reports WHO retired an SA (EX-S05); fourteen is one
-        #: that retires in silence, and reading four octets of nothing as an attribution would
-        #: invent a retirer for a spacecraft that named none.
+        #: Fourteen octets is a spacecraft that retires in silence; 14 + 4*k reports k SA-management
+        #: events, oldest first. EX-S05 sent one (a snapshot); EX-S06 sends the sequence. Reading
+        #: four octets of nothing as an attribution would invent a retirer for a spacecraft that
+        #: named none, so the length is the feature test - a beacon with no log entry stays at 14.
         if len(app) >= 18:
-            self.sa_retired_target = int.from_bytes(app[14:16], "big")
-            self.sa_retired_by = int.from_bytes(app[16:18], "big")
+            k = (len(app) - 14) // 4
+            log = [(int.from_bytes(app[14 + 4 * i:16 + 4 * i], "big"),
+                    int.from_bytes(app[16 + 4 * i:18 + 4 * i], "big")) for i in range(k)]
+            if log:
+                self.sa_retire_log = log
+                #: The last entry is the snapshot EX-S05 reported; keep it for readers of the pair.
+                self.sa_retired_target, self.sa_retired_by = log[-1]
 
     @staticmethod
     def _signed_step(now: int, then: int) -> int:

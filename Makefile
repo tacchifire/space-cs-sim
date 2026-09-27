@@ -235,7 +235,7 @@ verify:
 	    python3 -m pytest exercises/$(EX)/verify_*.py -v
 
 # Every exercise, both directions. This is the claim the product makes.
-verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01 firmware-u02 firmware-u03 firmware-s03 firmware-s04 firmware-s05)
+verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01 firmware-u02 firmware-u03 firmware-s03 firmware-s04 firmware-s05 firmware-s06)
 	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest exercises/*/verify_*.py -v
 
@@ -287,7 +287,7 @@ firmware-f01: firmware-p1
 # prerequisite once per invocation, so this is one pristine build of each of the seven images
 # rather than the four rounds `check` used to do.
 .PHONY: firmware-all
-firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-sdls firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01 firmware-u02 firmware-u03 firmware-s03 firmware-s04 firmware-s05
+firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-sdls firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01 firmware-u02 firmware-u03 firmware-s03 firmware-s04 firmware-s05 firmware-s06
 	@echo "all node images built:"
 	@ls -1 $(OUT)/build-*/zephyr/zephyr.elf
 
@@ -550,6 +550,36 @@ firmware-s05:
 	    -DEXTRA_DTC_OVERLAY_FILE=$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.overlay \
 	    -DEXTRA_CONF_FILE="$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.conf;$(CUBERANGE_REPO)/firmware/apps/comm/sdls.conf"
 	@ls -l $(OUT)/build-comm-s05-vuln/zephyr/zephyr.elf $(OUT)/build-comm-s05-hard/zephyr/zephyr.elf
+
+firmware-s06:
+	# EX-S06's pair. The DETECTION exercise to EX-S05's snapshot: both halves hold authority OFF
+	# (CUBERANGE_COMM_SA_MGMT_AUTHORITY=0) AND reporting ON (CUBERANGE_COMM_SA_MGMT_REPORT=1), so the
+	# retirements land and COMM records who retired which SA in a ring. What differs is the transmit
+	# DEPTH: the vulnerable half sends only the last recorded event (the single snapshot EX-S05 sent,
+	# which a later retirement of the same SPI overwrites and reattributes to the operator's own
+	# key), the hardened half sends the whole log oldest-first, so a theft a legitimate retirement
+	# overwrote is still on the beacon. It rides EX-D01's signed beacon, one field widened to a list.
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-comm-s06-vuln firmware/apps/comm -- \
+	    -DCUBERANGE_SAT_INDEX=0 \
+	    -DCUBERANGE_COMM_SDLS=1 -DCUBERANGE_COMM_CROSSLINK=1 \
+	    -DCUBERANGE_COMM_ANTIREPLAY=1 -DCUBERANGE_COMM_ANTIREPLAY_PER_VC=1 \
+	    -DCUBERANGE_COMM_LINK_STATS=1 -DCUBERANGE_COMM_SA_DEACTIVATION=0 \
+	    -DCUBERANGE_COMM_SA_MGMT_AUTHORITY=0 -DCUBERANGE_COMM_SA_MGMT_REPORT=1 \
+	    -DCUBERANGE_COMM_SA_MGMT_HISTORY=0 \
+	    -DEXTRA_DTC_OVERLAY_FILE=$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.overlay \
+	    -DEXTRA_CONF_FILE="$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.conf;$(CUBERANGE_REPO)/firmware/apps/comm/sdls.conf"
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-comm-s06-hard firmware/apps/comm -- \
+	    -DCUBERANGE_SAT_INDEX=0 \
+	    -DCUBERANGE_COMM_SDLS=1 -DCUBERANGE_COMM_CROSSLINK=1 \
+	    -DCUBERANGE_COMM_ANTIREPLAY=1 -DCUBERANGE_COMM_ANTIREPLAY_PER_VC=1 \
+	    -DCUBERANGE_COMM_LINK_STATS=1 -DCUBERANGE_COMM_SA_DEACTIVATION=0 \
+	    -DCUBERANGE_COMM_SA_MGMT_AUTHORITY=0 -DCUBERANGE_COMM_SA_MGMT_REPORT=1 \
+	    -DCUBERANGE_COMM_SA_MGMT_HISTORY=1 \
+	    -DEXTRA_DTC_OVERLAY_FILE=$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.overlay \
+	    -DEXTRA_CONF_FILE="$(CUBERANGE_REPO)/firmware/apps/comm/crosslink.conf;$(CUBERANGE_REPO)/firmware/apps/comm/sdls.conf"
+	@ls -l $(OUT)/build-comm-s06-vuln/zephyr/zephyr.elf $(OUT)/build-comm-s06-hard/zephyr/zephyr.elf
 
 firmware-l03:
 	# EX-L03's pair. Both halves are everything EX-L02 deployed - signed reports, a report store,

@@ -200,6 +200,21 @@ static void link_write(const uint8_t *buf, size_t len)
 #define CUBERANGE_COMM_SA_MGMT_REPORT 0
 #endif
 
+/* EX-S06's whole difference. EX-S05 reported WHO retired WHICH SA, but only the LAST retirement -
+ * a single snapshot, overwritten every time. OFF: the beacon carries that one snapshot, so a
+ * sequence of SA-management events collapses to its most recent, and a theft of an SA that is then
+ * retired again (a planned rotation touching the same SPI) is not merely lost but REATTRIBUTED to
+ * whoever came last. ON: COMM keeps the last SA_LOG_MAX events in arrival order and reports the
+ * whole sequence, so the operator sees the theft that a later legitimate retirement overwrote.
+ *
+ * It changes only how many of the recorded events COMM transmits; the ring is kept either way, so
+ * the two builds differ in transmit depth alone. The same single-value limit EX-S03's
+ * link_refused_spi still has, one field over. What it does NOT solve: the ring is bounded, so
+ * events older than the last SA_LOG_MAX are still lost. */
+#ifndef CUBERANGE_COMM_SA_MGMT_HISTORY
+#define CUBERANGE_COMM_SA_MGMT_HISTORY 0
+#endif
+
 struct cr_sdls_sa {
 	uint16_t spi;
 	const uint8_t *key;
@@ -230,14 +245,40 @@ static uint16_t link_refused_spi;
 #endif
 
 #if CUBERANGE_COMM_SA_MGMT_REPORT
-/* The last SA retirement, for the ground: which association was retired, and the SPI whose frame
- * ordered it. `have_sa_retire` keeps "no retirement has happened" apart from "retired by SPI 0",
- * and the beacon carries these only once it is true - the LENGTH is the feature test on the
- * ground, exactly as the link counts are. The requester SPI is what the SDLS MAC PROVED, not what
- * a header asserted, so "retired by SPI 11" is attribution rather than a claim. */
-static uint16_t sa_retired_target;
-static uint16_t sa_retired_by;
-static bool have_sa_retire;
+/* The SA-management audit log: which association was retired, and the SPI whose frame ordered it,
+ * for the last SA_LOG_MAX events in arrival order. `sa_log_count` keeps "no retirement has
+ * happened" apart from "retired by SPI 0", and the beacon carries only the entries that exist - the
+ * LENGTH is the feature test on the ground, exactly as the link counts are. The requester SPI is
+ * what the SDLS MAC PROVED, not what a header asserted, so "retired by SPI 11" is attribution
+ * rather than a claim.
+ *
+ * A ring, kept whether or not the whole of it is transmitted (that is CUBERANGE_COMM_SA_MGMT_HISTORY
+ * - see send_link_stats). EX-S05 carried only sa_log[count-1]; a single snapshot cannot show that a
+ * theft happened BEFORE the legitimate retirement that overwrote it. Drop-oldest on overflow,
+ * because the recent events are the ones an operator can still act on - and losing the older ones is
+ * the bounded-ring limit this exercise names rather than hides. */
+#define SA_LOG_MAX 4
+static uint16_t sa_log_target[SA_LOG_MAX];
+static uint16_t sa_log_by[SA_LOG_MAX];
+static int sa_log_count;
+
+static void sa_log_append(uint16_t target, uint16_t by)
+{
+	if (sa_log_count < SA_LOG_MAX) {
+		sa_log_target[sa_log_count] = target;
+		sa_log_by[sa_log_count] = by;
+		sa_log_count++;
+		return;
+	}
+	/* Full: drop the oldest and keep arrival order. SA_LOG_MAX is small and events are rare, so a
+	 * shift is clearer than circular indices and no faster path is needed. */
+	for (int i = 1; i < SA_LOG_MAX; i++) {
+		sa_log_target[i - 1] = sa_log_target[i];
+		sa_log_by[i - 1] = sa_log_by[i];
+	}
+	sa_log_target[SA_LOG_MAX - 1] = target;
+	sa_log_by[SA_LOG_MAX - 1] = by;
+}
 #endif
 
 /* Returns the index of the SA that verified the frame, or a negative reason. The reason is
@@ -351,7 +392,7 @@ static uint16_t link_frames_refused;
 static void send_link_stats(void)
 {
 #if CUBERANGE_COMM_SA_MGMT_REPORT
-	csp_packet_t *out = csp_buffer_get(10);
+	csp_packet_t *out = csp_buffer_get(6 + 4 * SA_LOG_MAX);
 #else
 	csp_packet_t *out = csp_buffer_get(6);
 #endif
@@ -371,15 +412,26 @@ static void send_link_stats(void)
 	out->data[5] = (uint8_t)link_refused_spi;
 	out->length = 6;
 #if CUBERANGE_COMM_SA_MGMT_REPORT
-	/* The attribution goes on the end, and only once a retirement has happened. Ten octets is a
-	 * radio that has reported who retired an SA; six is one that has not - the ground reads the
-	 * LENGTH, the same feature test the OBC beacon uses one layer up. */
-	if (have_sa_retire) {
-		out->data[6] = (uint8_t)(sa_retired_target >> 8);
-		out->data[7] = (uint8_t)sa_retired_target;
-		out->data[8] = (uint8_t)(sa_retired_by >> 8);
-		out->data[9] = (uint8_t)sa_retired_by;
-		out->length = 10;
+	/* The SA-management log goes on the end, and only the entries that exist. Six octets is a radio
+	 * that has retired nothing; 6 + 4*k is one that reports k events - the ground reads the LENGTH,
+	 * the same feature test the OBC beacon uses one layer up.
+	 *
+	 * CUBERANGE_COMM_SA_MGMT_HISTORY is the whole of EX-S06 and it is exactly the transmit depth:
+	 * ON sends every recorded event oldest-first; OFF sends only the last, which is byte-for-byte
+	 * the single snapshot EX-S05 sent. The ring is filled either way; the flag decides how much of
+	 * it leaves the spacecraft. */
+	if (sa_log_count > 0) {
+		int n = CUBERANGE_COMM_SA_MGMT_HISTORY ? sa_log_count : 1;
+		int first = CUBERANGE_COMM_SA_MGMT_HISTORY ? 0 : (sa_log_count - 1);
+		size_t off = 6;
+
+		for (int i = 0; i < n; i++) {
+			out->data[off++] = (uint8_t)(sa_log_target[first + i] >> 8);
+			out->data[off++] = (uint8_t)sa_log_target[first + i];
+			out->data[off++] = (uint8_t)(sa_log_by[first + i] >> 8);
+			out->data[off++] = (uint8_t)sa_log_by[first + i];
+		}
+		out->length = off;
 	}
 #endif
 
@@ -480,12 +532,10 @@ static void handle_sa_directive(int requester, const uint8_t *pdu, size_t pdu_le
 	       (unsigned int)target_spi, (unsigned int)sa_table[requester].spi,
 	       (unsigned int)sa_table[requester].owner);
 #if CUBERANGE_COMM_SA_MGMT_REPORT
-	/* Attribution for the ground. Without this the line above is the whole record and it never
-	 * leaves the spacecraft, so the operator sees only that SPI 9 stopped answering - which is
-	 * identical whether they retired it or a partner did. EX-S05. */
-	sa_retired_target = target_spi;
-	sa_retired_by = sa_table[requester].spi;
-	have_sa_retire = true;
+	/* Record the event for the ground. EX-S05 kept only the LAST retirement; EX-S06 appends to a
+	 * log so a theft that a later legitimate retirement of the same SPI overwrote is still visible.
+	 * The requester SPI is the SA whose MAC verified the directive - possession, not a claim. */
+	sa_log_append(target_spi, sa_table[requester].spi);
 #endif
 }
 #endif /* CUBERANGE_COMM_SDLS */
