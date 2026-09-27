@@ -43,6 +43,12 @@ python3 exercises/EX-S06-the-retirement-before-yours/solve.py   # at that shell'
 from there. The namespace is loopback-only (SAFE_USE.md) and created fresh per invocation, so a
 solver launched in another terminal gets `ConnectionRefusedError`.
 
+To run one command instead of getting a shell:
+
+```bash
+make exercise EX=EX-S06-the-retirement-before-yours RUN='python3 exercises/EX-S06-the-retirement-before-yours/solve.py'
+```
+
 ## What happened
 
 ```text

@@ -42,6 +42,12 @@ python3 exercises/EX-S06-the-retirement-before-yours/solve.py   # そのシェ�
 名前空間はループバックのみ（SAFE_USE.md）、呼び出しごとに新規作成されるため、別端末で起動したソルバは
 `ConnectionRefusedError` になる。
 
+シェルに入る代わりに1コマンドで実行するには：
+
+```bash
+make exercise EX=EX-S06-the-retirement-before-yours RUN='python3 exercises/EX-S06-the-retirement-before-yours/solve.py'
+```
+
 ## 何が起きたか
 
 ```text
