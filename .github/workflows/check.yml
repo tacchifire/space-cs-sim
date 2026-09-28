@@ -156,7 +156,15 @@ jobs:
     name: make check (no egress)
     needs: artifacts
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # 90, not 60, and this is measured. `make check` on the two-vCPU runner grows with the exercise
+    # count: verify-all alone is ~24 min at 22 exercises (run 66), and each new pair adds ~100 s.
+    # Run 68 (EX-S06) got PAST verify-all and pair-gate and was CANCELLED by the 60-minute limit
+    # partway through `make sdls` - three tests short of the end - so the gate step needs ~62 min
+    # plus ~9 min of setup, i.e. just over the old 60. The old value was set when the range had far
+    # fewer exercises (run 8's gate step was 838 s); it did not grow with the suite it guards. 90 is
+    # headroom for EX-S07 and the exercises after it, not a fixed ceiling to bump each time - when a
+    # future run lands within ~10 min of this, raise it again with the run number that showed why.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
