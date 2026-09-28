@@ -13,6 +13,7 @@ on that spacecraft. `ping()` requires all three to line up before it calls a rep
 from __future__ import annotations
 
 import time
+from collections import Counter
 from dataclasses import dataclass
 
 from ..proto import pus_auth
@@ -86,7 +87,7 @@ class GroundStation:
                  target_apid: int = OBC_APID, target_scid: int = SCID,
                  require_signed_tm: bytes | None = None,
                  uplink_key: bytes | None = None, sdls_spi: int | None = None,
-                 sdls_key: bytes | None = None):
+                 sdls_key: bytes | None = None, owned_spis=None):
         self.link = link
         self.station_id = station_id
         #: The key for the link-layer Security Association, when it is not the mission key.
@@ -191,6 +192,14 @@ class GroundStation:
         #: retiring SPI). EX-S05 carried only the last (a snapshot, still in sa_retired_* above);
         #: EX-S06 carries the sequence, so a theft a later retirement overwrote is still readable.
         self.sa_retire_log: list = []
+        #: Every SDLS STOP_SA directive THIS station put on the link, as (retired SPI, SPI it was
+        #: framed under), in the order sent. Recorded unconditionally - it is only what the station
+        #: did - and kept apart from `commands_sent`, because a directive is not a telecommand.
+        self.sa_directives_sent: list = []
+        #: The Security Associations this station's owner holds. None means the station does not
+        #: know which SAs are its own, so it cannot say that an entry in the spacecraft's SA log
+        #: is in its name - and `unexplained_sa_retirements` answers None, not "nothing". EX-S07.
+        self.owned_spis = frozenset(owned_spis) if owned_spis is not None else None
 
     def _sdls_key(self) -> bytes:
         """The key this station frames with, which is not necessarily the one it signs with.
@@ -312,7 +321,12 @@ class GroundStation:
         pdu = sdls.encode_sa_directive(sdls.DIR_STOP_SA if directive is None else directive,
                                        target_spi)
         seq = self._next_seq()
-        self.commands_sent += 1
+        #: NOT counted in `commands_sent`. That counter is "every telecommand this station put on
+        #: the link" and the docstring above says this is not one; the spacecraft agrees - COMM acts
+        #: on the directive and the OBC never sees it, so the command counter EX-U02 reads never
+        #: moves. Counting it here made the operator's own rotation read as unexplained_commands
+        #: = -1 (measured, EX-S07): a lost command, EX-U01's symptom, pointing at the wrong
+        #: incident. A directive goes in its own ledger instead.
         #: The IV is the per-SA sequence number, exactly as `_send` frames it - one nonce per frame
         #: under this SA, which GCM requires and which this counter is the only thing varying.
         iv = self._sdls_sn.to_bytes(sdls.IV_LEN, "big")
@@ -321,6 +335,8 @@ class GroundStation:
                                scid=self.target_scid, vcid=SDLS_CONTROL_VCID)
         self._sdls_sn += 1
         self.link.send_frame(frame)
+        if directive is None or directive == sdls.DIR_STOP_SA:
+            self.sa_directives_sent.append((target_spi, self.sdls_spi))
         return seq
 
     def collect(self) -> list:
@@ -523,6 +539,42 @@ class GroundStation:
         if self._tc_baseline is None or self.tc_rejected is None:
             return None
         return self._signed_step(self.tc_rejected, self._tc_baseline[1])
+
+    @property
+    def unexplained_sa_retirements(self) -> list | None:
+        """SA retirements the spacecraft attributes to one of THIS station's SAs that this station
+        never ordered. None if it cannot tell - it does not know which SAs are its own.
+
+        WHY THIS EXISTS. Attribution names the SA whose MAC verified a directive: the key, never the
+        hand holding it. When the log says "SPI 9 retired by SPI 10" and SPI 10 is yours, every
+        other instrument agrees it was you. Measured in EX-S07, a second station holding SPI 10's
+        key retires SPI 9: `unexplained_commands` 0 (a directive is not a telecommand and never
+        reaches the counter), `link_frames_refused` 0 (the key was real), `link_frames_received`
+        +1 (someone transmitted - but not what), and the log names you. The one record that can
+        tell your key from a copy of it is your own account of what you sent.
+
+        A multiset, in log order: each directive in `sa_directives_sent` explains one log entry
+        with the same (retired, retiring) pair, and what is left is an entry in your name that you
+        did not send. The other direction is not reported - a directive sent and not (yet) logged
+        is latency, a refusal, or the bounded log's own limit, and calling it an attack would be a
+        detector that fires on its own operator.
+
+        Only entries naming one of `owned_spis` are judged. A partner's retirement under the
+        partner's own SA is attribution EX-S05 and EX-S06 already make visible; this answers one
+        question: was a key you hold used by someone who is not you.
+        """
+        if self.owned_spis is None:
+            return None
+        unmatched = Counter(self.sa_directives_sent)
+        unexplained = []
+        for entry in self.sa_retire_log:
+            if entry[1] not in self.owned_spis:
+                continue
+            if unmatched[entry] > 0:
+                unmatched[entry] -= 1
+            else:
+                unexplained.append(entry)
+        return unexplained
 
     def _advance(self, counter: int) -> None:
         """Record this report's counter and note anything missing between it and the last.

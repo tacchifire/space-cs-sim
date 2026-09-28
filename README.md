@@ -9,7 +9,7 @@ attacks you can actually land, and mitigations proven to stop them.
 It is the space analogue of Toyota's [RAMN](https://github.com/ToyotaInfoTech/RAMN) board, which
 made automotive security learnable by putting four MCUs and a CAN bus on one PCB.
 
-**Status: twenty-two exercises, two spacecraft.** A ground station sends a real ECSS PUS 17,1 and
+**Status: twenty-three exercises, two spacecraft.** A ground station sends a real ECSS PUS 17,1 and
 gets a real 17,2 back through CCSDS framing, an emulated UART link, and CSP over CAN between
 emulated STM32H753 nodes. The exercises chain, and each one attacks a limit the previous one's
 mitigation admitted to:
@@ -127,6 +127,14 @@ mitigation admitted to:
   control that reports only the latest state is defeated by a second event — and the second event
   can be your own routine action. The fix is a log, not a snapshot: the whole sequence, oldest
   first, so the retirement before yours is still on the downlink.
+
+- **EX-S07** — but each entry names the *key* that retired the SA, not the hand holding it, so a
+  stolen copy of the operator's own key reads as the operator. Host-side, like EX-G01: the firmware
+  is EX-S06's, and the difference is whether the ground station reconciles the log against its own
+  ledger of what it sent. Every spacecraft-side instrument reads clean; only the ledger names a
+  retirement in your name you never sent. Authentication answers who *holds* a key, not who is
+  *entitled* to — and the only witness to a stolen key is your own record of what you did, on the
+  ground, off the asset.
 
 Eight attack origins are covered: the internal bus, the space link, the ADCS command envelope, the
 OBC's own command parser, the ground segment that decides what to send, a spacecraft in your

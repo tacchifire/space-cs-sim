@@ -38,7 +38,7 @@ wrong: probe.sh's 1.5x four-node speed floor, which this eight-core machine clea
 looked like the obvious thing to blame on a two-vCPU runner. The probe passes there in 110
 seconds. Blaming the host was the comfortable guess, and it was the wrong one.
 
-Twenty-two exercises work today. Eight cover an attack origin each: EX-B01 (internal bus), EX-L01
+Twenty-three exercises work today. Eight cover an attack origin each: EX-B01 (internal bus), EX-L01
 (space link), EX-A01 (ADCS command envelope), EX-F01 (the OBC's own PUS 8 parser), EX-G01 (the
 ground segment that decides what to send), EX-X01 (the crosslink, where the attacker is a
 spacecraft in your own constellation) EX-D01 (the downlink, where the target is the operator
@@ -190,7 +190,22 @@ the next thing - so an attacker who arranges to be overwritten by your own routi
 invisible to a detector that keeps only the latest. What it does not solve is the single-value limit
 one size up: the ring is bounded, so a sequence longer than it still loses its oldest.
 
-92 assertions, all measured. Three of them each end by naming a limit the next one attacks, and
+EX-S07 is the twenty-third and it is host-side, like EX-G01. EX-S06's log attributes every retirement
+to the SA whose MAC verified it - the KEY, never the hand. So an intruder holding a COPY of the
+operator's SPI 10 key retires SPI 9, and the log faithfully says "SPI 9 by SPI 10", the operator's
+own. The firmware is EX-S06's hardened build in both runs; the one difference is on the ground -
+whether the station reconciles the log against its own ledger of the directives it sent. Every
+spacecraft-side instrument reads clean (a directive is not a telecommand, so unexplained_commands is
+0; the MAC verified, so link_frames_refused is 0), and only the ledger can name a retirement in your
+name you never sent. Two lessons: authentication answers who HOLDS a key, not who is ENTITLED to, and
+the only witness to a stolen key is your own record of what you did - on the ground, off the asset,
+exactly where EX-G01 found the authority a spacecraft-side control could not supply. And it is a
+detector, not a control: EX-S04's owner check AUTHORISES a copy of the owner's key (measured), and a
+build reporting no log leaves the ledger nothing to reconcile - what it does not solve is prevention
+(key management, which no control here does) and completeness (the ledger is per-station, so a second
+holder of the key sees the gap move, EX-G03's problem one layer up).
+
+97 assertions, all measured. Three of them each end by naming a limit the next one attacks, and
 in each the fix turned out to be reading something already on the wire: a source id that was
 arriving and ignored, a virtual channel that was being stepped over, a refused request sitting in
 a local variable.
