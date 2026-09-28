@@ -54,6 +54,10 @@ BOOT_TIMEOUT_S = float(os.environ.get("CUBERANGE_BOOT_TIMEOUT_S", "40"))
 #: the wait returns the instant the event arrives - so this only bounds the pathological case.
 SETTLE_TIMEOUT_S = float(os.environ.get("CUBERANGE_SETTLE_TIMEOUT_S", "25"))
 
+#: Seconds between the CAN frames of one injected packet - see forge(). 50 ms measured; env-tunable
+#: only so a slower host can widen it, never to disable pacing (a 0 gap is the flake this fixes).
+CROSSLINK_FRAME_GAP_S = float(os.environ.get("CUBERANGE_CROSSLINK_FRAME_GAP_S", "0.05"))
+
 VICTIM, PEER = spacecraft(0), spacecraft(1)
 CSP_PORT_PUS, SPORT = 10, 20
 
@@ -129,10 +133,29 @@ class Range:
         console. If the event never arrives the wait still returns after `timeout`, and the caller's
         own assertion then fails with the evidence attached - a real failure, not a silent one.
         """
+        #: PACE THE FRAMES, and this is W64, measured. The forged PUS 1,2 report is 22 octets,
+        #: which CFP splits into FOUR CAN frames; every OTHER crosslink injection in the range
+        #: (EX-X01/S01/S02's rail-off) is 14 octets and THREE frames. The emulated STM32H7 FDCAN RX
+        #: FIFO0 is three deep (RXF0C on nucleo_h753zi.repl), so a fourth frame arriving before the
+        #: firmware's CSP thread has drained the FIFO overflows it, a fragment is lost, and libcsp's
+        #: CFP reassembly discards the WHOLE packet (CSP_DBG_CAN_ERR_FRAME_LOST) - no downlink, and
+        #: the test's collect_until waits out its whole timeout on a packet that will never arrive.
+        #: The injector is a host thread whose four socket writes land relative to the 2 ms quantum
+        #: by HOST scheduling, so this is nondeterministic even under the ci profile's serial
+        #: execution: measured on a two-vCPU-equivalent host, back-to-back writes lost the packet in
+        #: ~50% of launches (and the CI flake on run 66, EX-D01 test 5), while a 50 ms gap - far
+        #: wider than the quantum, so the FIFO never holds more than one pending frame - lost none
+        #: 16 launches. This is why the fix is pacing and not a longer wait: the frame is LOST, not
+        #: late, so W63's collect_until cannot see it. Three-frame injections never overflow and are
+        #: left alone.
         sock = socket.create_connection(("127.0.0.1", crosslink_injector()), timeout=5)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         try:
-            for f in encode_packet(src=PEER.comm, dst=VICTIM.comm, dport=CSP_PORT_PUS,
-                                   sport=SPORT, payload=forged_report()):
+            frames = list(encode_packet(src=PEER.comm, dst=VICTIM.comm, dport=CSP_PORT_PUS,
+                                        sport=SPORT, payload=forged_report()))
+            for i, f in enumerate(frames):
+                if i:
+                    time.sleep(CROSSLINK_FRAME_GAP_S)
                 sock.sendall(f"{f.can_id:x} {f.data.hex()}\n".encode())
         finally:
             sock.close()
