@@ -24,7 +24,6 @@ DIFFERENT loopback. `make exercise` in one terminal and `make channel` in anothe
 that could not see each other, which is what EX-G03 and EX-G04 told their readers to set up.
 """
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -66,21 +65,7 @@ def test_the_solver_reaches_the_range_the_way_the_readme_says():
     assert "ConnectionRefused" not in r.stdout + r.stderr, r.stdout + r.stderr
 
 
-def test_every_readme_that_names_the_two_commands_names_them_in_the_form_that_works():
-    """The instruction and the launcher have to agree, in both languages.
-
-    A README that tells the reader to open a second terminal is telling them to do the thing that
-    returns ConnectionRefusedError, and no amount of working launcher fixes that sentence.
-    """
-    offenders = []
-    for readme in sorted(REPO.glob("exercises/*/README*.md")):
-        text = readme.read_text()
-        if "make exercise" not in text or "solve.py" not in text:
-            continue
-        #: The solver must appear inside a block that also establishes it runs in the range's
-        #: shell - either the RUN= form, or after the banner's prompt.
-        if not re.search(r"RUN=|cuberange:[\w-]+\$", text):
-            offenders.append(str(readme.relative_to(REPO)))
-    assert not offenders, (
-        "these tell the reader to run the solver without saying where, and 'somewhere else' is "
-        "the one place it cannot run: " + ", ".join(offenders))
+#: The static half of this file - every README that names `make exercise` and `solve.py` says where
+#: the solver runs - is tests/pytest/test_documented_launch.py. It reads files and needs neither
+#: Renode nor firmware, but here it sat behind this module's firmware skip and ran last in
+#: `make check`, so a missing RUN= line failed CI after 52 minutes instead of in the first two.
