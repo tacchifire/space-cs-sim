@@ -38,7 +38,7 @@ wrong: probe.sh's 1.5x four-node speed floor, which this eight-core machine clea
 looked like the obvious thing to blame on a two-vCPU runner. The probe passes there in 110
 seconds. Blaming the host was the comfortable guess, and it was the wrong one.
 
-Twenty-one exercises work today. Eight cover an attack origin each: EX-B01 (internal bus), EX-L01
+Twenty-two exercises work today. Eight cover an attack origin each: EX-B01 (internal bus), EX-L01
 (space link), EX-A01 (ADCS command envelope), EX-F01 (the OBC's own PUS 8 parser), EX-G01 (the
 ground segment that decides what to send), EX-X01 (the crosslink, where the attacker is a
 spacecraft in your own constellation) EX-D01 (the downlink, where the target is the operator
@@ -179,7 +179,18 @@ requester SPI is what the SDLS MAC PROVED, not a header it asserted - so "retire
 name bound to possession. What it does not keep is a history: only the last retirement, the
 single-value limit EX-S03's refused SPI has carried since, and EX-S06's to take.
 
-88 assertions, all measured. Three of them each end by naming a limit the next one attacks, and
+EX-S06 is the twenty-second and it takes that history. EX-S05 reported WHO retired WHICH SA but only
+the LAST one, a single value overwritten each time; a partner retires SPI 9 (a theft), the operator
+then retires the same SPI 9 (a planned rotation), and the snapshot keeps only the last - the theft
+is not lost but REATTRIBUTED to the operator's own SPI 10, a benign self-rotation from the ground.
+The one flag is whether COMM sends the whole SA-management log or only its last entry; the hardened
+build carries both retirements oldest-first, so the one the rotation overwrote is still on the
+downlink. Every reporting control here reported a STATE, and a state is a snapshot overwritten by
+the next thing - so an attacker who arranges to be overwritten by your own routine action is
+invisible to a detector that keeps only the latest. What it does not solve is the single-value limit
+one size up: the ring is bounded, so a sequence longer than it still loses its oldest.
+
+92 assertions, all measured. Three of them each end by naming a limit the next one attacks, and
 in each the fix turned out to be reading something already on the wire: a source id that was
 arriving and ignored, a virtual channel that was being stepped over, a refused request sitting in
 a local variable.

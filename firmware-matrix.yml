@@ -152,3 +152,13 @@ pairs:
     flag: CUBERANGE_COMM_SA_MGMT_REPORT
     vuln: { value: "0", build: build-comm-s05-vuln }
     hard: { value: "1", build: build-comm-s05-hard }
+
+  # EX-S06. The detection exercise to EX-S05's snapshot: both halves hold authorisation OFF and
+  # SA_MGMT_REPORT ON (COMM records who retired which SA either way), so what differs is the transmit
+  # DEPTH - the vulnerable half sends only the last recorded retirement (the snapshot a later
+  # retirement of the same SPI overwrites and reattributes), the hardened half sends the whole log.
+  - id: EX-S06
+    app: firmware/apps/comm
+    flag: CUBERANGE_COMM_SA_MGMT_HISTORY
+    vuln: { value: "0", build: build-comm-s06-vuln }
+    hard: { value: "1", build: build-comm-s06-hard }

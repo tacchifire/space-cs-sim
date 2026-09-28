@@ -398,10 +398,12 @@ static size_t sign_report(uint8_t *body, size_t len)
 static csp_iface_t *can_iface;
 /* The most a housekeeping report's application data can be. Four octets of uptime, two counters
  * of telecommands, two counters from the radio, the association its last refusal named, and - once
- * the radio reports it (EX-S05) - which SA was last retired and the SPI that ordered it. The check
- * against it refuses rather than truncating, because a beacon that silently lost its last octets
- * would be a ground station reading half a counter as a whole one. */
-#define HK_APP_MAX 18
+ * the radio reports it (EX-S05) - which SA was retired and the SPI that ordered it, for up to
+ * SA_LOG_MAX events (EX-S06: 14 base + 4 per event). The check against it refuses rather than
+ * truncating, because a beacon that silently lost its last octets would be a ground station reading
+ * half a counter as a whole one. */
+#define SA_LOG_MAX 4
+#define HK_APP_MAX (14 + 4 * SA_LOG_MAX)
 
 static uint16_t tm_seq_count;
 static uint16_t tm_msg_counter;
@@ -419,14 +421,15 @@ static uint16_t link_refused;
 static uint16_t link_refused_spi;
 static bool have_link_stats;
 
-/* The last SA retirement COMM reported, and whether it has reported one. Unconditional here, like
- * the link stats: the radio decides whether to report an SA-management event (EX-S05's flag lives
- * on COMM); the computer carries whatever it is told and puts it on the beacon. `have_sa_retire`
- * keeps "no retirement reported" apart from "retired by SPI 0", and the beacon's LENGTH is the
- * feature test on the ground. */
-static uint16_t sa_retired_target;
-static uint16_t sa_retired_by;
-static bool have_sa_retire;
+/* The SA-management events COMM reported, in arrival order, and how many. Unconditional here, like
+ * the link stats: the radio decides whether and how many SA-management events to report (EX-S05's
+ * and EX-S06's flags live on COMM); the computer carries whatever it is told and puts it on the
+ * beacon. `sa_log_count` keeps "no retirement reported" apart from "retired by SPI 0", and the
+ * beacon's LENGTH is the feature test on the ground. EX-S05 reported at most one (a snapshot);
+ * EX-S06 reports up to SA_LOG_MAX so a sequence is not collapsed to its last entry. */
+static uint16_t sa_log_target[SA_LOG_MAX];
+static uint16_t sa_log_by[SA_LOG_MAX];
+static int sa_log_count;
 
 #if CUBERANGE_OBC_TC_COUNTERS
 /* How many telecommands this spacecraft has HEARD, and how many of those it refused.
@@ -1068,21 +1071,24 @@ static void send_beacon(void)
 		app[13] = (uint8_t)link_refused_spi;
 		app_len = 14;
 	}
-	/* The attribution of the last SA retirement goes on the very end, and only once the radio has
-	 * reported one. Eighteen octets is a spacecraft that can say WHO retired an SA; fourteen is
-	 * one that cannot. Padding to eighteen with zeros would tell a station "SPI 0 retired SPI 0"
-	 * about a spacecraft that reported nothing, which is the one answer worse than silence - so
-	 * the length stays the feature test, as it is for every field before it. EX-S05. */
-	if (have_sa_retire) {
+	/* The SA-management log goes on the very end, and only the events the radio has reported.
+	 * Fourteen octets is a spacecraft that cannot say WHO retired an SA; 14 + 4*k is one reporting
+	 * k events, oldest first. Padding with zeros would tell a station "SPI 0 retired SPI 0" about a
+	 * spacecraft that reported nothing, which is the one answer worse than silence - so the length
+	 * stays the feature test, as it is for every field before it. EX-S05 reported one event (a
+	 * snapshot); EX-S06 reports the sequence, so a theft a later retirement overwrote still shows. */
+	if (sa_log_count > 0) {
 		if (app_len < 14) {
 			memset(app + app_len, 0, 14 - app_len);
 			app_len = 14;
 		}
-		app[14] = (uint8_t)(sa_retired_target >> 8);
-		app[15] = (uint8_t)sa_retired_target;
-		app[16] = (uint8_t)(sa_retired_by >> 8);
-		app[17] = (uint8_t)sa_retired_by;
-		app_len = 18;
+		for (int i = 0; i < sa_log_count; i++) {
+			app[14 + 4 * i]     = (uint8_t)(sa_log_target[i] >> 8);
+			app[14 + 4 * i + 1] = (uint8_t)sa_log_target[i];
+			app[14 + 4 * i + 2] = (uint8_t)(sa_log_by[i] >> 8);
+			app[14 + 4 * i + 3] = (uint8_t)sa_log_by[i];
+		}
+		app_len = 14 + 4 * sa_log_count;
 	}
 
 	send_housekeeping(GROUND_PRIMARY_ID, app, app_len);
@@ -1169,18 +1175,25 @@ static void app_task(void *a, void *b, void *c)
 					link_refused_spi = (uint16_t)((packet->data[4] << 8)
 								      | packet->data[5]);
 					have_link_stats = true;
-					/* Four more octets when COMM reports an SA retirement (EX-S05):
-					 * the SA that was retired and the SPI that ordered it. The
-					 * length is the feature test - a radio that does not report
-					 * SA-management events sends six and these stay unset. */
-					if (packet->length >= 10) {
-						sa_retired_target =
-							(uint16_t)((packet->data[6] << 8)
-								   | packet->data[7]);
-						sa_retired_by =
-							(uint16_t)((packet->data[8] << 8)
-								   | packet->data[9]);
-						have_sa_retire = true;
+					/* Four more octets per SA-management event COMM reports: the SA
+					 * that was retired and the SPI that ordered it. The length is the
+					 * feature test - a radio that reports none sends six and the log
+					 * stays empty. EX-S05 sent at most one (a snapshot); EX-S06 sends
+					 * up to SA_LOG_MAX, oldest first, and the OBC carries whatever it is
+					 * told, clamped to what its own beacon can hold. */
+					int k = ((int)packet->length - 6) / 4;
+
+					if (k > SA_LOG_MAX) {
+						k = SA_LOG_MAX;
+					}
+					sa_log_count = k;
+					for (int i = 0; i < k; i++) {
+						sa_log_target[i] =
+							(uint16_t)((packet->data[6 + 4 * i] << 8)
+								   | packet->data[7 + 4 * i]);
+						sa_log_by[i] =
+							(uint16_t)((packet->data[8 + 4 * i] << 8)
+								   | packet->data[9 + 4 * i]);
 					}
 				} else {
 					printk("OBC: ignoring link statistics from node %u\n",
