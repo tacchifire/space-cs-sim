@@ -11,3 +11,4 @@
 pytest
 spacepackets
 crcmod
+-r requirements-flatsat.txt

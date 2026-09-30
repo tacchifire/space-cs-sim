@@ -246,6 +246,8 @@ make demo-p0
 two other Renode workloads on the machine. Check the load before reading a slow probe as a
 regression.
 
+For USB inventory and diagnostics on an owner-operated FlatSat RP2040 teaching board, see [docs/flatsat.md](docs/flatsat.md).
+
 ## How it fits together
 
 ```
@@ -314,7 +316,7 @@ must stay that way.
 
 | Document | What it settles |
 | --- | --- |
-| [SAFE_USE.md](SAFE_USE.md) | Everything attacked here is emulated. Do not point it at anything real, and do not add real identifiers |
+| [SAFE_USE.md](SAFE_USE.md) | Exercise targets stay emulated; owned-board USB diagnostics have a separate, limited scope |
 | [SECURITY.md](SECURITY.md) | Which weaknesses are deliberate, which are worth reporting, and how |
 | [ASSURANCE.md](ASSURANCE.md) | What a result here does and does not support as a claim — read this before citing one |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | The evidence rule, and what an exercise must prove |

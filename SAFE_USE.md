@@ -18,6 +18,10 @@ Everything CubeRange attacks is synthetic and runs on your own machine:
 
 Nothing here is calibrated against, derived from, or tested on a real spacecraft.
 
+The optional [FlatSat USB diagnostics](docs/flatsat.md) can inspect an owner-operated teaching board separately from the exercises.
+They support USB inventory, receive-only recording, and the local shell queries `fw_version`, `status`, `sensors`, and `help`.
+PING is an offline preview; the tool does not transmit radio packets, flash firmware, or attach the exercises to hardware.
+
 ## Rules
 
 **Do not point this at anything real.** Not a real ground station, not a real satellite, not a real
@@ -28,6 +32,7 @@ be dangerous in the wrong place.
 **Do not add real material.** No real APIDs, spacecraft IDs, frequencies, TLEs, key material, or
 endpoint addresses, in code, in test data, or in an exercise. If an exercise needs to look
 realistic, invent something and say in its README that it is invented.
+The separate FlatSat adapter identifies the teaching board by its USB descriptors and records the published board packet profile for offline inspection.
 
 **Do not make it reach the network.** The only outbound traffic in the whole project is fetching
 pinned build artifacts, and that happens in a separate step from running anything. An exercise that

@@ -41,10 +41,23 @@ APP_CSP_PING := firmware/apps/csp_ping
 # them once. Running any target directly still rebuilds, which is the safe default.
 FWDEP = $(if $(NOFW),,$(1))
 
+FLATSAT_PYTHON ?= python3
+
 .PHONY: help out syllabus gs channel ground-stations fleet probe firmware demo spike clean toolchain
+.PHONY: flatsat-devices flatsat-info flatsat-monitor flatsat-watch flatsat-summary flatsat-report flatsat-compare flatsat-ping flatsat-check
+.PHONY: flatsat-alerts
 
 help:
 	@echo "make out        - print this checkout's build directory ($(OUT))"
+	@echo "make flatsat-devices - list the Electronic Cats FlatSat USB interfaces"
+	@echo "make flatsat-info - query firmware, local status and sensors over Cat-Shell"
+	@echo "make flatsat-monitor - receive USB bytes for 10s (FLATSAT_ARGS customizes the capture)"
+	@echo "make flatsat-watch - poll local sensors for 10s (FLATSAT_ARGS customizes the capture)"
+	@echo "make flatsat-summary - aggregate a capture (FLATSAT_ARGS supplies its path)"
+	@echo "make flatsat-report - graph a capture offline (FLATSAT_ARGS supplies its path)"
+	@echo "make flatsat-compare - compare two captures (FLATSAT_ARGS supplies both paths)"
+	@echo "make flatsat-alerts - replay a capture against sensor limits offline"
+	@echo "make flatsat-ping - preview a PING packet; sends no bytes"
 	@echo "make syllabus   - the order the exercises are meant to be taken in"
 	@echo "make ground-stations - two ground station nodes, one spacecraft, one channel"
 	@echo "make fleet SATS=4 - every spacecraft the addressing allows, 16 nodes"
@@ -63,6 +76,38 @@ help:
 # any path.
 out:
 	@echo $(OUT)
+
+# USB diagnostics are independent of Renode and its network namespace.
+# These commands never route the simulator's exercise traffic to hardware.
+flatsat-devices:
+	$(FLATSAT_PYTHON) tools/flatsat.py devices $(FLATSAT_ARGS)
+
+flatsat-info:
+	$(FLATSAT_PYTHON) tools/flatsat.py info $(FLATSAT_ARGS)
+
+flatsat-monitor:
+	$(FLATSAT_PYTHON) tools/flatsat.py monitor $(FLATSAT_ARGS)
+
+flatsat-watch:
+	$(FLATSAT_PYTHON) tools/flatsat.py watch $(FLATSAT_ARGS)
+
+flatsat-summary:
+	$(FLATSAT_PYTHON) tools/flatsat.py summary $(FLATSAT_ARGS)
+
+flatsat-report:
+	$(FLATSAT_PYTHON) tools/flatsat.py report $(FLATSAT_ARGS)
+
+flatsat-compare:
+	$(FLATSAT_PYTHON) tools/flatsat.py compare $(FLATSAT_ARGS)
+
+flatsat-alerts:
+	$(FLATSAT_PYTHON) tools/flatsat.py alerts $(FLATSAT_ARGS)
+
+flatsat-ping:
+	$(FLATSAT_PYTHON) tools/flatsat.py ping --dry-run $(FLATSAT_ARGS)
+
+flatsat-check:
+	PYTHONPATH=src $(FLATSAT_PYTHON) -m pytest tests/pytest/test_flatsat*.py -q
 
 # The order the exercises were written to be taken in, derived from their own front matter
 # rather than written out beside them. Six correct prerequisite edges existed for weeks and
