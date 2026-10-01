@@ -4,6 +4,7 @@
 
 `tools/flatsat.py` は、所有者が操作する教材用の Electronic Cats FlatSat v1.0 RP2040 に対して、USB の一覧表示、受信記録、ローカルシェルへの照会、センサ値の連続記録を行う。
 Renode の演習とは別に動作し、演習用の STM32 ファームウェアは RP2040 に移植していない。
+ブラウザーで基板の照会、計測記録の管理、演習一覧の参照を行うには、`make flatsat-web` で[ローカルWebコンソール](flatsat-web.ja.md)を起動する。
 
 ## 対応する USB 構成
 
