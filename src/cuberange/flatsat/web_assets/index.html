@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>CubeRange Console</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#connection" aria-label="CubeRange Console 接続画面">
+        <span class="brand-mark" aria-hidden="true">C<span></span></span>
+        <span>CubeRange<span class="brand-sub">CONSOLE</span></span>
+      </a>
+      <span class="sidebar-label">WORKSPACE</span>
+      <nav class="navigation" aria-label="メインメニュー">
+        <button type="button" data-view="connection" aria-current="page"><span class="nav-symbol" aria-hidden="true">◉</span>接続<span class="nav-index">01</span></button>
+        <button type="button" data-view="measurement"><span class="nav-symbol" aria-hidden="true">∿</span>計測<span class="nav-index">02</span></button>
+        <button type="button" data-view="captures"><span class="nav-symbol" aria-hidden="true">▤</span>保存ログ<span class="nav-index">03</span></button>
+        <button type="button" data-view="exercises"><span class="nav-symbol" aria-hidden="true">◇</span>演習<span class="nav-index">04</span></button>
+      </nav>
+      <div class="sidebar-footer"><span class="local-indicator" aria-hidden="true"></span><span>ローカルコンソール<small>space-cs-sim</small></span></div>
+    </aside>
+    <main class="workspace">
+      <header class="page-header">
+        <div><p class="eyebrow">FLATSAT · RP2040</p><h1 id="page-title">接続</h1><p class="page-subtitle" id="page-subtitle">接続したボードとポートの状態を確認します。</p></div>
+        <div class="server-status"><span class="status-dot" id="server-dot" aria-hidden="true"></span><span id="server-status">接続を確認中</span></div>
+      </header>
+      <div class="banner error-banner" id="connection-error" role="status" hidden></div>
+      <div class="status-strip" aria-label="現在の状態">
+        <div><span class="strip-label">ボード</span><strong id="board-count">—</strong></div>
+        <div><span class="strip-label">USB 操作</span><strong id="operation-status">確認中</strong></div>
+        <div><span class="strip-label">保存ログ</span><strong id="capture-count">—</strong></div>
+        <div class="strip-update"><span class="strip-label">更新</span><strong id="last-updated">—</strong></div>
+      </div>
+
+      <section class="view" id="view-connection" aria-labelledby="connection-heading">
+        <div class="section-heading"><h2 id="connection-heading">接続デバイス</h2><button type="button" class="button button-subtle" id="refresh-devices">再確認 <span aria-hidden="true">↻</span></button></div>
+        <div id="devices-list" class="devices-list"><div class="card empty-state"><span class="empty-symbol" aria-hidden="true">◉</span><h3>接続を確認しています</h3><p>USB デバイスの情報を読み出しています。</p></div></div>
+        <div class="connection-grid">
+          <article class="card">
+            <div class="card-heading"><div><p class="eyebrow">DEVICE QUERY</p><h2>ボード情報</h2></div><span class="badge badge-neutral">Cat-Shell</span></div>
+            <p class="muted">ファームウェア、状態、センサー値をまとめて取得します。</p>
+            <form id="info-form" class="compact-form">
+              <label for="info-board">対象ボード</label><select id="info-board" name="serial" class="board-selector" required><option value="">接続ボードがありません</option></select>
+              <button type="submit" class="button button-primary usb-action" id="info-button">情報を取得 <span aria-hidden="true">→</span></button>
+            </form>
+            <div id="info-result" class="query-results" hidden></div>
+          </article>
+          <article class="card">
+            <div class="card-heading"><div><p class="eyebrow">ACTIVITY</p><h2>現在の操作</h2></div><span id="job-badge" class="badge badge-neutral">待機中</span></div>
+            <div id="active-job" class="job-empty"><p class="muted">実行中の操作はありません。</p><p>計測画面からセンサーの連続記録を始められます。</p><button type="button" class="text-button" data-view="measurement">計測画面へ <span aria-hidden="true">→</span></button></div>
+          </article>
+        </div>
+        <article class="card activity-card"><div class="card-heading"><h2>最近の操作</h2><span class="caption">このコンソールでの実行履歴</span></div><div id="job-history" class="empty-inline">まだ操作履歴はありません。</div></article>
+      </section>
+
+      <section class="view" id="view-measurement" aria-labelledby="measurement-heading" hidden>
+        <div class="measurement-grid">
+          <article class="card">
+            <div class="card-heading"><div><p class="eyebrow">SENSOR CAPTURE</p><h2 id="measurement-heading">センサーを記録</h2></div><span class="badge badge-neutral">USB</span></div>
+            <p class="muted">温度・気圧・湿度・加速度を読み出し、ログに保存します。</p>
+            <form id="watch-form">
+              <div class="field"><label for="watch-board">対象ボード</label><select id="watch-board" class="board-selector" required><option value="">接続ボードがありません</option></select></div>
+              <div class="form-row"><div class="field"><label for="watch-duration">計測時間 <span class="label-unit">秒</span></label><input id="watch-duration" type="number" min="0.2" max="60" step="0.1" value="10" required><small>最大 60 秒</small></div><div class="field"><label for="watch-interval">取得間隔 <span class="label-unit">秒</span></label><input id="watch-interval" type="number" min="0.02" max="60" step="0.01" value="1" required><small>ホストからの問い合わせ間隔</small></div></div>
+              <div class="field"><label for="watch-label">実験名 <span class="optional">任意</span></label><input id="watch-label" maxlength="120" placeholder="例：机上・静止状態"></div>
+              <div class="field"><label for="watch-note">メモ <span class="optional">任意</span></label><textarea id="watch-note" maxlength="1000" rows="2" placeholder="姿勢や周囲の条件など"></textarea></div>
+              <div class="limits-heading"><h3>しきい値 <span class="optional">任意</span></h3><button class="text-button" type="button" id="add-limit">＋ 追加</button></div>
+              <p class="field-help">下限・上限のどちらか一方から設定できます。</p>
+              <div id="limit-fields" class="limit-fields"></div>
+              <div class="form-error" id="watch-error" role="alert" hidden></div>
+              <button type="submit" class="button button-primary button-full usb-action" id="watch-button">計測を開始 <span aria-hidden="true">→</span></button>
+              <p class="form-footnote">開始すると計測終了まで USB 操作を受け付けません。</p>
+            </form>
+          </article>
+          <div class="measurement-side">
+            <article class="card"><div class="card-heading"><div><p class="eyebrow">LIVE STATUS</p><h2>計測の進行</h2></div></div><div id="measurement-job" class="empty-inline">開始すると進行状況を表示します。</div></article>
+            <article class="card receive-card">
+              <div class="card-heading"><div><p class="eyebrow">RECEIVE ONLY</p><h2>ポートの受信を記録</h2></div></div>
+              <p class="muted">選んだポートに届くデータを保存します。データが届かない場合も、その結果を記録します。</p>
+              <form id="monitor-form">
+                <div class="field"><label for="monitor-board">対象ボード</label><select id="monitor-board" class="board-selector" required><option value="">接続ボードがありません</option></select></div>
+                <div class="form-row"><div class="field"><label for="monitor-port">受信ポート</label><select id="monitor-port"><option value="all">すべての認識済みポート</option><option value="shell">Cat-Shell</option><option value="radio0">Cat-Radio0</option><option value="radio1">Cat-Radio1</option></select></div><div class="field"><label for="monitor-duration">記録時間 <span class="label-unit">秒</span></label><input id="monitor-duration" type="number" min="0.2" max="60" step="0.1" value="10" required></div></div>
+                <div class="form-error" id="monitor-error" role="alert" hidden></div>
+                <button type="submit" class="button button-secondary usb-action" id="monitor-button">受信記録を開始</button>
+              </form>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-captures" aria-labelledby="captures-heading" hidden>
+        <div class="section-heading"><div><h2 id="captures-heading">実験ログ</h2><p class="muted section-description">保存した記録を選んで、計測結果を確認します。</p></div><label class="button button-secondary file-button" for="capture-import">JSONL を取り込む<input id="capture-import" type="file" accept=".jsonl,application/json,application/x-ndjson"></label></div>
+        <div class="form-error" id="import-error" role="alert" hidden></div>
+        <div class="captures-grid"><aside class="capture-browser card" aria-label="保存ログの一覧"><div id="capture-list" class="capture-list"><div class="empty-inline">保存ログがありません。</div></div></aside><article class="card capture-detail" id="capture-detail"><div class="empty-state"><span class="empty-symbol" aria-hidden="true">▤</span><h3>記録を選択</h3><p>ログを選ぶと、グラフ・統計・しきい値イベントを表示します。<br>過去の JSONL ファイルも取り込めます。</p></div></article></div>
+      </section>
+
+      <section class="view" id="view-exercises" aria-labelledby="exercises-heading" hidden>
+        <div class="section-heading"><div><h2 id="exercises-heading">シミュレーション演習</h2><p class="muted section-description">space-cs-sim に用意された演習と、実行コマンドを確認できます。</p></div><span class="badge badge-neutral">Renode</span></div>
+        <div id="exercises-list" class="exercises-grid"><div class="card empty-inline">演習一覧を読み込んでいます。</div></div>
+      </section>
+      <footer class="workspace-footer"><span>CubeRange Console</span><span>USB 計測と保存ログの確認</span></footer>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

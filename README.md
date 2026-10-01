@@ -247,6 +247,7 @@ two other Renode workloads on the machine. Check the load before reading a slow 
 regression.
 
 For USB inventory and diagnostics on an owner-operated FlatSat RP2040 teaching board, see [docs/flatsat.md](docs/flatsat.md).
+Run `make flatsat-web` for the [local web console](docs/flatsat-web.md), which manages board queries and recordings and presents the exercise catalog.
 
 ## How it fits together
 

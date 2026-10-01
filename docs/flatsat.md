@@ -4,6 +4,7 @@
 
 `tools/flatsat.py` provides USB inventory, receive-only recording, local shell queries, and continuous sensor capture for an owner-operated Electronic Cats FlatSat v1.0 RP2040 teaching board.
 It runs separately from the Renode exercises; their STM32 firmware is not ported to the RP2040.
+For a browser interface to board queries, recordings and the exercise catalog, start the [local web console](flatsat-web.md) with `make flatsat-web`.
 
 ## Supported USB profile
 

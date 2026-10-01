@@ -169,6 +169,7 @@ make demo-p0
 プローブが遅いことを退行と読む前に、まず負荷を確認してほしい。
 
 所有者が操作する教材用の FlatSat RP2040 の USB 認識と診断は、[docs/flatsat.ja.md](docs/flatsat.ja.md) を参照する。
+`make flatsat-web` で[ローカルWebコンソール](docs/flatsat-web.ja.md)を起動し、基板の照会、計測記録の管理、演習一覧の参照を行える。
 
 ## 全体の組み立て
 

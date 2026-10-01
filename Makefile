@@ -45,7 +45,7 @@ FLATSAT_PYTHON ?= python3
 
 .PHONY: help out syllabus gs channel ground-stations fleet probe firmware demo spike clean toolchain
 .PHONY: flatsat-devices flatsat-info flatsat-monitor flatsat-watch flatsat-summary flatsat-report flatsat-compare flatsat-ping flatsat-check
-.PHONY: flatsat-alerts
+.PHONY: flatsat-alerts flatsat-web
 
 help:
 	@echo "make out        - print this checkout's build directory ($(OUT))"
@@ -57,6 +57,7 @@ help:
 	@echo "make flatsat-report - graph a capture offline (FLATSAT_ARGS supplies its path)"
 	@echo "make flatsat-compare - compare two captures (FLATSAT_ARGS supplies both paths)"
 	@echo "make flatsat-alerts - replay a capture against sensor limits offline"
+	@echo "make flatsat-web - start the local board, capture and exercise web console"
 	@echo "make flatsat-ping - preview a PING packet; sends no bytes"
 	@echo "make syllabus   - the order the exercises are meant to be taken in"
 	@echo "make ground-stations - two ground station nodes, one spacecraft, one channel"
@@ -102,6 +103,9 @@ flatsat-compare:
 
 flatsat-alerts:
 	$(FLATSAT_PYTHON) tools/flatsat.py alerts $(FLATSAT_ARGS)
+
+flatsat-web:
+	$(FLATSAT_PYTHON) tools/flatsat.py serve $(FLATSAT_ARGS)
 
 flatsat-ping:
 	$(FLATSAT_PYTHON) tools/flatsat.py ping --dry-run $(FLATSAT_ARGS)

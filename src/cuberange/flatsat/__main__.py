@@ -27,6 +27,13 @@ def positive_seconds(value: str) -> float:
     return number
 
 
+def web_port(value: str) -> int:
+    number = int(value)
+    if not 0 <= number <= 65535:
+        raise argparse.ArgumentTypeError("port must be between 0 and 65535")
+    return number
+
+
 def _limit_argument(value: str):
     try:
         return parse_limit(value)
@@ -364,6 +371,11 @@ def parser() -> argparse.ArgumentParser:
     subs = result.add_subparsers(dest="command", required=True)
     devices = subs.add_parser("devices", help="list USB descriptors without opening ports")
     devices.add_argument("--json", action="store_true")
+    serve = subs.add_parser("serve", help="open the local FlatSat management web app")
+    serve.add_argument("--port", type=web_port, default=8765,
+                       help="loopback HTTP port; 0 chooses an available port")
+    serve.add_argument("--data-dir", type=Path,
+                       help="capture storage directory; defaults to XDG_DATA_HOME/cuberange/flatsat/web")
     for name in ("monitor", "info", "watch"):
         cmd = subs.add_parser(name, help={"monitor": "receive USB bytes",
                               "info": "query local shell info", "watch": "poll local sensors"}[name])
@@ -417,6 +429,9 @@ def parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     args = parser().parse_args(argv)
     try:
+        if args.command == "serve":
+            from .web import serve
+            return serve(port=args.port, data_dir=args.data_dir)
         if args.command == "ping":
             if not args.dry_run:
                 raise FlatSatError(
