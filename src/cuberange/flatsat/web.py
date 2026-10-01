@@ -1,6 +1,7 @@
 """Local FlatSat experiment console; USB access stays in the bounded adapter.
 
-The server binds only 127.0.0.1. Its authenticated mutation API accepts typed
+The server binds to loopback by default or an explicitly chosen Tailscale IPv4
+address. Its mutation API requires a per-server token and accepts typed
 operations, never shell commands, arbitrary port paths, or host file paths.
 """
 from __future__ import annotations
@@ -8,6 +9,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import ipaddress
 import json
 import math
 import os
@@ -30,12 +32,26 @@ MAX_CAPTURE = 32 * 1024 * 1024
 _ID = re.compile(r"[0-9a-f]{32}\Z")
 _USB_LOCK = threading.Lock()
 _ASSETS = Path(__file__).parent / "web_assets"
+_TAILNET = ipaddress.IPv4Network("100.64.0.0/10")
 
 
 class RequestError(ValueError):
     def __init__(self, message: str, status: int = 400):
         super().__init__(message)
         self.status = status
+
+
+def validate_host(value: str) -> str:
+    """Accept one explicit loopback or Tailscale IPv4 interface address."""
+    if not isinstance(value, str):
+        raise ValueError("host must be a literal IPv4 address: 127.0.0.1 or 100.64.0.0/10")
+    try:
+        address = ipaddress.IPv4Address(value)
+    except ipaddress.AddressValueError as exc:
+        raise ValueError("host must be a literal IPv4 address: 127.0.0.1 or 100.64.0.0/10") from exc
+    if value != "127.0.0.1" and address not in _TAILNET:
+        raise ValueError("host must be 127.0.0.1 or a Tailscale IPv4 address in 100.64.0.0/10")
+    return str(address)
 
 
 def default_data_dir() -> Path:
@@ -167,7 +183,8 @@ class FlatSatServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, port: int, data_dir: Path, adapter=None):
+    def __init__(self, port: int, data_dir: Path, adapter=None, *, host: str = "127.0.0.1"):
+        self.host = validate_host(host)
         self.data_dir = Path(data_dir).expanduser().resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.adapter = adapter if adapter is not None else USBAdapter()
@@ -177,8 +194,11 @@ class FlatSatServer(ThreadingHTTPServer):
         self.worker: threading.Thread | None = None
         self.closing = False
         self.capture_cache: dict[str, tuple[int, int, dict]] = {}
-        super().__init__(("127.0.0.1", port), Handler)
-        self.authority = f"127.0.0.1:{self.server_address[1]}"
+        try:
+            super().__init__((self.host, port), Handler)
+        except OSError as exc:
+            raise OSError(exc.errno, f"Cannot bind FlatSat web console to {self.host}:{port}: {exc.strerror}") from exc
+        self.authority = f"{self.host}:{self.server_address[1]}"
         self.url = f"http://{self.authority}/"
 
     def assert_capture_ready(self, capture_id: str) -> None:
@@ -406,9 +426,14 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _guard(self, *, mutation: bool = False) -> None:
+        if ipaddress.IPv4Address(self.server.host) in _TAILNET:
+            try:
+                validate_host(self.client_address[0])
+            except (ValueError, TypeError, IndexError) as exc:
+                raise RequestError("Peer must use a Tailscale IPv4 or local loopback address", 403) from exc
         hosts = self.headers.get_all("Host", [])
         if hosts != [self.server.authority]:
-            raise RequestError("Host must match this local server", 403)
+            raise RequestError("Host must match the configured server address", 403)
         origins = self.headers.get_all("Origin", [])
         if origins and origins != [f"http://{self.server.authority}"]:
             raise RequestError("Cross-origin requests are not allowed", 403)
@@ -551,14 +576,15 @@ class Handler(BaseHTTPRequestHandler):
         self._json(405, {"error": "CORS is not enabled"})
 
 
-def make_server(*, port: int = 0, data_dir: Path | None = None, adapter=None) -> FlatSatServer:
+def make_server(*, host: str = "127.0.0.1", port: int = 0,
+                data_dir: Path | None = None, adapter=None) -> FlatSatServer:
     if isinstance(port, bool) or not isinstance(port, int) or not 0 <= port <= 65535:
         raise ValueError("port must be an integer between 0 and 65535")
-    return FlatSatServer(port, data_dir if data_dir is not None else default_data_dir(), adapter)
+    return FlatSatServer(port, data_dir if data_dir is not None else default_data_dir(), adapter, host=host)
 
 
-def serve(*, port: int = 8765, data_dir: Path | None = None) -> int:
-    server = make_server(port=port, data_dir=data_dir)
+def serve(*, host: str = "127.0.0.1", port: int = 8765, data_dir: Path | None = None) -> int:
+    server = make_server(host=host, port=port, data_dir=data_dir)
     print(f"FlatSat web console: {server.url}", flush=True)
     print(f"Recording directory: {server.data_dir}", flush=True)
     try:

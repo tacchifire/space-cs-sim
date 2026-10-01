@@ -17,6 +17,15 @@ make flatsat-web
 ```
 
 The default URL is `http://127.0.0.1:8765/`.
+To access the console from another device in the same Tailscale network, bind to this host's Tailscale IPv4 address.
+
+```bash
+python3 tools/flatsat.py serve --host "$(tailscale ip -4)"
+```
+
+Open the printed URL from a device allowed to reach this host by the tailnet's access rules.
+Tailscale access rules control who can use the console; a device allowed to reach this address can read recordings and start the supported USB jobs.
+The HTTP session token protects against cross-origin requests.
 If the port is occupied, use `--port 0` to choose an available port.
 By default, recordings are stored under `$XDG_DATA_HOME/cuberange/flatsat/web`, or `~/.local/share/cuberange/flatsat/web` if that variable is unset.
 Choose a different directory with `--data-dir`.
@@ -62,7 +71,9 @@ The console does not mark an exercise as passed or start it when its page is vie
 
 ## Local access and validation
 
-The HTTP listener binds only to `127.0.0.1`.
+The HTTP listener binds to `127.0.0.1` by default, or to the Tailscale IPv4 address selected with `--host`.
+The allowed addresses are the literal `127.0.0.1` and IPv4 addresses in `100.64.0.0/10`; wildcard, LAN and hostname bindings are rejected.
+For a Tailscale listener, the socket peer must also be `127.0.0.1` or in `100.64.0.0/10`; forwarding headers do not replace this check.
 The server checks Host and Origin headers and requires its per-server token on requests that start jobs or import recordings.
 Static assets are bundled in the repository; the console loads no CDN scripts, fonts or remote services.
 Its USB operations are the existing shell queries and receive recording; it provides no RF transmit, firmware flashing or arbitrary command execution endpoint.

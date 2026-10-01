@@ -34,6 +34,14 @@ def web_port(value: str) -> int:
     return number
 
 
+def web_host(value: str) -> str:
+    from .web import validate_host
+    try:
+        return validate_host(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
 def _limit_argument(value: str):
     try:
         return parse_limit(value)
@@ -372,8 +380,10 @@ def parser() -> argparse.ArgumentParser:
     devices = subs.add_parser("devices", help="list USB descriptors without opening ports")
     devices.add_argument("--json", action="store_true")
     serve = subs.add_parser("serve", help="open the local FlatSat management web app")
+    serve.add_argument("--host", type=web_host, default="127.0.0.1",
+                       help="bind to loopback or a Tailscale IPv4 address (100.64.0.0/10)")
     serve.add_argument("--port", type=web_port, default=8765,
-                       help="loopback HTTP port; 0 chooses an available port")
+                       help="HTTP port; 0 chooses an available port")
     serve.add_argument("--data-dir", type=Path,
                        help="capture storage directory; defaults to XDG_DATA_HOME/cuberange/flatsat/web")
     for name in ("monitor", "info", "watch"):
@@ -431,7 +441,7 @@ def main(argv=None) -> int:
     try:
         if args.command == "serve":
             from .web import serve
-            return serve(port=args.port, data_dir=args.data_dir)
+            return serve(host=args.host, port=args.port, data_dir=args.data_dir)
         if args.command == "ping":
             if not args.dry_run:
                 raise FlatSatError(
