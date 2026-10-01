@@ -20,8 +20,14 @@
   const transitions = {triggered: "範囲外", recovered: "回復", unavailable: "欠測", resumed: "取得再開"};
   let state = null, online = false, pending = false, pendingJob = false, view = "connection", selectedCapture = null;
   let metrics = metricDefaults, loadedCapture = null, currentMetric = "temperature_c";
-  let timer = null, controller = null, toastTimer = null, captureRequest = 0, ownJob = null, stopped = false;
+  let timer = null, controller = null, toastTimer = null, captureRequest = 0, ownJob = null, stopped = false, chartResizeFrame = 0;
   let devicesSignature = "", capturesSignature = "", exercisesLoaded = false;
+  const selectionKey = "cuberange.flatsat.capture";
+  let storedSelection = null, selectionRestored = false;
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(selectionKey));
+    if (/^[0-9a-f]{32}$/.test(saved?.id || "")) storedSelection = saved;
+  } catch (_) { /* Storage can be unavailable in a private browser session. */ }
   const knownJobs = new Map();
 
   function el(tag, className, text) {
@@ -59,6 +65,7 @@
   }
   function switchView(next, updateHash = true) {
     if (!Object.hasOwn(views, next)) next = "connection";
+    const changed = view !== next;
     view = next;
     for (const key of Object.keys(views)) $("view-" + key).hidden = key !== next;
     for (const button of document.querySelectorAll(".navigation [data-view]")) {
@@ -69,6 +76,24 @@
     $("page-subtitle").textContent = views[next][1];
     if (updateHash && location.hash !== "#" + next) history.replaceState(null, "", "#" + next);
     if (next === "exercises" && !exercisesLoaded) loadExercises();
+    if (next === "captures") {
+      restoreSelection();
+      if (loadedCapture?.samples?.length && $("capture-chart")) renderMetric(loadedCapture);
+    }
+    if (changed && window.matchMedia("(max-width: 650px)").matches) window.scrollTo({top: 0, behavior: "auto"});
+  }
+
+  function saveSelection() {
+    try { sessionStorage.setItem(selectionKey, JSON.stringify({id: selectedCapture, metric: currentMetric})); }
+    catch (_) { /* The console remains usable without session storage. */ }
+  }
+  function restoreSelection() {
+    if (selectionRestored || !state || view !== "captures") return;
+    selectionRestored = true;
+    if (storedSelection && state.captures.some((capture) => capture.id === storedSelection.id)) {
+      if (Object.hasOwn(metrics, storedSelection.metric)) currentMetric = storedSelection.metric;
+      selectCapture(storedSelection.id);
+    }
   }
 
   async function api(path, body) {
@@ -258,6 +283,15 @@
     const signature = JSON.stringify([captures, selectedCapture]);
     if (signature === capturesSignature) return;
     capturesSignature = signature;
+    const picker = $("capture-picker");
+    if (picker) {
+      const placeholder = new Option(captures.length ? "ログを選択してください" : "保存ログがありません", "");
+      placeholder.disabled = captures.length > 0;
+      picker.replaceChildren(placeholder);
+      for (const capture of captures) picker.append(new Option(`${capture.label || modes[capture.mode] || "名称未設定"} · ${time(capture.time_utc)} · #${capture.id.slice(0, 6)}`, capture.id));
+      picker.value = captures.some((capture) => capture.id === selectedCapture) ? selectedCapture : "";
+      picker.disabled = !captures.length;
+    }
     const list = $("capture-list"); list.replaceChildren();
     if (!captures.length) list.append(el("div", "empty-inline", "保存ログがありません。計測を開始するか、過去の JSONL を取り込んでください。"));
     for (const capture of captures) {
@@ -270,7 +304,9 @@
     }
   }
   async function selectCapture(id) {
+    selectionRestored = true;
     selectedCapture = id; renderCaptureList();
+    saveSelection();
     const request = ++captureRequest;
     $("capture-detail").replaceChildren(el("div", "empty-state", "ログを読み込んでいます…"));
     try {
@@ -327,12 +363,12 @@
       stats.append(summaryStat("サンプル", number(summary.sample_count, 0), "件"), summaryStat("有効", number(summary.valid_count, 0), "件"), summaryStat("欠測・不正", number(summary.failed_count, 0), "件"), summaryStat("取得頻度（ホスト）", number(summary.timing?.effective_hz, 1), "Hz")); container.append(stats);
       const graphHeading = el("div", "chart-heading"), select = el("select"); select.id = "capture-metric"; select.setAttribute("aria-label", "グラフに表示するセンサー");
       for (const [key, metric] of Object.entries(metrics)) select.append(new Option(metric.label, key));
-      if (!(currentMetric in metrics)) currentMetric = Object.keys(metrics)[0]; select.value = currentMetric;
+      if (!Object.hasOwn(metrics, currentMetric)) currentMetric = Object.keys(metrics)[0]; select.value = currentMetric;
       graphHeading.append(el("h3", "", "計測値の推移"), select); container.append(graphHeading, el("div", "chart-box"));
       container.lastChild.id = "capture-chart";
       const caption = el("p", "chart-caption"); caption.id = "chart-caption"; container.append(caption);
       const statistics = el("div", "stats-table table-wrap"); statistics.id = "metric-statistics"; container.append(statistics);
-      select.addEventListener("change", () => { currentMetric = select.value; renderMetric(data); }); renderMetric(data);
+      select.addEventListener("change", () => { currentMetric = select.value; saveSelection(); renderMetric(data); }); renderMetric(data);
     } else if (session.mode === "watch") container.append(el("div", "empty-inline", "センサーのサンプルは記録されていません。"));
     if (data.alerts) renderAlerts(data.alerts, container);
     if (data.queries?.length) {
@@ -355,7 +391,10 @@
     $("chart-caption").textContent = `${timed ? "横軸：ホストの問い合わせ開始からの経過秒。" : "横軸：記録順。時間情報が不足するか、順序を確認できません。"} 欠測・不正なサンプルの間は線をつなぎません。加速度には重力が含まれます。`;
     if (!valid.length) chart.append(el("div", "empty-state", "この項目の有効な計測値がありません。"));
     else {
-      const width = 600, height = 210, left = 60, right = 18, top = 24, bottom = 35;
+      const style = getComputedStyle(chart);
+      const contentWidth = chart.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      const width = Math.max(220, Math.round(contentWidth > 0 ? contentWidth : 600));
+      const height = width < 420 ? 230 : 240, left = 68, right = 12, top = 26, bottom = 36;
       const scale = valid.reduce((largest, point) => Math.max(largest, Math.abs(point.value)), 1);
       let low = valid.reduce((smallest, point) => Math.min(smallest, point.value / scale), Infinity);
       let high = valid.reduce((largest, point) => Math.max(largest, point.value / scale), -Infinity);
@@ -371,7 +410,7 @@
       for (let index = 0; index < 4; index++) {
         const relative = index / 3, yy = top + relative * (height - top - bottom), value = (high - relative * (high - low)) * scale;
         svg.append(svgEl("line", {x1: left, x2: width - right, y1: yy, y2: yy, stroke: "#e3edf2", "stroke-width": 1}));
-        svg.append(svgEl("text", {x: left - 9, y: yy + 3, "text-anchor": "end", fill: "#718695", "font-size": 9}, number(value, 2)));
+        svg.append(svgEl("text", {x: left - 9, y: yy + 4, "text-anchor": "end", fill: "#718695", "font-size": 11}, number(value, 2)));
       }
       const limit = data.alerts?.limits?.find((item) => item.metric === currentMetric);
       for (const bound of [limit?.minimum, limit?.maximum]) {
@@ -386,11 +425,11 @@
         segment = [];
       }
       for (const point of points) { if (point.value === null) drawSegment(); else segment.push(point); } drawSegment();
-      svg.append(svgEl("text", {x: 7, y: 12, fill: "#718695", "font-size": 9}, metric.unit));
+      svg.append(svgEl("text", {x: 7, y: 14, fill: "#718695", "font-size": 11}, metric.unit));
       for (let index = 0; index < 3; index++) {
         const fraction = index / 2, xx = left + fraction * (width - left - right);
         const value = timed ? xValues[0] * (1 - fraction) + xValues[xValues.length - 1] * fraction : Math.round(fraction * (points.length - 1)) + 1;
-        svg.append(svgEl("text", {x: xx, y: height - 15, "text-anchor": index === 0 ? "start" : index === 2 ? "end" : "middle", fill: "#718695", "font-size": 9}, `${number(value, timed ? 1 : 0)}${timed ? " s" : " 件目"}`));
+        svg.append(svgEl("text", {x: xx, y: height - 15, "text-anchor": index === 0 ? "start" : index === 2 ? "end" : "middle", fill: "#718695", "font-size": 11}, `${number(value, timed ? 1 : 0)}${timed ? " s" : " 件目"}`));
       }
       chart.append(svg);
     }
@@ -435,8 +474,13 @@
     for (const [key, metric] of Object.entries(metrics)) select.append(new Option(`${metric.label} (${metric.unit})`, key));
     select.value = Object.keys(metrics).find((key) => !used.includes(key)) || Object.keys(metrics)[0];
     select.setAttribute("aria-label", "しきい値を設定する項目");
-    for (const [input, label] of [[minimum, "下限"], [maximum, "上限"]]) { input.type = "number"; input.step = "any"; input.placeholder = "未設定"; input.setAttribute("aria-label", label); }
-    for (const [input, label] of [[select, "項目"], [minimum, "下限"], [maximum, "上限"]]) { const field = el("div"); field.append(el("label", "", label), input); row.append(field); }
+    for (const [input, label] of [[minimum, "下限"], [maximum, "上限"]]) {
+      input.type = "text"; input.inputMode = "text"; input.placeholder = "未設定";
+      input.pattern = "(?:\\+|-)?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE](?:\\+|-)?[0-9]+)?";
+      input.title = "数値を入力してください。負の値や小数も指定できます。";
+      input.setAttribute("aria-label", label);
+    }
+    for (const [input, label] of [[select, "項目"], [minimum, "下限"], [maximum, "上限"]]) { const field = el("div"), caption = el("label", "", label); caption.append(input); field.append(caption); row.append(field); }
     const remove = el("button", "remove-limit", "×"); remove.type = "button"; remove.setAttribute("aria-label", "このしきい値を削除"); remove.addEventListener("click", () => row.remove()); row.append(remove);
     $("limit-fields").append(row); select.focus();
   }
@@ -491,7 +535,7 @@
         for (const detail of [exercise.difficulty, exercise.duration, exercise.prerequisite ? `前提：${exercise.prerequisite}` : null]) if (detail) meta.append(el("span", "", detail)); card.append(meta);
         if (exercise.command) {
           const command = el("div", "exercise-command"), copy = el("button", "copy-button", "コピー"); copy.type = "button";
-          copy.addEventListener("click", async () => { try { await navigator.clipboard.writeText(exercise.command); toast("実行コマンドをコピーしました。"); } catch (_) { toast("コピーできませんでした。表示されたコマンドを選択してコピーしてください。", true); } });
+          copy.addEventListener("click", () => copyCommand(exercise.command));
           command.append(el("code", "", exercise.command), copy); card.append(command);
         }
         if (/^EX-[A-Z]\d{2}$/.test(exercise.id || "")) {
@@ -501,6 +545,27 @@
       }
       exercisesLoaded = true;
     } catch (error) { $("exercises-list").replaceChildren(el("div", "card form-error", error.message)); }
+  }
+
+  async function copyCommand(command) {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(command); toast("実行コマンドをコピーしました。"); return;
+      }
+    } catch (_) { /* HTTP and clipboard-denied browsers use a selectable command. */ }
+    document.querySelector(".command-copy-dialog")?.remove();
+    const dialog = el("dialog", "command-copy-dialog"), title = el("h2", "", "コマンドをコピー");
+    title.id = "command-copy-title"; dialog.setAttribute("aria-labelledby", title.id);
+    const description = el("p", "muted", "選択されたコマンドを長押ししてコピーしてください。");
+    const text = el("textarea"); text.readOnly = true; text.rows = 4; text.spellcheck = false;
+    text.value = command; text.setAttribute("aria-label", "実行コマンド");
+    const actions = el("div", "command-copy-actions"), close = el("button", "button button-secondary", "閉じる");
+    close.type = "button";
+    close.addEventListener("click", () => { if (typeof dialog.close === "function") dialog.close(); else dialog.remove(); });
+    actions.append(close); dialog.append(title, description, text, actions);
+    dialog.addEventListener("close", () => dialog.remove()); document.body.append(dialog);
+    if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", "");
+    text.focus({preventScroll: true}); text.select();
   }
 
   async function refresh() {
@@ -513,7 +578,7 @@
       $("server-dot").className = "status-dot online"; $("server-status").textContent = "接続中";
       $("last-updated").textContent = new Date().toLocaleTimeString("ja-JP", {hour: "2-digit", minute: "2-digit", second: "2-digit"});
       showError("connection-error", state.discovery_error ? `デバイス確認：${state.discovery_error}` : "");
-      renderDevices(); renderCaptureList(); renderJobs();
+      renderDevices(); renderCaptureList(); restoreSelection(); renderJobs();
     } catch (error) {
       online = false; $("server-dot").className = "status-dot offline"; $("server-status").textContent = "接続待ち";
       showError("connection-error", "コンソールに接続できません。サーバーの起動状態を確認してください。自動的に再接続します。");
@@ -529,6 +594,7 @@
   $("refresh-devices").addEventListener("click", refresh);
   $("add-limit").addEventListener("click", addLimit);
   $("capture-import").addEventListener("change", (event) => importCapture(event.target.files[0]));
+  $("capture-picker")?.addEventListener("change", (event) => { if (event.target.value) selectCapture(event.target.value); });
   $("info-form").addEventListener("submit", (event) => { event.preventDefault(); startJob({task: "info", serial: $("info-board").value}); });
   $("watch-form").addEventListener("submit", (event) => {
     event.preventDefault(); showError("watch-error", "");
@@ -537,6 +603,12 @@
   });
   $("monitor-form").addEventListener("submit", (event) => { event.preventDefault(); startJob({task: "monitor", serial: $("monitor-board").value, port: $("monitor-port").value, duration: Number($("monitor-duration").value)}, "monitor-error"); });
   window.addEventListener("hashchange", () => switchView(location.hash.slice(1), false));
+  window.addEventListener("resize", () => {
+    cancelAnimationFrame(chartResizeFrame);
+    chartResizeFrame = requestAnimationFrame(() => {
+      if (view === "captures" && loadedCapture?.samples?.length && $("capture-chart")) renderMetric(loadedCapture);
+    });
+  });
   window.addEventListener("pagehide", () => { stopped = true; clearTimeout(timer); clearTimeout(toastTimer); controller?.abort(); });
   window.addEventListener("pageshow", () => { stopped = false; refresh(); });
   switchView(location.hash.slice(1) || "connection", false); updateActions(); refresh();

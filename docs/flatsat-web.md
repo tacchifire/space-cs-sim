@@ -37,6 +37,14 @@ python3 tools/flatsat.py serve --port 0 --data-dir "$HOME/.local/share/cuberange
 Stop the server with Ctrl+C in its terminal.
 An active USB operation finishes before the server exits; its duration is bounded by the recording form.
 
+## Use the console on a phone
+
+Connect the phone to the same tailnet and open the printed Tailscale URL.
+On narrow screens, the menu stays at the bottom, forms use a single column and saved recordings are selected from a dropdown.
+The graph adjusts to the screen width; wide tables scroll within their own area.
+The selected recording and graph metric are restored after reloading in the same browser tab when session storage is available.
+If the browser cannot copy an exercise command automatically, a dialog selects the command for manual copying; on a phone, long-press the selected text and choose Copy.
+
 ## Inspect and record a board
 
 Choose a board by its USB serial number and check the permission indicator for each port.
