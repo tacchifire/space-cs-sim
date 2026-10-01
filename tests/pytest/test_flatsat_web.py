@@ -340,6 +340,70 @@ def test_capture_routes_reject_symlinks_large_files_and_traversal(tmp_path):
         assert request(server)[1]["captures"] == []
 
 
+@pytest.mark.parametrize("raw_hex", ["test", "abc", ["61", "62"], None, "61 62", "６１"])
+def test_monitor_import_rejects_malformed_received_hex_before_counting(tmp_path, raw_hex):
+    records = [json.loads(line) for line in capture_text(mode="monitor").splitlines()]
+    records[1]["raw_hex"] = raw_hex
+    content = "\n".join(json.dumps(record) for record in records) + "\n"
+    with running_server(tmp_path) as (server, adapter):
+        status, error, _ = request(server, "POST", "/api/captures/import", {"content": content})
+        assert status == 400 and "rx.raw_hex" in error["error"]
+        assert request(server)[1]["captures"] == []
+        assert list(tmp_path.iterdir()) == [] and adapter.calls == []
+
+
+def test_monitor_import_retains_valid_hex_bytes_in_an_interrupted_capture(tmp_path):
+    records = [json.loads(line) for line in capture_text(mode="monitor").splitlines()]
+    records[1]["raw_hex"] = "CAFE"
+    records[-1] = {"event": "error", "message": "device disconnected"}
+    records.append({"event": "rx", "role": "radio1", "raw_hex": ""})
+    content = "\n".join(json.dumps(record) for record in records) + "\n"
+    with running_server(tmp_path) as (server, adapter):
+        status, imported, _ = request(server, "POST", "/api/captures/import", {"content": content})
+        assert status == 201 and imported["capture"]["completion"] == "interrupted"
+        capture_id = imported["capture"]["id"]
+        status, detail, _ = request(server, path=f"/api/captures/{capture_id}")
+        assert status == 200 and detail["received_bytes"] == 2
+        assert detail["summary"]["quality"]["completion"] == "interrupted"
+        assert adapter.calls == []
+
+
+@pytest.mark.parametrize(("field", "value"), [("answered", "false"), ("answered", 0),
+                                               ("answered", None), ("text", []),
+                                               ("text", False), ("command", {})])
+def test_info_import_rejects_wrong_query_result_metadata_types(tmp_path, field, value):
+    records = [json.loads(line) for line in capture_text(mode="info").splitlines()]
+    records[1][field] = value
+    content = "\n".join(json.dumps(record) for record in records) + "\n"
+    with running_server(tmp_path) as (server, adapter):
+        status, error, _ = request(server, "POST", "/api/captures/import", {"content": content})
+        assert status == 400 and f"query_result.{field}" in error["error"]
+        assert request(server)[1]["captures"] == []
+        assert list(tmp_path.iterdir()) == [] and adapter.calls == []
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_info_import_preserves_false_and_missing_optional_query_metadata(tmp_path, missing):
+    records = [json.loads(line) for line in capture_text(mode="info").splitlines()]
+    if missing:
+        for field in ("answered", "text", "command"):
+            del records[1][field]
+    else:
+        records[1]["answered"] = False
+    content = "\n".join(json.dumps(record) for record in records) + "\n"
+    with running_server(tmp_path) as (server, adapter):
+        status, imported, _ = request(server, "POST", "/api/captures/import", {"content": content})
+        assert status == 201
+        status, detail, _ = request(server, path=f"/api/captures/{imported['capture']['id']}")
+        assert status == 200
+        query = detail["queries"][0]
+        if missing:
+            assert all(field not in query for field in ("answered", "text", "command"))
+        else:
+            assert query["answered"] is False and query["command"] == "status"
+        assert adapter.calls == []
+
+
 def test_live_progress_does_not_invent_cumulative_valid_count_from_tail(tmp_path):
     gate = threading.Event()
     with running_server(tmp_path, FakeAdapter(gate)) as (server, adapter):

@@ -225,10 +225,22 @@ class FlatSatServer(ThreadingHTTPServer):
                 raise ValueError("session.notes must be a list of strings")
             alerts = evaluate_capture(data) if session.get("limits") else None
             queries = [record for record in records if record.get("event") == "query_result"]
+            for query in queries:
+                for field, expected in (("answered", bool), ("text", str), ("command", str)):
+                    if field in query and not isinstance(query[field], expected):
+                        raise ValueError(f"query_result.{field} has an invalid type")
+            received_bytes = 0
+            for record in records:
+                if record.get("event") != "rx":
+                    continue
+                raw_hex = record.get("raw_hex")
+                if (not isinstance(raw_hex, str) or len(raw_hex) % 2 or
+                        re.fullmatch(r"[0-9a-fA-F]*", raw_hex) is None):
+                    raise ValueError("rx.raw_hex must be an even-length hexadecimal string")
+                received_bytes += len(raw_hex) // 2
             result = {"id": capture_id, "session": session, "summary": data["summary"],
                       "alerts": alerts, "samples": data["samples"], "queries": queries,
-                      "received_bytes": sum(len(record.get("raw_hex", "")) // 2
-                                            for record in records if record.get("event") == "rx"),
+                      "received_bytes": received_bytes,
                       "report_url": f"/reports/{capture_id}",
                       "raw_url": f"/api/captures/{capture_id}/raw", "_data": data}
             # Check all API values before admitting a capture into the index.
