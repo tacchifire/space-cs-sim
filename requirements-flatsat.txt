@@ -1,0 +1,2 @@
+# Optional USB bring-up tools; the Renode simulation does not need this package.
+pyserial==3.5

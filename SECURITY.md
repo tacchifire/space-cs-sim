@@ -30,6 +30,8 @@ Currently intended, and not vulnerabilities:
 - A defect in the host-side Python — the ground station, the channel, the codecs, the supervisor,
   the Renode clients — that is exploitable by data arriving over a socket. These parse
   attacker-controlled bytes and are *not* intended to be vulnerable.
+- A defect in the optional FlatSat USB adapter exploitable by received USB data, or a bypass of
+  its local-query allowlist that permits arbitrary commands or radio transmission.
 - A defect in `firmware/common/cuberange_proto.c`. It is the shared codec, compiled into every
   node including the mitigated builds. `make check` runs it under ASan and UBSan and through a
   seeded random fuzzer that asserts the decoder's contract — a frame it accepts must have a
@@ -81,5 +83,8 @@ this section will say which are supported and for how long, and until it does, a
 
 ## Scope
 
-CubeRange is a simulator. It does not talk to real spacecraft, real ground stations, or real radio
-hardware, and it must not be made to. See [SAFE_USE.md](SAFE_USE.md).
+CubeRange is a simulator. Its exercises do not talk to real spacecraft, real ground stations, or
+real radio hardware, and they must not be made to.
+The separate [FlatSat USB adapter](docs/flatsat.md) supports inventory, reception, and four local
+diagnostic queries on an owner-operated teaching board; its PING command only previews packets.
+See [SAFE_USE.md](SAFE_USE.md).

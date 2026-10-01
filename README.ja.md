@@ -168,6 +168,8 @@ make demo-p0
 静穏なホストで約6分のところ、Renode の作業を2つ並走させた状態では35分かかった。
 プローブが遅いことを退行と読む前に、まず負荷を確認してほしい。
 
+所有者が操作する教材用の FlatSat RP2040 の USB 認識と診断は、[docs/flatsat.ja.md](docs/flatsat.ja.md) を参照する。
+
 ## 全体の組み立て
 
 ```
@@ -242,7 +244,7 @@ probe.sh は「4 ノード 1.5x」の速度下限を検査し、この 8 コア�
 
 | 文書 | 何を定めるか |
 | --- | --- |
-| [SAFE_USE.ja.md](SAFE_USE.ja.md) | ここで攻撃される対象はすべてエミュレーションである。実在するものに向けないこと、実在の識別子を持ち込まないこと |
+| [SAFE_USE.ja.md](SAFE_USE.ja.md) | 演習の標的はエミュレーションに保つ。所有者の基板に対する USB 診断には別の限定した適用範囲がある |
 | [SECURITY.ja.md](SECURITY.ja.md) | どの弱点が意図的で、どれが報告に値するか、そしてその方法 |
 | [ASSURANCE.ja.md](ASSURANCE.ja.md) | ここでの結果が何を支持し、何を支持しないか。結果を引用する前に読むこと |
 | [CONTRIBUTING.ja.md](CONTRIBUTING.ja.md) | 証拠規則と、演習が証明しなければならないこと |
