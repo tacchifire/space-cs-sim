@@ -24,6 +24,7 @@ import uuid
 from . import __main__ as cli
 from .alerts import evaluate_capture, parse_limit, validate_limits
 from .report import _render
+from .room_watch import RoomDetector, compact_events, load_room_capture, run_room_watch, validate_config
 from .telemetry import METRICS, load_capture
 from .usb import FlatSatError, QUERY_COMMANDS, discover_ports, select_ports
 
@@ -108,14 +109,16 @@ def _strict_json(text: str):
 
 def _job_request(body: dict) -> dict:
     task = body.get("task")
-    if task not in ("info", "watch", "monitor"):
-        raise RequestError("task must be info, watch, or monitor")
+    if task not in ("info", "watch", "monitor", "room_watch"):
+        raise RequestError("task must be info, watch, monitor, or room_watch")
     allowed = {"task", "serial", "port"}
     allowed |= {"duration"} if task == "monitor" else {"timeout"}
     if task == "info":
         allowed |= {"commands"}
     elif task == "watch":
         allowed |= {"duration", "interval", "label", "notes", "limits"}
+    elif task == "room_watch":
+        allowed |= {"duration", "interval", "label", "baseline_samples", "confirm_samples", "thresholds"}
     unknown = body.keys() - allowed
     if unknown:
         raise RequestError(f"Unknown fields: {', '.join(sorted(unknown))}")
@@ -133,6 +136,17 @@ def _job_request(body: dict) -> dict:
         result["duration"] = _finite(body.get("duration", 10), "duration", 0.2, 60)
     if task in ("watch", "info"):
         result["timeout"] = _finite(body.get("timeout", 2), "timeout", 0.05, 5)
+    if task == "room_watch":
+        result.update(duration=_finite(body.get("duration", 3600), "duration", 0.2, 86400),
+                      interval=_finite(body.get("interval", 1), "interval", 0.2, 60),
+                      timeout=_finite(body.get("timeout", 2), "timeout", 0.05, 5),
+                      label=_text(body.get("label", ""), "label", 200))
+        try:
+            result.update(validate_config(baseline_samples=body.get("baseline_samples", 20),
+                                          confirm_samples=body.get("confirm_samples", 3),
+                                          thresholds=body.get("thresholds", {})))
+        except ValueError as exc:
+            raise RequestError(str(exc)) from exc
     if task == "info":
         commands = body.get("commands", list(QUERY_COMMANDS[:3]))
         if (not isinstance(commands, list) or not 1 <= len(commands) <= 4 or
@@ -177,6 +191,13 @@ class USBAdapter:
                                  request["timeout"], output, label=request["label"],
                                  notes=request["notes"], limits=request["limits"])
         return cli.run_monitor(ports, request["duration"], output)
+
+    def run_room_watch(self, request, output, stop_event, progress):
+        port = select_ports(self.discover(), "shell", request["serial"])[0]
+        return run_room_watch(port, request["duration"], request["interval"], request["timeout"], output,
+                              baseline_samples=request["baseline_samples"],
+                              confirm_samples=request["confirm_samples"], thresholds=request["thresholds"],
+                              label=request["label"], stop_event=stop_event, progress=progress)
 
 
 class FlatSatServer(ThreadingHTTPServer):
@@ -233,8 +254,8 @@ class FlatSatServer(ThreadingHTTPServer):
             session = data["session"]
             if not session:
                 raise ValueError("Capture requires a session event")
-            if session.get("mode") not in ("watch", "info", "monitor"):
-                raise ValueError("Capture session mode must be watch, info, or monitor")
+            if session.get("mode") not in ("watch", "info", "monitor", "room_watch"):
+                raise ValueError("Capture session mode must be watch, info, monitor, or room_watch")
             if "label" in session and session["label"] is not None:
                 _text(session["label"], "label", 200)
             if not isinstance(session.get("ports", []), list) or any(
@@ -263,6 +284,10 @@ class FlatSatServer(ThreadingHTTPServer):
                       "received_bytes": received_bytes,
                       "report_url": f"/reports/{capture_id}",
                       "raw_url": f"/api/captures/{capture_id}/raw", "_data": data}
+            if session["mode"] == "room_watch":
+                room = load_room_capture(path)
+                data["room_watch"] = room
+                result["room_watch"] = {"snapshot": room["snapshot"], "events": compact_events(room["events"])}
             # Check all API values before admitting a capture into the index.
             json.dumps(result, allow_nan=False)
         except (FlatSatError, OSError, ValueError, TypeError, AttributeError, OverflowError) as exc:
@@ -276,16 +301,21 @@ class FlatSatServer(ThreadingHTTPServer):
     def capture_entry(self, capture_id: str) -> dict:
         data = self._capture_data(capture_id)
         summary, session = data["summary"], data["session"]
-        return {"id": capture_id, "label": session.get("label") or session.get("mode"),
+        entry = {"id": capture_id, "label": session.get("label") or session.get("mode"),
                 "mode": session.get("mode"), "time_utc": session.get("time_utc"),
                 "sample_count": summary["sample_count"], "valid_count": summary["valid_count"],
                 "failed_count": summary["failed_count"], "completion": summary["quality"]["completion"],
                 "report_url": data["report_url"], "raw_url": data["raw_url"]}
+        if "room_watch" in data:
+            entry["event_count"] = data["room_watch"]["snapshot"]["event_count"]
+        return entry
 
     def _job_snapshot(self, job: dict) -> dict:
         result = {key: value for key, value in job.items() if not key.startswith("_")}
         result["elapsed_s"] = round((job.get("_finished", time.monotonic()) - job["_started"]), 3)
         result["progress"] = {"sample_count": 0, "valid_count": 0, "last_sample": None}
+        if job["task"] == "room_watch":
+            return result
         if job["status"] == "running":
             # Read only a bounded tail. A partial last line is ignored until the
             # CLI flushes it, and no raw USB text enters the live API.
@@ -357,6 +387,11 @@ class FlatSatServer(ThreadingHTTPServer):
                    "started_at": _now(), "ended_at": None, "duration_s": request.get("duration"),
                    "capture_id": job_id, "error": None, "exit_code": None,
                    "_started": time.monotonic()}
+            if request["task"] == "room_watch":
+                job.update(stop_requested=False, _stop_event=threading.Event(),
+                           room_watch=RoomDetector(baseline_samples=request["baseline_samples"],
+                                                   confirm_samples=request["confirm_samples"],
+                                                   thresholds=request["thresholds"]).snapshot())
             self.jobs.append(job)
             self.jobs = self.jobs[-100:]
             self.worker = threading.Thread(target=self._run_job, args=(job, request),
@@ -372,18 +407,47 @@ class FlatSatServer(ThreadingHTTPServer):
     def _run_job(self, job: dict, request: dict) -> None:
         code, error = None, None
         try:
-            code = self.adapter.run(request, self.data_dir / f"{job['capture_id']}.jsonl")
+            output = self.data_dir / f"{job['capture_id']}.jsonl"
+            if request["task"] == "room_watch":
+                def progress(snapshot):
+                    with self.lock:
+                        job["room_watch"] = snapshot
+                code = self.adapter.run_room_watch(request, output, job["_stop_event"], progress)
+            else:
+                code = self.adapter.run(request, output)
             if code != 0:
                 error = "USB operation did not complete successfully; inspect its recording"
             if (self.data_dir / f"{job['capture_id']}.jsonl").exists():
-                self._capture_data(job["capture_id"])
+                data = self._capture_data(job["capture_id"])
+                if "room_watch" in data:
+                    with self.lock:
+                        job["room_watch"] = data["room_watch"]["snapshot"]
+                    if code != 0:
+                        error = "Room watch ended: " + str(data["room_watch"]["snapshot"].get("reason"))
         except Exception as exc:
             error = str(exc)
+            if request["task"] == "room_watch":
+                with self.lock:
+                    job["room_watch"] = {**job["room_watch"], "phase": "stopped", "reason": "device_error"}
         finally:
             with self.lock:
                 job.update(status="failed" if error else "completed", ended_at=_now(),
                            exit_code=code, error=error, _finished=time.monotonic())
                 _USB_LOCK.release()
+
+    def stop_job(self, job_id):
+        if not _ID.fullmatch(job_id):
+            raise RequestError("Job not found", 404)
+        with self.lock:
+            job = next((job for job in self.jobs if job["id"] == job_id), None)
+            if job is None:
+                raise RequestError("Job not found", 404)
+            if job["task"] != "room_watch":
+                raise RequestError("Only room watch jobs support stopping", 409)
+            if job["status"] == "running":
+                job["stop_requested"] = True
+                job["_stop_event"].set()
+            return self._job_snapshot(job)
 
     def import_capture(self, body: dict) -> dict:
         unknown = body.keys() - {"name", "content"}
@@ -411,6 +475,10 @@ class FlatSatServer(ThreadingHTTPServer):
     def server_close(self):
         with self.lock:
             self.closing = True
+            for job in self.jobs:
+                if job["task"] == "room_watch" and job["status"] == "running":
+                    job["stop_requested"] = True
+                    job["_stop_event"].set()
             worker = self.worker
         super().server_close()
         if worker and worker is not threading.current_thread():
@@ -563,6 +631,11 @@ class Handler(BaseHTTPRequestHandler):
             body = self._body()
             if self.path == "/api/jobs":
                 self._json(202, {"job": self.server.start_job(_job_request(body))})
+            elif match := re.fullmatch(r"/api/jobs/([0-9a-f]{32})/stop", self.path):
+                if body:
+                    raise RequestError("Stop body must be an empty object")
+                job = self.server.stop_job(match[1])
+                self._json(202 if job["status"] == "running" else 200, {"job": job})
             elif self.path == "/api/captures/import":
                 self._json(201, {"capture": self.server.import_capture(body)})
             else:

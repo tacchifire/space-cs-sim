@@ -11,13 +11,22 @@
   const views = {
     connection: ["接続", "接続したボードとポートの状態を確認します。"],
     measurement: ["計測", "センサーの読み出しと、受信データの記録を行います。"],
+    room: ["室内監視", "開始時の基準から、基板の動きと環境の変化を見守ります。"],
     captures: ["保存ログ", "実験の記録を振り返り、数値とイベントを確認します。"],
     exercises: ["演習", "シミュレーションの課題と実行手順を確認します。"]
   };
-  const tasks = {info: "ボード情報の取得", watch: "センサー計測", monitor: "受信データの記録"};
-  const modes = {info: "情報取得", watch: "センサー", monitor: "受信記録"};
+  const tasks = {info: "ボード情報の取得", watch: "センサー計測", monitor: "受信データの記録", room_watch: "室内監視"};
+  const modes = {info: "情報取得", watch: "センサー", monitor: "受信記録", room_watch: "室内監視"};
   const statuses = {running: "実行中", completed: "完了", failed: "失敗"};
   const transitions = {triggered: "範囲外", recovered: "回復", unavailable: "欠測", resumed: "取得再開"};
+  const roomMetrics = {
+    movement_mg: {label: "基板の動き", unit: "mg", changeUnit: "mg"},
+    temperature_c: {label: "温度", unit: "°C", changeUnit: "°C"},
+    humidity_percent: {label: "湿度", unit: "%", changeUnit: "ポイント"},
+    pressure_pa: {label: "気圧", unit: "Pa", changeUnit: "Pa"}
+  };
+  const roomPhases = {calibrating: "基準取得中", monitoring: "監視中", unavailable: "取得不可", stopped: "監視終了"};
+  const roomTransitions = {baseline_ready: "基準取得", changed: "変化", recovered: "回復", unavailable: "欠測", resumed: "取得再開"};
   let state = null, online = false, pending = false, pendingJob = false, view = "connection", selectedCapture = null;
   let metrics = metricDefaults, loadedCapture = null, currentMetric = "temperature_c";
   let timer = null, controller = null, toastTimer = null, captureRequest = 0, ownJob = null, stopped = false, chartResizeFrame = 0;
@@ -29,6 +38,7 @@
     if (/^[0-9a-f]{32}$/.test(saved?.id || "")) storedSelection = saved;
   } catch (_) { /* Storage can be unavailable in a private browser session. */ }
   const knownJobs = new Map();
+  let stopPending = false, roomStopRequested = null, roomBaselineExpanded = false;
 
   function el(tag, className, text) {
     const node = document.createElement(tag);
@@ -80,7 +90,10 @@
       restoreSelection();
       if (loadedCapture?.samples?.length && $("capture-chart")) renderMetric(loadedCapture);
     }
-    if (changed && window.matchMedia("(max-width: 650px)").matches) window.scrollTo({top: 0, behavior: "auto"});
+    if (window.matchMedia("(max-width: 650px)").matches) {
+      if (next === "room" && state?.active_job?.task === "room_watch") $("room-live").scrollIntoView({block: "start", behavior: "auto"});
+      else if (changed) window.scrollTo({top: 0, behavior: "auto"});
+    }
   }
 
   function saveSelection() {
@@ -144,6 +157,11 @@
     $("info-button").disabled = !online || busy || !shellReady(selectedBoard("info-board"));
     $("watch-button").disabled = !online || busy || !shellReady(selectedBoard("watch-board"));
     $("monitor-button").disabled = !online || busy || !monitorReady();
+    $("room-start-button").disabled = !online || busy || !shellReady(selectedBoard("room-board"));
+    const roomJob = state?.active_job?.task === "room_watch" ? state.active_job : null;
+    const stopRequested = roomJob && (roomJob.stop_requested || roomStopRequested === roomJob.id);
+    $("room-stop-button").disabled = !online || !roomJob || stopPending || !!stopRequested;
+    $("room-stop-button").textContent = stopPending || stopRequested ? "停止処理中…" : "監視を停止";
     $("capture-import").disabled = !online || pending;
     $("operation-status").textContent = !online ? "接続待ち" : state?.active_job || pendingJob ? "実行中" : "待機中";
     for (const select of document.querySelectorAll(".board-selector")) select.disabled = busy || !boards().length;
@@ -192,6 +210,106 @@
     }
   }
 
+  function roomSnapshotContent(snapshot, job = null) {
+    const content = el("div", "room-snapshot");
+    if (!snapshot) {
+      content.append(el("p", "empty-inline", "監視の集計はまだありません。"));
+      if (job?.error) content.append(el("p", "form-error", job.error));
+      return content;
+    }
+    if (job) {
+      const meta = el("div", "job-meta");
+      meta.append(el("span", "", `開始 ${time(job.started_at, true)}`), el("span", "", `${number(job.elapsed_s, 1)} 秒経過`)); content.append(meta);
+    }
+    if (!snapshot.baseline) {
+      const target = snapshot.baseline_target, count = snapshot.baseline_count;
+      content.append(el("p", "room-baseline-progress", `基準の取得 ${number(count, 0)} / ${number(target, 0)} 件`));
+      const track = el("div", "progress-track"), bar = el("div", "progress-bar");
+      bar.style.width = `${finite(target) && target > 0 && finite(count) ? Math.min(100, Math.max(0, count / target * 100)) : 0}%`;
+      track.append(bar); content.append(track, el("p", "caption", snapshot.phase === "stopped" ? "基準の取得を終える前に監視が終了しました。" : "基板を静止させた状態で、基準に使う値を取得しています。"));
+    } else {
+      const baseline = snapshot.baseline, details = el("details", "room-baseline-details"), heading = el("summary", "", "開始時の基準を見る");
+      details.open = roomBaselineExpanded;
+      details.addEventListener("toggle", () => { if (details.isConnected) roomBaselineExpanded = details.open; });
+      const readings = el("dl", "room-baseline-values");
+      for (const key of ["temperature_c", "humidity_percent", "pressure_pa", "accel_x_mg", "accel_y_mg", "accel_z_mg"]) {
+        const metric = metrics[key];
+        readings.append(el("dt", "", metric.label), el("dd", "", `${number(baseline[key])} ${metric.unit}`));
+      }
+      details.append(heading, readings); content.append(details);
+    }
+    const counters = el("div", "summary-grid room-counters");
+    counters.append(summaryStat("読み取り", number(snapshot.observed_count, 0), "件"), summaryStat("有効", number(snapshot.valid_count, 0), "件"), summaryStat("欠測・不正", number(snapshot.failed_count, 0), "件"), summaryStat("イベント", number(snapshot.event_count, 0), "件")); content.append(counters);
+    const last = snapshot.last_sample, usable = last?.status === "ok" && last.completion !== "timeout" && snapshot.phase !== "unavailable";
+    const latestHeader = el("div", "room-latest-heading");
+    latestHeader.append(el("h3", "", "最後に読み取った値"), badge(!last ? "取得待ち" : usable ? "取得済み" : "欠測・不正", !last ? "neutral" : usable ? "ready" : "wait")); content.append(latestHeader);
+    if (last?.time_utc) content.append(el("p", "caption room-sample-time", time(last.time_utc, true)));
+    const values = el("div", "room-readings");
+    for (const [key, metric] of Object.entries(roomMetrics)) {
+      const condition = last && !usable ? "unavailable" : snapshot.states?.[key], tile = el("div", `room-reading${condition === "changed" ? " room-reading-changed" : ""}`);
+      const top = el("div", "room-reading-heading");
+      const label = key === "movement_mg" ? "基準からの動き" : metric.label;
+      const conditionLabel = {normal: "変化なし", changed: "変化を確認", unavailable: "判定不可", calibrating: "基準取得中"}[condition] || "判定待ち";
+      top.append(el("span", "", label), badge(conditionLabel, condition === "changed" || condition === "unavailable" ? "wait" : "neutral"));
+      const value = usable ? key === "movement_mg" ? last.deviations?.movement_mg : last.values?.[key] : null;
+      const reading = el("strong", "room-reading-value", number(value)); if (finite(value)) reading.append(el("small", "", metric.unit));
+      tile.append(top, reading);
+      const deviation = usable ? last.deviations?.[key] : null, threshold = snapshot.thresholds?.[key];
+      tile.append(el("p", "caption", `基準との差 ${number(deviation)} ${metric.changeUnit} · しきい値 ${finite(threshold) ? String(threshold) : "—"} ${metric.changeUnit}`)); values.append(tile);
+    }
+    content.append(values);
+    if (job?.error) content.append(el("p", "form-error", job.error));
+    if (job?.status !== "running" && job?.capture_id && state?.captures.some((capture) => capture.id === job.capture_id)) {
+      const link = el("button", "text-button", "この監視の保存ログを見る →"); link.type = "button";
+      link.addEventListener("click", () => { switchView("captures"); selectCapture(job.capture_id); }); content.append(link);
+    }
+    return content;
+  }
+  function roomEventDescription(event) {
+    if (event.transition === "baseline_ready") {
+      const baseline = event.baseline;
+      if (!baseline) return "開始時の基準を取得しました。";
+      return `開始時の基準：温度 ${number(baseline.temperature_c)} °C · 湿度 ${number(baseline.humidity_percent)} % · 気圧 ${number(baseline.pressure_pa)} Pa`;
+    }
+    if (event.transition === "unavailable") return "有効なセンサー値を取得できませんでした。基準は維持しています。";
+    if (event.transition === "resumed") return "有効なセンサー値の取得を再開しました。変化の状態は、連続した読み取りで確認します。";
+    const metric = roomMetrics[event.metric];
+    if (!metric) return "監視の状態が変わりました。";
+    const change = finite(event.value) ? `${String(event.value)} ${metric.changeUnit}` : "未記録";
+    const threshold = finite(event.threshold) ? `${String(event.threshold)} ${metric.changeUnit}` : "未設定";
+    const actual = event.metric !== "movement_mg" && finite(event.values?.[event.metric]) ? ` · 計測値 ${String(event.values[event.metric])} ${metric.unit}` : "";
+    return `${metric.label}の基準との差 ${change} · しきい値 ${threshold}${actual}`;
+  }
+  function roomEventsContent(events, total, limit = 50) {
+    const content = el("div", "room-event-content"), list = Array.isArray(events) ? events : [];
+    if (!list.length) { content.append(el("p", "empty-inline", "記録されたイベントはありません。")); return content; }
+    const visible = list.slice(-limit).reverse(), timeline = el("ol", "room-timeline");
+    for (const event of visible) {
+      const item = el("li", "room-event"), heading = el("div", "room-event-heading");
+      heading.append(badge(roomTransitions[event.transition] || "状態変化", event.transition === "changed" || event.transition === "unavailable" ? "wait" : "neutral"));
+      const timestamp = el("time", "", time(event.time_utc, true)); if (typeof event.time_utc === "string") timestamp.dateTime = event.time_utc;
+      heading.append(timestamp); item.append(heading, el("p", "", roomEventDescription(event))); timeline.append(item);
+    }
+    content.append(timeline);
+    if (finite(total) && total > visible.length) content.append(el("p", "caption", `最新 ${visible.length} 件を表示しています（記録されたイベント ${number(total, 0)} 件）。詳細はレポート、全件は JSONL で確認できます。`));
+    return content;
+  }
+  function renderRoomJob(job) {
+    if (!job) {
+      $("room-status").replaceChildren(el("p", "empty-inline", "開始すると基準取得の進行と、最新のセンサー値を表示します。"));
+      $("room-events").replaceChildren(el("p", "empty-inline", "基準取得や変化が発生すると、ここに表示します。"));
+      $("room-phase").textContent = "待機中"; $("room-phase").className = "badge badge-neutral"; return;
+    }
+    if (job.status !== "running" && roomStopRequested === job.id) roomStopRequested = null;
+    const snapshot = job.room_watch, phase = snapshot?.phase;
+    const stopping = job.status === "running" && (job.stop_requested || roomStopRequested === job.id);
+    const text = stopping ? "停止処理中" : job.status === "failed" ? "監視中断" : job.status !== "running" ? "監視終了" : roomPhases[phase] || "開始中";
+    $("room-phase").textContent = text;
+    $("room-phase").className = `badge badge-${job.status === "failed" ? "failed" : phase === "unavailable" ? "wait" : job.status === "running" ? "ready" : "neutral"}`;
+    $("room-status").replaceChildren(roomSnapshotContent(snapshot, job));
+    $("room-events").replaceChildren(roomEventsContent(snapshot?.events, snapshot?.event_count));
+  }
+
   function jobContent(job) {
     const content = el("div");
     content.append(el("p", "job-title", tasks[job.task] || job.task));
@@ -223,6 +341,15 @@
         content.append(values);
       }
     }
+    if (job.task === "room_watch") {
+      const snapshot = job.room_watch;
+      content.append(el("p", "muted", roomPhases[snapshot?.phase] || "監視の状態を確認中"));
+      if (snapshot?.phase === "calibrating") content.append(el("p", "caption", `基準 ${number(snapshot.baseline_count, 0)} / ${number(snapshot.baseline_target, 0)} 件`));
+      if (snapshot) content.append(el("p", "caption", `変化のイベント ${number(snapshot.event_count, 0)} 件 · 欠測 ${number(snapshot.failed_count, 0)} 件`));
+      if (job.status === "running" && job.stop_requested) content.append(el("p", "caption", "停止処理中です。USB 操作は終了まで待機します。"));
+      const roomLink = el("button", "text-button", "室内監視の状態を見る →"); roomLink.type = "button";
+      roomLink.addEventListener("click", () => switchView("room")); content.append(roomLink);
+    }
     if (job.error) content.append(el("p", "form-error", job.error));
     if (job.status !== "running" && job.capture_id) {
       const link = el("button", "text-button", "保存ログを見る →");
@@ -247,6 +374,7 @@
     const measurement = job || recent.find((item) => item.task === "watch" || item.task === "monitor");
     if (measurement) $("measurement-job").replaceChildren(jobContent(measurement));
     else $("measurement-job").replaceChildren(el("p", "empty-inline", "開始すると進行状況を表示します。"));
+    renderRoomJob(job?.task === "room_watch" ? job : recent.find((item) => item.task === "room_watch"));
     const history = $("job-history");
     if (!recent.length) history.replaceChildren(el("p", "empty-inline", "まだ操作履歴はありません。"));
     else {
@@ -268,7 +396,7 @@
           toast(item.status === "completed" ? `${tasks[item.task]}が完了しました。` : `${tasks[item.task]}に失敗しました。${item.error || ""}`, item.status === "failed");
           if (item.id === ownJob && item.capture_id && state.captures.some((capture) => capture.id === item.capture_id)) {
             if (item.task === "info") loadInfo(item.capture_id);
-            else if (view === "measurement") { switchView("captures"); selectCapture(item.capture_id); }
+            else if (view === "measurement" || item.task === "room_watch" && view === "room") { switchView("captures"); selectCapture(item.capture_id); }
           }
         }
         knownJobs.set(item.id, item.status);
@@ -299,7 +427,7 @@
       item.type = "button"; item.setAttribute("aria-pressed", String(capture.id === selectedCapture));
       item.append(el("span", "capture-item-title", capture.label || modes[capture.mode] || "名称未設定"), el("span", "capture-item-time", time(capture.time_utc)));
       const bottom = el("span", "capture-item-bottom");
-      bottom.append(badge(modes[capture.mode] || capture.mode || "ログ"), el("span", "", capture.mode === "watch" ? `${number(capture.valid_count, 0)} / ${number(capture.sample_count, 0)} 件有効` : capture.completion === "complete" ? "記録終了" : "終了状態を確認"));
+      bottom.append(badge(modes[capture.mode] || capture.mode || "ログ"), el("span", "", capture.mode === "room_watch" ? `イベント ${number(capture.event_count, 0)} 件` : capture.mode === "watch" ? `${number(capture.valid_count, 0)} / ${number(capture.sample_count, 0)} 件有効` : capture.completion === "complete" ? "記録終了" : "終了状態を確認"));
       item.append(bottom); item.addEventListener("click", () => selectCapture(capture.id)); list.append(item);
     }
   }
@@ -346,16 +474,24 @@
   function renderCapture(data) {
     const container = $("capture-detail"); container.replaceChildren();
     const session = data.session || {}, summary = data.summary || {}, quality = summary.quality || {};
+    const room = data.room_watch, roomSnapshot = room?.snapshot;
+    const roomComplete = roomSnapshot && ["stopped", "duration_complete"].includes(roomSnapshot.reason);
     const heading = el("div", "detail-heading"), name = el("div");
     name.append(el("p", "eyebrow", "EXPERIMENT LOG"), el("h2", "", session.label || modes[session.mode] || "名称未設定"));
-    heading.append(name, badge(quality.completion === "complete" ? "記録終了" : quality.completion === "interrupted" ? "中断" : "終了未確認", quality.completion === "complete" ? "ready" : "wait")); container.append(heading);
+    const completionLabel = session.mode === "room_watch" ? roomComplete ? "監視終了" : "終了状態を確認" : quality.completion === "complete" ? "記録終了" : quality.completion === "interrupted" ? "中断" : "終了未確認";
+    heading.append(name, badge(completionLabel, roomComplete || session.mode !== "room_watch" && quality.completion === "complete" ? "ready" : "wait")); container.append(heading);
     const meta = el("div", "detail-meta"); meta.append(el("span", "", time(session.time_utc, true)), el("span", "", modes[session.mode] || session.mode || "ログ"));
     const boardIds = [...new Set((session.ports || []).map((port) => port.serial_number || port.board_id).filter(Boolean))];
     if (boardIds.length) meta.append(el("span", "mono", `SERIAL ${boardIds.join(", ")}`)); container.append(meta);
     if (session.notes?.length) container.append(el("p", "detail-note", session.notes.join("\n")));
     const actions = el("div", "detail-actions"); actions.append(safeCaptureLink(data.id, "report", "レポートを開く ↗"), safeCaptureLink(data.id, "raw", "JSONL を保存 ↓")); container.append(actions);
-    if (quality.completion !== "complete") container.append(el("p", "detail-warning", "このログの終了状態は中断または未確認です。有効なサンプルだけを統計に使っています。"));
-    if (session.mode === "monitor") {
+    if (session.mode === "room_watch") {
+      if (!roomComplete) container.append(el("p", "detail-warning", "この監視の終了状態は中断または未確認です。最後の状態とイベントを確認してください。"));
+      if (roomSnapshot) container.append(roomSnapshotContent(roomSnapshot));
+      else container.append(el("p", "empty-inline", "監視の集計は記録されていません。"));
+      container.append(el("p", "muted", "読み取り件数は監視中の集計です。保存内容はイベントと 60 秒ごとの状態で、すべての読み取り値は含みません。"));
+      const events = el("div", "events-section"); events.append(el("h3", "", "室内監視のイベント"), roomEventsContent(room?.events, roomSnapshot?.event_count ?? room?.events?.length, 100)); container.append(events);
+    } else if (session.mode === "monitor") {
       const received = el("div", "summary-grid"); received.append(summaryStat("受信データ", number(data.received_bytes, 0), "bytes")); container.append(received);
       container.append(el("p", "muted", data.received_bytes > 0 ? "受信した生データを JSONL から確認できます。センサー計測としての統計はありません。" : "この記録には受信データがありません。記録中にデータが届かなかったことを示します。"));
     } else if (Array.isArray(data.samples) && data.samples.length) {
@@ -506,6 +642,10 @@
       ownJob = result.job.id; knownJobs.set(result.job.id, "running");
       state.active_job = result.job; state.recent_jobs = [result.job, ...state.recent_jobs.filter((item) => item.id !== result.job.id)];
       renderJobs(); toast(`${tasks[body.task]}を開始しました。`);
+      if (body.task === "room_watch") {
+        showError("room-stop-error", ""); roomStopRequested = null;
+        if (window.matchMedia("(max-width: 650px)").matches) $("room-live").scrollIntoView({block: "start", behavior: "auto"});
+      }
     } catch (error) { if (errorId) showError(errorId, error.message); else toast(error.message, true); }
     finally { pending = false; pendingJob = false; updateActions(); }
   }
@@ -520,6 +660,30 @@
       toast("ログを取り込みました。");
     } catch (error) { showError("import-error", error.message); }
     finally { pending = false; $("capture-import").value = ""; updateActions(); }
+  }
+
+  function roomRequest() {
+    const thresholds = {
+      movement_mg: Number($("room-movement").value), temperature_c: Number($("room-temperature").value),
+      humidity_percent: Number($("room-humidity").value), pressure_pa: Number($("room-pressure").value)
+    };
+    for (const [key, value] of Object.entries(thresholds)) if (!finite(value) || value <= 0) throw new Error(`${roomMetrics[key].label}のしきい値には、0 より大きい有限の数値を入力してください。`);
+    return {task: "room_watch", serial: $("room-board").value, duration: Number($("room-duration").value), interval: Number($("room-interval").value), label: $("room-label").value.trim(), baseline_samples: Number($("room-baseline").value), confirm_samples: Number($("room-confirm").value), thresholds};
+  }
+  async function stopRoom() {
+    const job = state?.active_job;
+    if (!online || stopPending || job?.task !== "room_watch" || job.stop_requested || roomStopRequested === job.id) return;
+    showError("room-stop-error", ""); stopPending = true; updateActions();
+    try {
+      const result = await api(`/api/jobs/${encodeURIComponent(job.id)}/stop`, {});
+      roomStopRequested = job.id;
+      if (result.job) {
+        state.active_job = result.job.status === "running" ? result.job : null;
+        state.recent_jobs = [result.job, ...state.recent_jobs.filter((item) => item.id !== result.job.id)]; renderJobs();
+      }
+      toast("監視の停止を依頼しました。終了した記録は保存ログで確認できます。");
+    } catch (error) { showError("room-stop-error", error.message); }
+    finally { stopPending = false; updateActions(); }
   }
 
   async function loadExercises() {
@@ -602,6 +766,11 @@
     catch (error) { showError("watch-error", error.message); }
   });
   $("monitor-form").addEventListener("submit", (event) => { event.preventDefault(); startJob({task: "monitor", serial: $("monitor-board").value, port: $("monitor-port").value, duration: Number($("monitor-duration").value)}, "monitor-error"); });
+  $("room-form").addEventListener("submit", (event) => {
+    event.preventDefault(); showError("room-error", "");
+    try { startJob(roomRequest(), "room-error"); } catch (error) { showError("room-error", error.message); }
+  });
+  $("room-stop-button").addEventListener("click", stopRoom);
   window.addEventListener("hashchange", () => switchView(location.hash.slice(1), false));
   window.addEventListener("resize", () => {
     cancelAnimationFrame(chartResizeFrame);
