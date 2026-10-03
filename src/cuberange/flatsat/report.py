@@ -198,7 +198,80 @@ def _alert_context(analysis: dict | None) -> str:
             '</tbody></table></div>' + ('<p>状態の変化はありません。</p>' if not events else '') + '</section>')
 
 
+def _render_room(data: dict, capture_path: Path, output_path: Path) -> str:
+    """Render retained monitoring events without inventing a sensor time series."""
+    room = data.get("room_watch")
+    if room is None:
+        from .room_watch import load_room_capture
+        room = load_room_capture(capture_path)
+    snapshot, events = room["snapshot"], room["events"]
+    session = data["session"]
+    labels = {**METRICS, "movement_mg": {"label": "基板の動き", "unit": "mg"}}
+    kinds = {"baseline_ready": "基準値を取得", "changed": "変化を検出",
+             "recovered": "基準付近へ回復", "unavailable": "応答の欠測",
+             "resumed": "取得再開"}
+
+    def row(fields):
+        return "<tr>" + "".join("<td>" + html.escape(str(field)) + "</td>" for field in fields) + "</tr>"
+
+    def count(value):
+        return "不明" if value is None else str(value)
+
+    baseline = snapshot.get("baseline") or {}
+    baseline_rows = "".join(row([labels.get(key, {}).get("label", key), _format(value),
+                                  labels.get(key, {}).get("unit", "")])
+                            for key, value in baseline.items())
+    threshold_rows = "".join(row([labels.get(key, {}).get("label", key), _format(value),
+                                   labels.get(key, {}).get("unit", "")])
+                             for key, value in (snapshot.get("thresholds") or {}).items())
+    event_rows = []
+    for event in events[-200:]:
+        metric = labels.get(event.get("metric"), {})
+        event_rows.append(row([event.get("time_utc") or "未記録", _format(event.get("elapsed_s")),
+                               metric.get("label", event.get("metric") or "全体"),
+                               kinds.get(event.get("transition"), event.get("transition") or "記録"),
+                               _format(event.get("value")), _format(event.get("threshold")),
+                               metric.get("unit", "")]))
+    if not event_rows:
+        event_rows.append('<tr><td colspan="7">保存されたイベントはありません。</td></tr>')
+    raw_link = "./" + quote(os.path.relpath(capture_path.resolve(), output_path.parent.resolve()), safe="/")
+    title = html.escape(str(session.get("label") or "室内監視"))
+    reason = snapshot.get("reason") or (data.get("end") or {}).get("reason")
+    reasons = {"duration_complete": "指定時間の監視が終了", "stopped": "監視を停止",
+               "response_timeout": "応答がタイムアウト", "device_error": "デバイスエラー",
+               "size_limit": "記録容量の上限", "interrupted": "監視を中断",
+               "user_interrupt": "監視を中断"}
+    ending = reasons.get(reason, str(reason or "終了記録なし"))
+    payload = _embedded_json({"data": data, "room_watch": room})
+    return f'''<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FlatSat 室内監視記録</title><style>
+*{{box-sizing:border-box}}body{{margin:0;background:#f3f6f8;color:#172d43;font:15px/1.7 system-ui,sans-serif}}
+main{{max-width:1050px;margin:auto;padding:30px 20px 60px}}h1{{font-size:26px}}h2{{font-size:18px}}
+.card{{background:white;border:1px solid #dfe7ec;border-radius:12px;padding:20px;margin:18px 0}}
+.stats{{display:flex;flex-wrap:wrap;gap:24px}}.stats strong{{display:block;font-size:28px}}
+.hint{{color:#687b8b;font-size:13px}}.table-wrap{{overflow-x:auto}}table{{border-collapse:collapse;width:100%;font-size:13px}}
+th,td{{padding:10px;text-align:left;border-bottom:1px solid #e7edf1}}td{{overflow-wrap:anywhere}}
+a{{color:#006d80}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}}
+@media(max-width:650px){{main{{padding:18px 14px 40px}}.card{{padding:16px}}table{{min-width:550px}}}}
+</style></head><body><main>
+<p class="hint">FLATSAT / 室内監視のイベント記録</p><h1>{title}</h1>
+<section class="card"><div class="stats"><div>照会総数<strong>{html.escape(count(snapshot.get('observed_count')))}</strong></div>
+<div>有効な応答<strong>{html.escape(count(snapshot.get('valid_count')))}</strong></div>
+<div>変化の検出<strong>{sum(event.get('transition') == 'changed' for event in events)}</strong></div></div>
+<p class="hint">イベントと定期的な状態を保存した記録です。通常時の全サンプルを連続計測したグラフではありません。</p>
+<p>終了状態: {html.escape(ending)}</p></section>
+{_session_context(session)}
+<section class="card"><h2>開始時の固定した基準値</h2><div class="table-wrap"><table><thead><tr><th>項目</th><th>基準値</th><th>単位</th></tr></thead><tbody>{baseline_rows}</tbody></table></div></section>
+<section class="card"><h2>変化量の設定</h2><div class="table-wrap"><table><thead><tr><th>項目</th><th>変化量</th><th>単位</th></tr></thead><tbody>{threshold_rows}</tbody></table></div></section>
+<section class="card" id="room-events"><h2>監視イベント</h2><p class="hint">保存イベント {len(events)} 件のうち直近 {min(200, len(events))} 件を表示しています。全件は元の JSONL に含まれます。</p><div class="table-wrap"><table><thead><tr><th>照会開始 (UTC)</th><th>経過 (秒)</th><th>項目</th><th>イベント</th><th>基準との差</th><th>しきい値</th><th>単位</th></tr></thead><tbody>{''.join(event_rows)}</tbody></table></div></section>
+<section class="card"><h2>記録元</h2><p><a href="{html.escape(raw_link, quote=True)}">元の JSONL を保存</a></p><details><summary>接続と監視の設定</summary><pre>{html.escape(json.dumps(session, ensure_ascii=False, indent=2))}</pre></details></section>
+</main><script id="capture-data" type="application/json">{payload}</script></body></html>'''
+
+
 def _render(data: dict, capture_path: Path, output_path: Path) -> str:
+    if data.get("session", {}).get("mode") == "room_watch":
+        return _render_room(data, capture_path, output_path)
     samples, summary, session = data["samples"], data["summary"], data["session"]
     metrics = [{"key": key, **definition} for key, definition in METRICS.items()]
     first_metric = metrics[0]

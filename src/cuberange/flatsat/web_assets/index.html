@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light">
   <title>CubeRange Console</title>
   <link rel="stylesheet" href="/style.css">
@@ -21,6 +21,7 @@
         <button type="button" data-view="measurement"><span class="nav-symbol" aria-hidden="true">∿</span>計測<span class="nav-index">02</span></button>
         <button type="button" data-view="captures"><span class="nav-symbol" aria-hidden="true">▤</span>保存ログ<span class="nav-index">03</span></button>
         <button type="button" data-view="exercises"><span class="nav-symbol" aria-hidden="true">◇</span>演習<span class="nav-index">04</span></button>
+        <button type="button" data-view="room"><span class="nav-symbol" aria-hidden="true">⌂</span>室内監視<span class="nav-index">05</span></button>
       </nav>
       <div class="sidebar-footer"><span class="local-indicator" aria-hidden="true"></span><span>ローカルコンソール<small>space-cs-sim</small></span></div>
     </aside>
@@ -65,7 +66,7 @@
             <p class="muted">温度・気圧・湿度・加速度を読み出し、ログに保存します。</p>
             <form id="watch-form">
               <div class="field"><label for="watch-board">対象ボード</label><select id="watch-board" class="board-selector" required><option value="">接続ボードがありません</option></select></div>
-              <div class="form-row"><div class="field"><label for="watch-duration">計測時間 <span class="label-unit">秒</span></label><input id="watch-duration" type="number" min="0.2" max="60" step="0.1" value="10" required><small>最大 60 秒</small></div><div class="field"><label for="watch-interval">取得間隔 <span class="label-unit">秒</span></label><input id="watch-interval" type="number" min="0.02" max="60" step="0.01" value="1" required><small>ホストからの問い合わせ間隔</small></div></div>
+              <div class="form-row"><div class="field"><label for="watch-duration">計測時間 <span class="label-unit">秒</span></label><input id="watch-duration" type="number" inputmode="decimal" min="0.2" max="60" step="0.1" value="10" required><small>最大 60 秒</small></div><div class="field"><label for="watch-interval">取得間隔 <span class="label-unit">秒</span></label><input id="watch-interval" type="number" inputmode="decimal" min="0.02" max="60" step="0.01" value="1" required><small>ホストからの問い合わせ間隔</small></div></div>
               <div class="field"><label for="watch-label">実験名 <span class="optional">任意</span></label><input id="watch-label" maxlength="120" placeholder="例：机上・静止状態"></div>
               <div class="field"><label for="watch-note">メモ <span class="optional">任意</span></label><textarea id="watch-note" maxlength="1000" rows="2" placeholder="姿勢や周囲の条件など"></textarea></div>
               <div class="limits-heading"><h3>しきい値 <span class="optional">任意</span></h3><button class="text-button" type="button" id="add-limit">＋ 追加</button></div>
@@ -83,7 +84,7 @@
               <p class="muted">選んだポートに届くデータを保存します。データが届かない場合も、その結果を記録します。</p>
               <form id="monitor-form">
                 <div class="field"><label for="monitor-board">対象ボード</label><select id="monitor-board" class="board-selector" required><option value="">接続ボードがありません</option></select></div>
-                <div class="form-row"><div class="field"><label for="monitor-port">受信ポート</label><select id="monitor-port"><option value="all">すべての認識済みポート</option><option value="shell">Cat-Shell</option><option value="radio0">Cat-Radio0</option><option value="radio1">Cat-Radio1</option></select></div><div class="field"><label for="monitor-duration">記録時間 <span class="label-unit">秒</span></label><input id="monitor-duration" type="number" min="0.2" max="60" step="0.1" value="10" required></div></div>
+                <div class="form-row"><div class="field"><label for="monitor-port">受信ポート</label><select id="monitor-port"><option value="all">すべての認識済みポート</option><option value="shell">Cat-Shell</option><option value="radio0">Cat-Radio0</option><option value="radio1">Cat-Radio1</option></select></div><div class="field"><label for="monitor-duration">記録時間 <span class="label-unit">秒</span></label><input id="monitor-duration" type="number" inputmode="decimal" min="0.2" max="60" step="0.1" value="10" required></div></div>
                 <div class="form-error" id="monitor-error" role="alert" hidden></div>
                 <button type="submit" class="button button-secondary usb-action" id="monitor-button">受信記録を開始</button>
               </form>
@@ -92,9 +93,41 @@
         </div>
       </section>
 
+      <section class="view" id="view-room" aria-labelledby="room-heading" hidden>
+        <div class="room-grid">
+          <article class="card room-settings">
+            <div class="card-heading"><div><p class="eyebrow">ROOM WATCH</p><h2 id="room-heading">変化を見守る</h2></div><span class="badge badge-neutral">Cat-Shell</span></div>
+            <p class="muted">基板の動きと、温度・湿度・気圧の変化を記録します。基準は開始時に取得し、監視中は固定します。</p>
+            <form id="room-form">
+              <div class="field"><label for="room-board">対象ボード</label><select id="room-board" class="board-selector" required><option value="">接続ボードがありません</option></select></div>
+              <div class="form-row"><div class="field"><label for="room-duration">監視時間 <span class="label-unit">秒</span></label><input id="room-duration" type="number" inputmode="decimal" min="0.2" max="86400" step="0.1" value="3600" required><small>3,600 秒で 1 時間。最大 24 時間</small></div><div class="field"><label for="room-interval">取得間隔 <span class="label-unit">秒</span></label><input id="room-interval" type="number" inputmode="decimal" min="0.2" max="60" step="0.1" value="1" required><small>短い振動は、取得間隔によって捉えられない場合があります。</small></div></div>
+              <div class="form-row"><div class="field"><label for="room-baseline">基準に使うサンプル <span class="label-unit">件</span></label><input id="room-baseline" type="number" inputmode="numeric" min="3" max="120" step="1" value="20" required><small>開始時の有効な値から基準を作成</small></div><div class="field"><label for="room-confirm">変化の確認回数 <span class="label-unit">回</span></label><input id="room-confirm" type="number" inputmode="numeric" min="1" max="10" step="1" value="3" required><small>連続して変化を確認してから記録</small></div></div>
+              <h3 class="room-threshold-heading">基準との差のしきい値</h3>
+              <div class="form-row"><div class="field"><label for="room-movement">基板の動き <span class="label-unit">mg</span></label><input id="room-movement" type="number" inputmode="decimal" min="0.000001" step="any" value="80" required></div><div class="field"><label for="room-temperature">温度の変化 <span class="label-unit">°C</span></label><input id="room-temperature" type="number" inputmode="decimal" min="0.000001" step="any" value="2" required></div></div>
+              <div class="form-row"><div class="field"><label for="room-humidity">湿度の変化 <span class="label-unit">ポイント</span></label><input id="room-humidity" type="number" inputmode="decimal" min="0.000001" step="any" value="10" required></div><div class="field"><label for="room-pressure">気圧の変化 <span class="label-unit">Pa</span></label><input id="room-pressure" type="number" inputmode="decimal" min="0.000001" step="any" value="500" required></div></div>
+              <div class="field"><label for="room-label">記録名 <span class="optional">任意</span></label><input id="room-label" maxlength="200" placeholder="例：机上・室内環境"></div>
+              <div class="form-error" id="room-error" role="alert" hidden></div>
+              <button type="submit" class="button button-primary button-full usb-action" id="room-start-button">監視を開始 <span aria-hidden="true">→</span></button>
+              <p class="form-footnote">タブを閉じても、サーバーが動いている間は監視を続けます。</p>
+            </form>
+          </article>
+          <div class="room-side">
+            <article class="card room-live" id="room-live">
+              <div class="card-heading"><div><p class="eyebrow">LIVE STATUS</p><h2>現在の監視</h2></div><span id="room-phase" class="badge badge-neutral">待機中</span></div>
+              <button type="button" class="button button-secondary" id="room-stop-button" disabled>監視を停止</button>
+              <div class="form-error" id="room-stop-error" role="alert" hidden></div>
+              <div id="room-status" class="empty-inline">開始すると基準取得の進行と、最新のセンサー値を表示します。</div>
+            </article>
+            <article class="card room-guidance"><h3>この監視で分かること</h3><p class="muted">基板の動きと周囲の環境変化を捉えます。人の在室を直接判定するものではありません。</p><p class="muted">変化のイベントと、60 秒ごとの状態を保存します。すべての読み取り値を記録する場合は「計測」を使ってください。</p></article>
+          </div>
+        </div>
+        <article class="card room-event-card"><div class="card-heading"><h2>変化のイベント</h2><span class="caption">最新 50 件</span></div><div id="room-events" class="empty-inline">基準取得や変化が発生すると、ここに表示します。</div></article>
+      </section>
+
       <section class="view" id="view-captures" aria-labelledby="captures-heading" hidden>
         <div class="section-heading"><div><h2 id="captures-heading">実験ログ</h2><p class="muted section-description">保存した記録を選んで、計測結果を確認します。</p></div><label class="button button-secondary file-button" for="capture-import">JSONL を取り込む<input id="capture-import" type="file" accept=".jsonl,application/json,application/x-ndjson"></label></div>
         <div class="form-error" id="import-error" role="alert" hidden></div>
+        <label class="mobile-capture-picker" for="capture-picker">ログを選択<select id="capture-picker"><option value="">保存ログを選択してください</option></select></label>
         <div class="captures-grid"><aside class="capture-browser card" aria-label="保存ログの一覧"><div id="capture-list" class="capture-list"><div class="empty-inline">保存ログがありません。</div></div></aside><article class="card capture-detail" id="capture-detail"><div class="empty-state"><span class="empty-symbol" aria-hidden="true">▤</span><h3>記録を選択</h3><p>ログを選ぶと、グラフ・統計・しきい値イベントを表示します。<br>過去の JSONL ファイルも取り込めます。</p></div></article></div>
       </section>
 

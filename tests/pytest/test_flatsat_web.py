@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from email.message import Message
+import errno
 from http.client import HTTPConnection
 import json
 from pathlib import Path
@@ -479,3 +481,108 @@ def test_monitor_all_never_opens_unknown_interfaces_or_selects_unknown_only_boar
 def test_server_rejects_invalid_ports_before_binding(tmp_path, port):
     with pytest.raises(ValueError, match="port must be"):
         web.make_server(port=port, data_dir=tmp_path)
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.2", "10.0.0.1", "172.16.0.1",
+                                  "8.8.8.8", "127.0.0.2", "localhost", "device.example.ts.net",
+                                  "::1", "::", "100.63.255.255", "100.128.0.0", "",
+                                  "127.000.0.1", " 127.0.0.1", True, None, 2130706433])
+def test_host_restrictions_reject_dns_wildcards_lan_and_ipv6_before_side_effects(tmp_path, monkeypatch, host):
+    def forbidden_bind(_server):
+        raise AssertionError("Invalid host reached socket binding")
+
+    monkeypatch.setattr(web.FlatSatServer, "server_bind", forbidden_bind)
+    storage = tmp_path / "not-created"
+    with pytest.raises(ValueError, match="host must be"):
+        web.make_server(host=host, data_dir=storage, adapter=FakeAdapter())
+    assert not storage.exists()
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "100.64.0.0", "100.65.1.2", "100.127.255.255"])
+def test_chosen_literal_address_is_bound_and_forms_host_origin_and_url(tmp_path, monkeypatch, host):
+    bound = []
+
+    def fake_bind(server):
+        bound.append(server.server_address)
+        server.server_address = (server.server_address[0], 41414)
+
+    monkeypatch.setattr(web.FlatSatServer, "server_bind", fake_bind)
+    monkeypatch.setattr(web.FlatSatServer, "server_activate", lambda _server: None)
+    server = web.make_server(host=host, port=0, data_dir=tmp_path, adapter=FakeAdapter())
+    try:
+        assert bound == [(host, 0)]
+        assert server.host == host and server.authority == f"{host}:41414"
+        assert server.url == f"http://{host}:41414/"
+        handler = object.__new__(web.Handler)
+        handler.server = server
+        handler.client_address = (host, 53100)
+
+        def headers(*, authority=server.authority, origin=f"http://{server.authority}", token=server.csrf_token):
+            result = Message()
+            result["Host"], result["Origin"] = authority, origin
+            result["X-CubeRange-Token"] = token
+            result["Sec-Fetch-Site"] = "same-origin"
+            return result
+
+        handler.headers = headers()
+        handler._guard(mutation=True)
+        for invalid in (headers(authority="localhost:41414"),
+                        headers(origin="http://other-address:41414"), headers(token="wrong")):
+            handler.headers = invalid
+            with pytest.raises(web.RequestError) as rejected:
+                handler._guard(mutation=True)
+            assert rejected.value.status == 403
+        if host != "127.0.0.1":
+            handler.headers = headers(authority="127.0.0.1:41414")
+            with pytest.raises(web.RequestError, match="Host must match"):
+                handler._guard()
+            handler.headers = headers(origin="http://127.0.0.1:41414")
+            with pytest.raises(web.RequestError, match="Cross-origin"):
+                handler._guard()
+    finally:
+        server.server_close()
+
+
+def test_unavailable_bind_error_retains_errno_and_identifies_chosen_address(tmp_path, monkeypatch):
+    def unavailable(_server):
+        raise OSError(errno.EADDRNOTAVAIL, "Cannot assign requested address")
+
+    monkeypatch.setattr(web.FlatSatServer, "server_bind", unavailable)
+    with pytest.raises(OSError, match="100.65.1.2:8765") as error:
+        web.make_server(host="100.65.1.2", port=8765, data_dir=tmp_path, adapter=FakeAdapter())
+    assert error.value.errno == errno.EADDRNOTAVAIL
+
+
+@pytest.mark.parametrize(("peer", "accepted"), [("127.0.0.1", True), ("100.64.0.0", True),
+                                               ("100.65.1.3", True), ("100.127.255.255", True),
+                                               ("192.168.1.2", False), ("10.0.0.1", False),
+                                               ("8.8.8.8", False), ("100.63.255.255", False),
+                                               ("100.128.0.0", False), ("127.0.0.2", False),
+                                               ("::ffff:100.65.1.3", False), ("::1", False),
+                                               ("localhost", False), (None, False), (True, False)])
+def test_tailnet_guard_uses_actual_peer_even_with_valid_auth_and_spoofed_forwarded_header(
+        tmp_path, monkeypatch, peer, accepted):
+    monkeypatch.setattr(web.FlatSatServer, "server_bind", lambda _server: None)
+    monkeypatch.setattr(web.FlatSatServer, "server_activate", lambda _server: None)
+    server = web.make_server(host="100.65.1.2", port=8765, data_dir=tmp_path, adapter=FakeAdapter())
+    try:
+        handler = object.__new__(web.Handler)
+        handler.server = server
+        handler.client_address = (peer, 53100)
+        handler.headers = Message()
+        handler.headers["Host"] = server.authority
+        handler.headers["Origin"] = f"http://{server.authority}"
+        handler.headers["X-CubeRange-Token"] = server.csrf_token
+        handler.headers["Sec-Fetch-Site"] = "same-origin"
+        # A caller cannot turn a LAN peer into a tailnet peer by asserting this
+        # header; nor can the header reject an otherwise valid direct peer.
+        handler.headers["X-Forwarded-For"] = "192.168.1.2" if accepted else "100.65.1.3"
+        for mutation in (False, True):
+            if accepted:
+                handler._guard(mutation=mutation)
+            else:
+                with pytest.raises(web.RequestError, match="Peer must use") as rejected:
+                    handler._guard(mutation=mutation)
+                assert rejected.value.status == 403
+    finally:
+        server.server_close()
