@@ -30,10 +30,15 @@ from .usb import FlatSatError, QUERY_COMMANDS, discover_ports, select_ports
 
 MAX_BODY = 2 * 1024 * 1024
 MAX_CAPTURE = 32 * 1024 * 1024
+MAX_ROOM_INBOX_ITEMS = 200
+MAX_ROOM_REVIEWS = 4096
+MAX_ROOM_REVIEW_BYTES = 512 * 1024
 _ID = re.compile(r"[0-9a-f]{32}\Z")
+_REVIEW_ID = re.compile(r"[0-9a-f]{32}:[1-9][0-9]{0,6}\Z")
 _USB_LOCK = threading.Lock()
 _ASSETS = Path(__file__).parent / "web_assets"
 _TAILNET = ipaddress.IPv4Network("100.64.0.0/10")
+_ROOM_REVIEW_FILE = ".room-reviews.json"
 
 
 class RequestError(ValueError):
@@ -105,6 +110,76 @@ def _strict_json(text: str):
                           object_pairs_hook=object_pairs)
     except RecursionError as exc:
         raise ValueError("JSON nesting is too deep") from exc
+
+
+def _room_inbox_items(capture_id: str, events, *, label: str, report_url: str,
+                      reviewed=frozenset(), first_sequence: int = 1) -> list[dict]:
+    """Pair validated room transitions without exposing their raw USB proof."""
+    items = []
+    changes = {}
+    health = None
+    for offset, event in enumerate(events):
+        if not isinstance(event, dict):
+            continue
+        sequence = first_sequence + offset
+        transition = event.get("transition")
+        metric = event.get("metric")
+        if transition == "changed" and isinstance(metric, str):
+            item_id = f"{capture_id}:{sequence}"
+            item = {"id": item_id, "capture_id": capture_id, "sequence": sequence,
+                    "kind": "change", "metric": metric, "time_utc": event.get("time_utc"),
+                    "recovered_at": None, "duration_s": None, "active": True,
+                    "value": event.get("value"), "threshold": event.get("threshold"),
+                    "label": label, "report_url": report_url, "reviewed": item_id in reviewed}
+            items.append(item)
+            changes[metric] = (item, event.get("elapsed_s"))
+        elif transition == "recovered" and isinstance(metric, str) and metric in changes:
+            item, started = changes.pop(metric)
+            _close_room_inbox_item(item, started, event)
+        elif transition == "unavailable":
+            item_id = f"{capture_id}:{sequence}"
+            item = {"id": item_id, "capture_id": capture_id, "sequence": sequence,
+                    "kind": "health", "metric": None, "time_utc": event.get("time_utc"),
+                    "recovered_at": None, "duration_s": None, "active": True,
+                    "value": None, "threshold": None, "label": label,
+                    "report_url": report_url, "reviewed": item_id in reviewed}
+            items.append(item)
+            health = (item, event.get("elapsed_s"))
+        elif transition == "resumed" and health is not None:
+            item, started = health
+            health = None
+            _close_room_inbox_item(item, started, event)
+    return items
+
+
+def _close_room_inbox_item(item: dict, started, event: dict) -> None:
+    item["recovered_at"] = event.get("time_utc")
+    ended = event.get("elapsed_s")
+    if (isinstance(started, (int, float)) and not isinstance(started, bool) and
+            isinstance(ended, (int, float)) and not isinstance(ended, bool) and
+            math.isfinite(started) and math.isfinite(ended) and ended >= started):
+        item["duration_s"] = round(ended - started, 6)
+    item["active"] = False
+
+
+def _room_inbox_counts(items: list[dict], *, shown_count: int | None = None) -> dict:
+    return {"total_count": len(items),
+            "shown_count": len(items) if shown_count is None else shown_count,
+            "change_count": sum(item["kind"] == "change" for item in items),
+            "health_count": sum(item["kind"] == "health" for item in items),
+            "active_count": sum(item["active"] for item in items),
+            "unreviewed_count": sum(not item["reviewed"] for item in items)}
+
+
+def _room_event_sort_key(item: dict):
+    try:
+        stamp = datetime.fromisoformat(str(item.get("time_utc", "")).replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            raise ValueError
+        stamp = stamp.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
+        stamp = datetime.min.replace(tzinfo=timezone.utc)
+    return stamp, item["capture_id"], item["sequence"]
 
 
 def _job_request(body: dict) -> dict:
@@ -215,12 +290,129 @@ class FlatSatServer(ThreadingHTTPServer):
         self.worker: threading.Thread | None = None
         self.closing = False
         self.capture_cache: dict[str, tuple[int, int, dict]] = {}
+        self.room_reviews = self._load_room_reviews()
         try:
             super().__init__((self.host, port), Handler)
         except OSError as exc:
             raise OSError(exc.errno, f"Cannot bind FlatSat web console to {self.host}:{port}: {exc.strerror}") from exc
         self.authority = f"{self.host}:{self.server_address[1]}"
         self.url = f"http://{self.authority}/"
+
+    def _load_room_reviews(self) -> set[str]:
+        path = self.data_dir / _ROOM_REVIEW_FILE
+        if path.is_symlink():
+            raise ValueError("Room review state must be a regular file")
+        if not path.exists():
+            return set()
+        if not path.is_file():
+            raise ValueError("Room review state must be a regular file")
+        if path.stat().st_size > MAX_ROOM_REVIEW_BYTES:
+            raise ValueError("Room review state exceeds its size limit")
+        try:
+            document = _strict_json(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise ValueError(f"Invalid room review state: {exc}") from exc
+        if (not isinstance(document, dict) or set(document) != {"version", "reviewed"} or
+                type(document.get("version")) is not int or document["version"] != 1 or
+                not isinstance(document.get("reviewed"), list)):
+            raise ValueError("Invalid room review state document")
+        values = document["reviewed"]
+        if (len(values) > MAX_ROOM_REVIEWS or
+                any(not isinstance(value, str) or not _REVIEW_ID.fullmatch(value) for value in values) or
+                len(set(values)) != len(values)):
+            raise ValueError("Invalid room review state entries")
+        return set(values)
+
+    def _store_room_reviews(self, values: set[str]) -> None:
+        if len(values) > MAX_ROOM_REVIEWS:
+            raise RequestError("Room review state reached its item limit", 409)
+        encoded = (json.dumps({"version": 1, "reviewed": sorted(values)},
+                              ensure_ascii=True, separators=(",", ":")) + "\n").encode("utf-8")
+        if len(encoded) > MAX_ROOM_REVIEW_BYTES:
+            raise RequestError("Room review state reached its size limit", 409)
+        path = self.data_dir / _ROOM_REVIEW_FILE
+        temporary = self.data_dir / f".room-reviews.{uuid.uuid4().hex}.tmp"
+        try:
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _capture_room_items(self, capture_id: str, data: dict,
+                            reviewed: set[str] | frozenset[str]) -> list[dict]:
+        room = data.get("room_watch")
+        if not isinstance(room, dict):
+            return []
+        session = data["session"]
+        return _room_inbox_items(capture_id, room.get("events", []),
+                                 label=session.get("label") or session.get("mode") or "room_watch",
+                                 report_url=data["report_url"], reviewed=reviewed)
+
+    def _update_active_room_inbox(self, job: dict, snapshot: dict) -> None:
+        """Consume the newly exposed tail while retaining old open incidents."""
+        tracker = job.setdefault("_room_inbox", {
+            "seen_sequence": 0, "open_changes": {}, "open_health": None, "closed": [],
+            "counts": {"total_count": 0, "change_count": 0, "health_count": 0,
+                       "unreviewed_count": 0},
+        })
+        events = snapshot.get("events") if isinstance(snapshot, dict) else None
+        total = snapshot.get("event_count") if isinstance(snapshot, dict) else None
+        if (not isinstance(events, list) or not isinstance(total, int) or isinstance(total, bool) or
+                total < len(events)):
+            return
+        first_sequence = total - len(events) + 1
+        if tracker["seen_sequence"] < first_sequence - 1:
+            # Normal progress callbacks occur after every poll, so a gap is
+            # only possible when adopting an already-running external job.
+            tracker["seen_sequence"] = first_sequence - 1
+        label = job.get("label") or "room_watch"
+        report_url = f"/reports/{job['capture_id']}"
+        for offset, event in enumerate(events):
+            sequence = first_sequence + offset
+            if sequence <= tracker["seen_sequence"] or not isinstance(event, dict):
+                continue
+            transition, metric = event.get("transition"), event.get("metric")
+            if transition in ("changed", "unavailable"):
+                item = _room_inbox_items(job["capture_id"], [event], label=label,
+                                         report_url=report_url, reviewed=self.room_reviews,
+                                         first_sequence=sequence)[0]
+                if transition == "changed" and isinstance(metric, str):
+                    tracker["open_changes"][metric] = (item, event.get("elapsed_s"))
+                    tracker["counts"]["change_count"] += 1
+                elif transition == "unavailable":
+                    tracker["open_health"] = (item, event.get("elapsed_s"))
+                    tracker["counts"]["health_count"] += 1
+                tracker["counts"]["total_count"] += 1
+                tracker["counts"]["unreviewed_count"] += not item["reviewed"]
+            elif transition == "recovered" and isinstance(metric, str):
+                pending = tracker["open_changes"].pop(metric, None)
+                if pending is not None:
+                    item, started = pending
+                    _close_room_inbox_item(item, started, event)
+                    tracker["closed"].append(item)
+            elif transition == "resumed" and tracker["open_health"] is not None:
+                item, started = tracker["open_health"]
+                tracker["open_health"] = None
+                _close_room_inbox_item(item, started, event)
+                tracker["closed"].append(item)
+            tracker["seen_sequence"] = sequence
+        tracker["closed"] = tracker["closed"][-MAX_ROOM_INBOX_ITEMS:]
+
+    def _active_room_inbox(self, job: dict, reviewed: set[str] | frozenset[str]) -> tuple[list[dict], dict]:
+        self._update_active_room_inbox(job, job.get("room_watch") or {})
+        tracker = job["_room_inbox"]
+        retained = [*tracker["closed"],
+                    *(item for item, _started in tracker["open_changes"].values())]
+        if tracker["open_health"] is not None:
+            retained.append(tracker["open_health"][0])
+        items = [{**item, "reviewed": item["id"] in reviewed} for item in retained]
+        counts = dict(tracker["counts"])
+        counts["active_count"] = len(tracker["open_changes"]) + (tracker["open_health"] is not None)
+        return items, counts
 
     def assert_capture_ready(self, capture_id: str) -> None:
         with self.lock:
@@ -298,8 +490,11 @@ class FlatSatServer(ThreadingHTTPServer):
                 self.capture_cache.pop(next(iter(self.capture_cache)))
         return result
 
-    def capture_entry(self, capture_id: str) -> dict:
-        data = self._capture_data(capture_id)
+    def capture_entry(self, capture_id: str, *, data=None, reviewed=None) -> dict:
+        data = self._capture_data(capture_id) if data is None else data
+        if reviewed is None:
+            with self.lock:
+                reviewed = frozenset(self.room_reviews)
         summary, session = data["summary"], data["session"]
         entry = {"id": capture_id, "label": session.get("label") or session.get("mode"),
                 "mode": session.get("mode"), "time_utc": session.get("time_utc"),
@@ -308,6 +503,10 @@ class FlatSatServer(ThreadingHTTPServer):
                 "report_url": data["report_url"], "raw_url": data["raw_url"]}
         if "room_watch" in data:
             entry["event_count"] = data["room_watch"]["snapshot"]["event_count"]
+            room_items = self._capture_room_items(capture_id, data, reviewed)
+            entry.update(change_count=sum(item["kind"] == "change" for item in room_items),
+                         health_count=sum(item["kind"] == "health" for item in room_items),
+                         unreviewed_count=sum(not item["reviewed"] for item in room_items))
         return entry
 
     def _job_snapshot(self, job: dict) -> dict:
@@ -360,20 +559,41 @@ class FlatSatServer(ThreadingHTTPServer):
         except (FlatSatError, OSError, ValueError) as exc:
             devices, discovery_error = [], str(exc)
         with self.lock:
+            reviewed = frozenset(self.room_reviews)
+            active_source = next((job for job in reversed(self.jobs) if job["status"] == "running"), None)
+            if active_source and active_source["task"] == "room_watch":
+                active_inbox, active_counts = self._active_room_inbox(active_source, reviewed)
+            else:
+                active_inbox = []
+                active_counts = {"total_count": 0, "change_count": 0, "health_count": 0,
+                                 "active_count": 0, "unreviewed_count": 0}
             jobs = [self._job_snapshot(job) for job in reversed(self.jobs)]
             active_ids = {job["capture_id"] for job in jobs if job["status"] == "running"}
         captures = []
+        completed_inbox = []
         for path in sorted(self.data_dir.glob("*.jsonl"), key=lambda path: path.name, reverse=True):
             if path.stem in active_ids or not _ID.fullmatch(path.stem):
                 continue
             try:
-                captures.append(self.capture_entry(path.stem))
+                data = self._capture_data(path.stem)
+                captures.append(self.capture_entry(path.stem, data=data, reviewed=reviewed))
+                completed_inbox.extend(self._capture_room_items(path.stem, data, reviewed))
             except RequestError:
                 continue
+        active_job = next((job for job in jobs if job["status"] == "running"), None)
         captures.sort(key=lambda capture: str(capture["time_utc"] or ""), reverse=True)
+        completed_counts = _room_inbox_counts(completed_inbox)
+        inbox_items = [*completed_inbox, *active_inbox]
+        inbox_items.sort(key=_room_event_sort_key, reverse=True)
+        visible_items = inbox_items[:MAX_ROOM_INBOX_ITEMS]
+        inbox_counts = {key: completed_counts[key] + active_counts[key]
+                        for key in ("total_count", "change_count", "health_count",
+                                    "active_count", "unreviewed_count")}
+        inbox_counts["shown_count"] = len(visible_items)
         return {"devices": devices, "discovery_error": discovery_error,
-                "active_job": next((job for job in jobs if job["status"] == "running"), None),
+                "active_job": active_job,
                 "recent_jobs": jobs[:20], "captures": captures[:200],
+                "room_inbox": {"items": visible_items, "counts": inbox_counts},
                 "csrf_token": self.csrf_token, "metrics": METRICS}
 
     def start_job(self, request: dict) -> dict:
@@ -388,10 +608,11 @@ class FlatSatServer(ThreadingHTTPServer):
                    "capture_id": job_id, "error": None, "exit_code": None,
                    "_started": time.monotonic()}
             if request["task"] == "room_watch":
-                job.update(stop_requested=False, _stop_event=threading.Event(),
+                job.update(stop_requested=False, label=request["label"], _stop_event=threading.Event(),
                            room_watch=RoomDetector(baseline_samples=request["baseline_samples"],
                                                    confirm_samples=request["confirm_samples"],
                                                    thresholds=request["thresholds"]).snapshot())
+                self._update_active_room_inbox(job, job["room_watch"])
             self.jobs.append(job)
             self.jobs = self.jobs[-100:]
             self.worker = threading.Thread(target=self._run_job, args=(job, request),
@@ -404,6 +625,38 @@ class FlatSatServer(ThreadingHTTPServer):
                 raise
             return self._job_snapshot(job)
 
+    def review_room_item(self, capture_id: str, sequence: int, reviewed: bool) -> dict:
+        with self.lock:
+            active = next((job for job in self.jobs
+                           if job["capture_id"] == capture_id and job["status"] == "running" and
+                           job["task"] == "room_watch"), None)
+            current_reviews = frozenset(self.room_reviews)
+            items = self._active_room_inbox(active, current_reviews)[0] if active else []
+        if not active:
+            try:
+                data = self._capture_data(capture_id)
+            except RequestError as exc:
+                raise RequestError("Room inbox item not found", 404) from exc
+            items = self._capture_room_items(capture_id, data, current_reviews)
+        item = next((candidate for candidate in items if candidate["sequence"] == sequence), None)
+        if item is None:
+            raise RequestError("Room inbox item not found", 404)
+        with self.lock:
+            was_reviewed = item["id"] in self.room_reviews
+            updated = set(self.room_reviews)
+            if reviewed:
+                updated.add(item["id"])
+            else:
+                updated.discard(item["id"])
+            if updated != self.room_reviews:
+                self._store_room_reviews(updated)
+                self.room_reviews = updated
+                if active:
+                    delta = (1 if was_reviewed else 0) - (1 if reviewed else 0)
+                    active["_room_inbox"]["counts"]["unreviewed_count"] += delta
+        item["reviewed"] = reviewed
+        return item
+
     def _run_job(self, job: dict, request: dict) -> None:
         code, error = None, None
         try:
@@ -412,6 +665,7 @@ class FlatSatServer(ThreadingHTTPServer):
                 def progress(snapshot):
                     with self.lock:
                         job["room_watch"] = snapshot
+                        self._update_active_room_inbox(job, snapshot)
                 code = self.adapter.run_room_watch(request, output, job["_stop_event"], progress)
             else:
                 code = self.adapter.run(request, output)
@@ -422,6 +676,7 @@ class FlatSatServer(ThreadingHTTPServer):
                 if "room_watch" in data:
                     with self.lock:
                         job["room_watch"] = data["room_watch"]["snapshot"]
+                        self._update_active_room_inbox(job, job["room_watch"])
                     if code != 0:
                         error = "Room watch ended: " + str(data["room_watch"]["snapshot"].get("reason"))
         except Exception as exc:
@@ -638,6 +893,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(202 if job["status"] == "running" else 200, {"job": job})
             elif self.path == "/api/captures/import":
                 self._json(201, {"capture": self.server.import_capture(body)})
+            elif match := re.fullmatch(r"/api/room-inbox/([0-9a-f]{32})/([1-9][0-9]{0,6})/review",
+                                       self.path):
+                if set(body) != {"reviewed"} or type(body.get("reviewed")) is not bool:
+                    raise RequestError("Review body must contain exactly one boolean reviewed field")
+                item = self.server.review_room_item(match[1], int(match[2]), body["reviewed"])
+                self._json(200, {"item": item})
             else:
                 raise RequestError("Not found", 404)
         except RequestError as exc:

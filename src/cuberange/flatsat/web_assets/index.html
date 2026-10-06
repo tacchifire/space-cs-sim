@@ -21,7 +21,7 @@
         <button type="button" data-view="measurement"><span class="nav-symbol" aria-hidden="true">∿</span>計測<span class="nav-index">02</span></button>
         <button type="button" data-view="captures"><span class="nav-symbol" aria-hidden="true">▤</span>保存ログ<span class="nav-index">03</span></button>
         <button type="button" data-view="exercises"><span class="nav-symbol" aria-hidden="true">◇</span>演習<span class="nav-index">04</span></button>
-        <button type="button" data-view="room"><span class="nav-symbol" aria-hidden="true">⌂</span>室内監視<span class="nav-index">05</span></button>
+        <button type="button" data-view="room" id="room-nav-button" aria-label="室内監視"><span class="nav-symbol" aria-hidden="true">⌂</span>室内監視<span class="nav-index">05</span><span id="room-nav-count" class="nav-alert-count" aria-hidden="true" hidden></span></button>
       </nav>
       <div class="sidebar-footer"><span class="local-indicator" aria-hidden="true"></span><span>ローカルコンソール<small>space-cs-sim</small></span></div>
     </aside>
@@ -94,6 +94,21 @@
       </section>
 
       <section class="view" id="view-room" aria-labelledby="room-heading" hidden>
+        <article class="card room-inbox" aria-labelledby="room-inbox-heading">
+          <div class="card-heading room-inbox-heading">
+            <div><p class="eyebrow">CHANGE INBOX</p><h2 id="room-inbox-heading">変化インボックス</h2></div>
+            <span id="room-inbox-summary" class="badge badge-neutral">要確認 0 件</span>
+          </div>
+          <p class="muted room-inbox-description">記録された変化と取得異常を、新しい順に確認できます。</p>
+          <div class="room-inbox-filters" role="group" aria-label="変化インボックスの表示">
+            <button type="button" data-room-inbox-filter="unreviewed" aria-pressed="true">要確認 <span id="room-inbox-unreviewed-count">0</span></button>
+            <button type="button" data-room-inbox-filter="reviewed" aria-pressed="false">確認済み <span id="room-inbox-reviewed-count">0</span></button>
+            <button type="button" data-room-inbox-filter="health" aria-pressed="false">取得異常 <span id="room-inbox-health-count">0</span></button>
+          </div>
+          <div class="form-error" id="room-inbox-error" role="alert" hidden></div>
+          <div id="room-inbox-list" class="room-inbox-list"><p class="empty-inline">確認が必要な変化はありません</p></div>
+          <p id="room-inbox-range" class="caption room-inbox-range" hidden></p>
+        </article>
         <div class="room-grid">
           <article class="card room-settings">
             <div class="card-heading"><div><p class="eyebrow">ROOM WATCH</p><h2 id="room-heading">変化を見守る</h2></div><span class="badge badge-neutral">Cat-Shell</span></div>
