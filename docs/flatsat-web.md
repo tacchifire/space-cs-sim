@@ -100,6 +100,14 @@ The monitor does not save every poll as a continuous sensor recording.
 The screen shows the latest readings and event history; saved logs and standalone reports show the retained events.
 The total query count and the event count describe different things.
 
+The Change inbox reads validated indoor-monitoring recordings and lists only changes that need review and sensor-availability incidents, newest first.
+A baseline-ready event alone does not increase the review count.
+Each change shows its measurement, detection time, difference from baseline, configured threshold and either its recovery time or an ongoing state.
+Sensor-availability incidents are kept separate from environmental changes.
+An item can be marked reviewed and returned to unreviewed; the state is shared by phones and computers using the same console.
+Review state is written atomically to a separate management file and never modifies the evidence JSONL.
+The displayed difference and threshold are observation values, not a calibrated assessment of danger or safety.
+
 Closing the browser tab does not stop a session while the server remains running.
 Use Stop monitoring to release the USB port; other console USB operations wait until that session ends.
 A response timeout or device error ends the session and leaves its reason in the recording.

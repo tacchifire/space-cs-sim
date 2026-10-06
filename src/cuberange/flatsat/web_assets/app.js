@@ -31,6 +31,7 @@
   let metrics = metricDefaults, loadedCapture = null, currentMetric = "temperature_c";
   let timer = null, controller = null, toastTimer = null, captureRequest = 0, ownJob = null, stopped = false, chartResizeFrame = 0;
   let devicesSignature = "", capturesSignature = "", exercisesLoaded = false;
+  let roomInboxFilter = "unreviewed", roomInboxSignature = "";
   const selectionKey = "cuberange.flatsat.capture";
   let storedSelection = null, selectionRestored = false;
   try {
@@ -38,6 +39,7 @@
     if (/^[0-9a-f]{32}$/.test(saved?.id || "")) storedSelection = saved;
   } catch (_) { /* Storage can be unavailable in a private browser session. */ }
   const knownJobs = new Map();
+  const roomInboxPending = new Set();
   let stopPending = false, roomStopRequested = null, roomBaselineExpanded = false;
 
   function el(tag, className, text) {
@@ -294,6 +296,196 @@
     if (finite(total) && total > visible.length) content.append(el("p", "caption", `最新 ${visible.length} 件を表示しています（記録されたイベント ${number(total, 0)} 件）。詳細はレポート、全件は JSONL で確認できます。`));
     return content;
   }
+
+  function roomInboxKey(item) {
+    return `${item?.capture_id || ""}:${item?.sequence ?? ""}`;
+  }
+  function roomInboxCount(counts, key, fallback) {
+    const value = counts?.[key];
+    return Number.isInteger(value) && value >= 0 ? value : fallback;
+  }
+  function roomInboxDuration(value) {
+    if (!finite(value) || value < 0) return null;
+    if (value < 60) return `${number(value, value < 10 ? 1 : 0)} 秒`;
+    const seconds = Math.round(value), hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60), rest = seconds % 60;
+    const parts = [];
+    if (hours) parts.push(`${hours} 時間`);
+    if (minutes) parts.push(`${minutes} 分`);
+    if (rest && !hours) parts.push(`${rest} 秒`);
+    return parts.join(" ") || "0 秒";
+  }
+  function roomInboxFocusToken() {
+    const active = document.activeElement;
+    const filter = active?.closest?.("[data-room-inbox-filter]");
+    if (filter) return {filter: filter.dataset.roomInboxFilter};
+    const card = active?.closest?.("[data-room-inbox-key]");
+    if (!card) return null;
+    const cards = [...$("room-inbox-list").querySelectorAll("[data-room-inbox-key]")];
+    return {key: card.dataset.roomInboxKey, action: active.dataset.roomInboxAction, index: cards.indexOf(card)};
+  }
+  function restoreRoomInboxFocus(token) {
+    if (!token) return;
+    if (token.filter) {
+      document.querySelector(`[data-room-inbox-filter="${token.filter}"]`)?.focus({preventScroll: true});
+      return;
+    }
+    const cards = [...$("room-inbox-list").querySelectorAll("[data-room-inbox-key]")];
+    let card = cards.find((candidate) => candidate.dataset.roomInboxKey === token.key);
+    if (!card && cards.length) card = cards[Math.min(Math.max(token.index || 0, 0), cards.length - 1)];
+    let target = token.action ? card?.querySelector(`[data-room-inbox-action="${token.action}"]:not(:disabled)`) : null;
+    target ||= card?.querySelector("button:not(:disabled)");
+    target ||= document.querySelector(`[data-room-inbox-filter="${roomInboxFilter}"]`);
+    target?.focus({preventScroll: true});
+  }
+  function roomInboxStatus(item) {
+    const duration = roomInboxDuration(item.duration_s);
+    let text;
+    if (item.kind === "health") {
+      text = item.active ? "取得異常が継続中" : item.recovered_at ? `取得再開 ${time(item.recovered_at, true)}` : "取得再開時刻は未記録";
+    } else {
+      text = item.active ? "変化が継続中" : item.recovered_at ? `回復 ${time(item.recovered_at, true)}` : "回復時刻は未記録";
+    }
+    return duration ? `${text} · 継続 ${duration}` : text;
+  }
+  function roomInboxCard(item) {
+    const key = roomInboxKey(item), isHealth = item.kind === "health";
+    const metric = roomMetrics[item.metric] || {label: item.metric || "監視項目", changeUnit: ""};
+    const recordLabel = typeof item.label === "string" && item.label.trim() ? item.label.trim() : "記録名なし";
+    const card = el("article", `room-inbox-item room-inbox-item-${isHealth ? "health" : "change"}${item.reviewed ? " is-reviewed" : ""}`);
+    card.dataset.roomInboxKey = key;
+    const heading = el("div", "room-inbox-item-heading"), title = el("div"), labels = el("div", "room-inbox-item-badges");
+    title.append(el("p", "room-inbox-kind", isHealth ? "取得異常" : "変化"), el("h3", "", isHealth ? "センサー値を取得できない時間がありました" : `${metric.label}の変化`));
+    labels.append(badge(item.active ? "継続中" : isHealth ? "取得再開" : "回復", item.active ? "wait" : "neutral"), badge(item.reviewed ? "確認済み" : "要確認", item.reviewed ? "ready" : "wait"));
+    heading.append(title, labels); card.append(heading);
+
+    const meta = el("div", "room-inbox-meta"), detected = el("span");
+    const detectedTime = el("time", "", time(item.time_utc, true));
+    if (typeof item.time_utc === "string") detectedTime.dateTime = item.time_utc;
+    detected.append("検知 ", detectedTime);
+    meta.append(detected, el("span", "room-inbox-record", `記録：${recordLabel}`));
+    card.append(meta, el("p", "room-inbox-state", roomInboxStatus(item)));
+    if (!isHealth) {
+      const value = finite(item.value) ? `${number(item.value)}${metric.changeUnit ? ` ${metric.changeUnit}` : ""}` : "未記録";
+      const threshold = finite(item.threshold) ? `${number(item.threshold)}${metric.changeUnit ? ` ${metric.changeUnit}` : ""}` : "未設定";
+      card.append(el("p", "room-inbox-measurement", `基準との差 ${value} · 設定しきい値 ${threshold}`));
+    }
+
+    const actions = el("div", "room-inbox-actions");
+    const review = el("button", "button button-secondary", item.reviewed ? "未確認に戻す" : "確認済みにする");
+    review.type = "button"; review.dataset.roomInboxAction = "review"; review.disabled = roomInboxPending.has(key);
+    review.setAttribute("aria-label", `${recordLabel}の${isHealth ? "取得異常" : `${metric.label}の変化`}を${item.reviewed ? "未確認に戻す" : "確認済みにする"}`);
+    review.addEventListener("click", () => reviewRoomInboxItem(item, review));
+    const activeJob = state?.active_job;
+    const waitingForCapture = activeJob?.task === "room_watch" && (activeJob.id === item.capture_id || activeJob.capture_id === item.capture_id);
+    const open = el("button", "button button-subtle", waitingForCapture ? "監視終了後に開けます" : "保存ログを開く");
+    open.type = "button"; open.dataset.roomInboxAction = "open";
+    open.disabled = waitingForCapture;
+    open.setAttribute("aria-label", waitingForCapture ? `${recordLabel}の保存ログは監視終了後に開けます` : `${recordLabel}の保存ログを開く`);
+    if (waitingForCapture) open.title = "監視が終了して保存ログが確定すると開けます";
+    else open.addEventListener("click", () => { switchView("captures"); selectCapture(item.capture_id); });
+    actions.append(review, open);
+    const reportUrl = typeof item.report_url === "string" ? item.report_url : "";
+    if (!waitingForCapture && /^\/reports\/[0-9a-f]{32}$/.test(reportUrl) && reportUrl === `/reports/${item.capture_id}`) {
+      const report = el("a", "button button-subtle", "HTMLレポート");
+      report.href = reportUrl; report.target = "_blank"; report.rel = "noopener"; report.dataset.roomInboxAction = "report";
+      report.setAttribute("aria-label", `${recordLabel}のHTMLレポートを新しいタブで開く`);
+      actions.append(report);
+    }
+    card.append(actions);
+    return card;
+  }
+  function renderRoomInbox({force = false, focusToken = undefined} = {}) {
+    if (roomInboxPending.size && !force) return;
+    const inbox = state?.room_inbox || {}, items = Array.isArray(inbox.items) ? inbox.items : [], counts = inbox.counts || {};
+    const activeCapture = state?.active_job?.capture_id || state?.active_job?.id || null;
+    const signature = JSON.stringify([roomInboxFilter, items, counts, activeCapture]);
+    if (!force && signature === roomInboxSignature) return;
+    const previousFocus = focusToken === undefined ? roomInboxFocusToken() : focusToken;
+    roomInboxSignature = signature;
+
+    const derivedUnreviewed = items.filter((item) => !item.reviewed).length;
+    const derivedHealth = items.filter((item) => item.kind === "health").length;
+    const total = roomInboxCount(counts, "total_count", items.length);
+    const shown = roomInboxCount(counts, "shown_count", items.length);
+    const unreviewed = roomInboxCount(counts, "unreviewed_count", derivedUnreviewed);
+    const health = roomInboxCount(counts, "health_count", derivedHealth);
+    const active = roomInboxCount(counts, "active_count", items.filter((item) => item.active).length);
+    const reviewed = Math.max(0, total - unreviewed);
+    $("room-inbox-unreviewed-count").textContent = number(unreviewed, 0);
+    $("room-inbox-reviewed-count").textContent = number(reviewed, 0);
+    $("room-inbox-health-count").textContent = number(health, 0);
+    $("room-inbox-summary").textContent = `要確認 ${number(unreviewed, 0)} 件`;
+    $("room-inbox-summary").className = `badge badge-${unreviewed ? "wait" : "neutral"}`;
+    $("room-nav-count").textContent = unreviewed > 99 ? "99+" : String(unreviewed);
+    $("room-nav-count").hidden = unreviewed === 0;
+    $("room-nav-button").setAttribute("aria-label", unreviewed ? `室内監視、要確認 ${number(unreviewed, 0)} 件` : "室内監視");
+    for (const button of document.querySelectorAll("[data-room-inbox-filter]")) button.setAttribute("aria-pressed", String(button.dataset.roomInboxFilter === roomInboxFilter));
+
+    const range = $("room-inbox-range"), rangeParts = [];
+    if (total > shown) rangeParts.push(`最新 ${number(shown, 0)} 件を表示（全 ${number(total, 0)} 件）`);
+    if (active) rangeParts.push(`継続中 ${number(active, 0)} 件`);
+    range.textContent = rangeParts.join(" · "); range.hidden = !rangeParts.length;
+
+    const ordered = items.map((item, index) => ({item, index})).sort((left, right) => {
+      const leftTime = Date.parse(left.item.time_utc), rightTime = Date.parse(right.item.time_utc);
+      const timeDifference = (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0);
+      if (timeDifference) return timeDifference;
+      const sequenceDifference = Number(right.item.sequence) - Number(left.item.sequence);
+      return Number.isFinite(sequenceDifference) && sequenceDifference ? sequenceDifference : left.index - right.index;
+    }).map((entry) => entry.item);
+    const visible = ordered.filter((item) => roomInboxFilter === "health" ? item.kind === "health" : roomInboxFilter === "reviewed" ? !!item.reviewed : !item.reviewed);
+    const list = $("room-inbox-list"); list.replaceChildren();
+    if (!visible.length) {
+      const empty = {unreviewed: "確認が必要な変化はありません", reviewed: "確認済みの変化はありません", health: "取得異常の記録はありません"}[roomInboxFilter];
+      list.append(el("p", "empty-inline room-inbox-empty", empty));
+    } else for (const item of visible) list.append(roomInboxCard(item));
+    restoreRoomInboxFocus(previousFocus);
+  }
+  function applyRoomInboxReview(result, sourceItem, requestedReview) {
+    const sourceKey = roomInboxKey(sourceItem), currentInbox = state?.room_inbox || {items: [], counts: {}};
+    const currentItem = currentInbox.items?.find((item) => roomInboxKey(item) === sourceKey);
+    const previousReview = typeof currentItem?.reviewed === "boolean" ? currentItem.reviewed : !!sourceItem.reviewed;
+    const returnedInbox = [result?.room_inbox, result?.inbox, result].find((candidate) => Array.isArray(candidate?.items));
+    const returnedItem = result?.item || result?.inbox_item || (result?.capture_id ? result : null);
+    if (returnedInbox) state.room_inbox = returnedInbox;
+    else {
+      const nextItem = returnedItem && roomInboxKey(returnedItem) === sourceKey ? returnedItem : {...sourceItem, reviewed: requestedReview};
+      const actualReview = typeof nextItem.reviewed === "boolean" ? nextItem.reviewed : requestedReview;
+      const items = Array.isArray(currentInbox.items) ? currentInbox.items.map((item) => roomInboxKey(item) === sourceKey ? {...item, ...nextItem, reviewed: actualReview} : item) : [];
+      const counts = {...(currentInbox.counts || {})};
+      if (previousReview !== actualReview && Number.isInteger(counts.unreviewed_count)) counts.unreviewed_count = Math.max(0, counts.unreviewed_count + (actualReview ? -1 : 1));
+      state.room_inbox = {...currentInbox, items, counts};
+    }
+    const actual = state.room_inbox?.items?.find((item) => roomInboxKey(item) === sourceKey);
+    const actualReview = typeof actual?.reviewed === "boolean" ? actual.reviewed : requestedReview;
+    if (previousReview !== actualReview) {
+      const capture = state?.captures?.find((candidate) => candidate.id === sourceItem.capture_id);
+      if (capture && Number.isInteger(capture.unreviewed_count)) capture.unreviewed_count = Math.max(0, capture.unreviewed_count + (actualReview ? -1 : 1));
+      capturesSignature = "";
+    }
+    return actualReview;
+  }
+  async function reviewRoomInboxItem(item, button) {
+    const key = roomInboxKey(item);
+    if (roomInboxPending.has(key)) return;
+    const card = button.closest("[data-room-inbox-key]"), cards = [...$("room-inbox-list").querySelectorAll("[data-room-inbox-key]")];
+    const focusToken = {key, action: "review", index: cards.indexOf(card)};
+    const requestedReview = !item.reviewed, originalText = button.textContent;
+    roomInboxPending.add(key); button.disabled = true; button.textContent = "更新中…"; card?.setAttribute("aria-busy", "true");
+    showError("room-inbox-error", "");
+    try {
+      const capture = encodeURIComponent(String(item.capture_id)), sequence = encodeURIComponent(String(item.sequence));
+      const result = await api(`/api/room-inbox/${capture}/${sequence}/review`, {reviewed: requestedReview});
+      const actualReview = applyRoomInboxReview(result, item, requestedReview);
+      toast(actualReview ? "確認済みにしました。" : "未確認に戻しました。");
+    } catch (error) {
+      showError("room-inbox-error", error.message);
+    } finally {
+      roomInboxPending.delete(key);
+      if (button.isConnected) { button.disabled = false; button.textContent = originalText; card?.removeAttribute("aria-busy"); }
+      roomInboxSignature = ""; renderCaptureList(); renderRoomInbox({force: true, focusToken});
+    }
+  }
   function renderRoomJob(job) {
     if (!job) {
       $("room-status").replaceChildren(el("p", "empty-inline", "開始すると基準取得の進行と、最新のセンサー値を表示します。"));
@@ -416,7 +608,12 @@
       const placeholder = new Option(captures.length ? "ログを選択してください" : "保存ログがありません", "");
       placeholder.disabled = captures.length > 0;
       picker.replaceChildren(placeholder);
-      for (const capture of captures) picker.append(new Option(`${capture.label || modes[capture.mode] || "名称未設定"} · ${time(capture.time_utc)} · #${capture.id.slice(0, 6)}`, capture.id));
+      for (const capture of captures) {
+        const roomCounts = capture.mode === "room_watch"
+          ? ` — 変化${number(capture.change_count, 0)}・異常${number(capture.health_count, 0)}・要確認${number(capture.unreviewed_count, 0)}`
+          : "";
+        picker.append(new Option(`${capture.label || modes[capture.mode] || "名称未設定"} · ${time(capture.time_utc)} · #${capture.id.slice(0, 6)}${roomCounts}`, capture.id));
+      }
       picker.value = captures.some((capture) => capture.id === selectedCapture) ? selectedCapture : "";
       picker.disabled = !captures.length;
     }
@@ -427,7 +624,11 @@
       item.type = "button"; item.setAttribute("aria-pressed", String(capture.id === selectedCapture));
       item.append(el("span", "capture-item-title", capture.label || modes[capture.mode] || "名称未設定"), el("span", "capture-item-time", time(capture.time_utc)));
       const bottom = el("span", "capture-item-bottom");
-      bottom.append(badge(modes[capture.mode] || capture.mode || "ログ"), el("span", "", capture.mode === "room_watch" ? `イベント ${number(capture.event_count, 0)} 件` : capture.mode === "watch" ? `${number(capture.valid_count, 0)} / ${number(capture.sample_count, 0)} 件有効` : capture.completion === "complete" ? "記録終了" : "終了状態を確認"));
+      const summary = capture.mode === "room_watch"
+        ? `変化 ${number(capture.change_count, 0)} / 取得異常 ${number(capture.health_count, 0)} / 要確認 ${number(capture.unreviewed_count, 0)}`
+        : capture.mode === "watch" ? `${number(capture.valid_count, 0)} / ${number(capture.sample_count, 0)} 件有効`
+          : capture.completion === "complete" ? "記録終了" : "終了状態を確認";
+      bottom.append(badge(modes[capture.mode] || capture.mode || "ログ"), el("span", capture.mode === "room_watch" ? "capture-room-counts" : "", summary));
       item.append(bottom); item.addEventListener("click", () => selectCapture(capture.id)); list.append(item);
     }
   }
@@ -742,7 +943,7 @@
       $("server-dot").className = "status-dot online"; $("server-status").textContent = "接続中";
       $("last-updated").textContent = new Date().toLocaleTimeString("ja-JP", {hour: "2-digit", minute: "2-digit", second: "2-digit"});
       showError("connection-error", state.discovery_error ? `デバイス確認：${state.discovery_error}` : "");
-      renderDevices(); renderCaptureList(); restoreSelection(); renderJobs();
+      renderDevices(); renderCaptureList(); restoreSelection(); renderRoomInbox(); renderJobs();
     } catch (error) {
       online = false; $("server-dot").className = "status-dot offline"; $("server-status").textContent = "接続待ち";
       showError("connection-error", "コンソールに接続できません。サーバーの起動状態を確認してください。自動的に再接続します。");
@@ -754,6 +955,9 @@
 
   for (const button of document.querySelectorAll("[data-view]")) button.addEventListener("click", () => switchView(button.dataset.view));
   for (const select of document.querySelectorAll(".board-selector")) select.addEventListener("change", updateActions);
+  for (const button of document.querySelectorAll("[data-room-inbox-filter]")) button.addEventListener("click", () => {
+    roomInboxFilter = button.dataset.roomInboxFilter; roomInboxSignature = ""; renderRoomInbox({force: true});
+  });
   $("monitor-port").addEventListener("change", updateActions);
   $("refresh-devices").addEventListener("click", refresh);
   $("add-limit").addEventListener("click", addLimit);
