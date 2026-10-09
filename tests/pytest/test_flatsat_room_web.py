@@ -185,5 +185,9 @@ def test_edited_room_import_metadata_is_a_4xx_and_interrupted_events_remain_avai
         assert detail['room_watch']['snapshot']['valid_count'] is None
         assert len(detail['room_watch']['events']) == 3
         assert all('confirmation_samples' not in event for event in detail['room_watch']['events'])
+        summary = request(server)[1]['room_summary']
+        assert summary['history_complete'] is False
+        assert summary['latest_saved_observation']['capture_id'] == result['capture']['id']
+        assert summary['latest_saved_observation']['state'] == 'unknown'
         raw = request(server, path=detail['raw_url'])[1]
         assert b'"confirmation_samples"' in raw

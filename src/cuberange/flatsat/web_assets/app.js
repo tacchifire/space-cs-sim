@@ -26,12 +26,13 @@
     pressure_pa: {label: "気圧", unit: "Pa", changeUnit: "Pa"}
   };
   const roomPhases = {calibrating: "基準取得中", monitoring: "監視中", unavailable: "取得不可", stopped: "監視終了"};
+  const roomReasons = {duration_complete: "設定時間終了", stopped: "手動停止", response_timeout: "応答タイムアウト", device_error: "デバイスエラー", size_limit: "サイズ上限", interrupted: "中断"};
   const roomTransitions = {baseline_ready: "基準取得", changed: "変化", recovered: "回復", unavailable: "欠測", resumed: "取得再開"};
   let state = null, online = false, pending = false, pendingJob = false, view = "connection", selectedCapture = null;
   let metrics = metricDefaults, loadedCapture = null, currentMetric = "temperature_c";
   let timer = null, controller = null, toastTimer = null, captureRequest = 0, ownJob = null, stopped = false, chartResizeFrame = 0;
   let devicesSignature = "", capturesSignature = "", exercisesLoaded = false;
-  let roomInboxFilter = "unreviewed", roomInboxSignature = "";
+  let roomInboxFilter = "unreviewed", roomInboxSignature = "", roomSummarySignature = "";
   const selectionKey = "cuberange.flatsat.capture";
   let storedSelection = null, selectionRestored = false;
   try {
@@ -297,6 +298,93 @@
     return content;
   }
 
+  function roomCurrentSummary() {
+    const job = state?.active_job;
+    if (job?.task !== "room_watch" || job.status !== "running") return {
+      label: "待機中", badge: "停止中", kind: "neutral",
+      detail: "室内監視を開始すると、現在の状態を表示します。"
+    };
+    const snapshot = job.room_watch || {}, phase = snapshot.phase;
+    const changed = Object.entries(snapshot.states || {}).filter(([, value]) => value === "changed").map(([key]) => roomMetrics[key]?.label || key);
+    const started = typeof job.started_at === "string" ? ` · 開始 ${time(job.started_at, true)}` : "";
+    if (job.stop_requested || roomStopRequested === job.id) return {label: "停止処理中", badge: "実行中", kind: "wait", detail: `保存処理の完了を待っています${started}`};
+    if (phase === "calibrating") return {label: "基準取得中", badge: "実行中", kind: "ready", detail: `基準 ${number(snapshot.baseline_count, 0)} / ${number(snapshot.baseline_target, 0)} 件${started}`};
+    if (phase === "unavailable") return {label: "取得不可", badge: "実行中", kind: "wait", detail: `有効なセンサー値の再取得を待っています${started}`};
+    if (changed.length) return {label: "変化を確認", badge: "実行中", kind: "wait", detail: `${changed.join("・")} · 現在の設定で検知${started}`};
+    return {label: "監視中", badge: "実行中", kind: "ready", detail: `現在の設定で検知中の変化はありません${started}`};
+  }
+
+  function renderRoomSummary() {
+    const summary = state?.room_summary || {}, current = roomCurrentSummary();
+    const signature = JSON.stringify([summary.capture_count, summary.history_complete,
+      summary.clock_warning_count, summary.latest_saved_observation, summary.windows, current]);
+    if (signature === roomSummarySignature) return;
+    roomSummarySignature = signature;
+    const captureCount = Number.isInteger(summary.capture_count) && summary.capture_count >= 0 ? summary.capture_count : 0;
+    $("room-summary-count").textContent = `保存ログ ${number(captureCount, 0)} 件`;
+    $("room-summary-current").textContent = current.label;
+    $("room-summary-current-badge").textContent = current.badge;
+    $("room-summary-current-badge").className = `badge badge-${current.kind}`;
+    $("room-summary-current-detail").textContent = current.detail;
+
+    const latest = summary.latest_saved_observation;
+    const latestLabels = {normal: "記録終了時に変化なし", changed: "記録終了時に変化あり",
+      unavailable: "記録終了時に取得不可", calibrating: "基準取得未完了", unknown: "終了状態を確認できません"};
+    const latestButton = $("room-summary-open-latest");
+    if (latest && /^[0-9a-f]{32}$/.test(latest.capture_id || "")) {
+      $("room-summary-latest").textContent = latestLabels[latest.state] || latestLabels.unknown;
+      const label = typeof latest.label === "string" && latest.label.trim() ? latest.label.trim() : "記録名なし";
+      const changed = Array.isArray(latest.changed_metrics) ? latest.changed_metrics.map((key) => roomMetrics[key]?.label).filter(Boolean) : [];
+      const reason = roomReasons[latest.termination_reason] || "終了理由未記録";
+      const observed = typeof latest.observed_at === "string" ? `最終観測 ${time(latest.observed_at, true)}`
+        : typeof latest.started_at === "string" ? `観測値なし · 記録開始 ${time(latest.started_at, true)}` : "観測値なし";
+      const clockWarning = latest.clock_warning === true ? " · 時刻要確認" : "";
+      $("room-summary-latest-detail").textContent = `${label} · ${observed} · ${reason}${changed.length ? ` · ${changed.join("・")}` : ""}${clockWarning}`;
+      latestButton.hidden = false; latestButton.disabled = false;
+    } else {
+      $("room-summary-latest").textContent = "保存ログなし";
+      $("room-summary-latest-detail").textContent = "室内監視の保存ログがありません。";
+      latestButton.hidden = true; latestButton.disabled = true;
+    }
+
+    function renderWindow(window, valueId, detailId) {
+      const incidents = Number.isInteger(window?.incident_count) && window.incident_count >= 0 ? window.incident_count : 0;
+      const recordings = Number.isInteger(window?.recording_count) && window.recording_count >= 0 ? window.recording_count : 0;
+      const hasData = recordings > 0 || incidents > 0;
+      $(valueId).textContent = hasData ? `${number(incidents, 0)} 件` : "—";
+      $(detailId).textContent = hasData ? `変化 ${number(window?.change_count, 0)} · 取得異常 ${number(window?.health_count, 0)} · 保存観測 ${number(recordings, 0)} 件` : "期間内の保存観測・イベントなし";
+    }
+    const day = summary.windows?.["24h"], week = summary.windows?.["7d"];
+    renderWindow(day, "room-summary-day", "room-summary-day-detail");
+    renderWindow(week, "room-summary-week", "room-summary-week-detail");
+
+    const longest = week?.longest_closed, duration = roomInboxDuration(longest?.duration_s);
+    if (longest && duration) {
+      const label = longest.kind === "health" ? "取得異常" : roomMetrics[longest.metric]?.label || "監視項目";
+      $("room-summary-longest").textContent = duration;
+      $("room-summary-longest-detail").textContent = `${label} · ${time(longest.time_utc)} · 回復確認済み`;
+    } else {
+      $("room-summary-longest").textContent = "—";
+      $("room-summary-longest-detail").textContent = week?.incident_count ? "回復まで確認できた記録なし" : "期間内の検知なし";
+    }
+    const top = Array.isArray(week?.top_metrics) ? week.top_metrics.filter((item) => roomMetrics[item?.metric] && Number.isInteger(item.count) && item.count > 0) : [];
+    if (top.length) {
+      $("room-summary-top").textContent = top.map((item) => roomMetrics[item.metric].label).join("・");
+      $("room-summary-top-detail").textContent = top.length > 1 ? `各保存ログの設定で各 ${number(top[0].count, 0)} 件`
+        : `各保存ログの設定で ${number(top[0].count, 0)} 件検知`;
+    } else {
+      $("room-summary-top").textContent = "—";
+      $("room-summary-top-detail").textContent = week?.recording_count || week?.incident_count ? "変化の検知なし" : "期間内の変化検知なし";
+    }
+    const notes = [`保存ログ ${number(captureCount, 0)} 件。期間はログに記録されたホスト時刻を基準にします。`];
+    if (summary.history_complete === false) notes.push("保存ログ全体に中断記録があります。");
+    if (day?.history_complete === false) notes.push("過去24時間の件数は保存済みイベントの範囲です。");
+    if (week?.history_complete === false) notes.push("過去7日の件数は保存済みイベントの範囲です。");
+    if (Number.isInteger(summary.clock_warning_count) && summary.clock_warning_count > 0) notes.push(`集計に使う開始・観測・イベント時刻が現在より後の保存ログが ${number(summary.clock_warning_count, 0)} 件あります。期間集計では現在より後の観測・イベントを除外しました。`);
+    notes.push("基準値・しきい値は保存ログごとの設定で異なります。異なる部屋の記録や重複して取り込んだログは区別しません。監視していない時間、部屋の安全性、在室状況は判定しません。");
+    $("room-summary-note").textContent = notes.join(" ");
+  }
+
   function roomInboxKey(item) {
     return `${item?.capture_id || ""}:${item?.sequence ?? ""}`;
   }
@@ -337,13 +425,13 @@
     target ||= document.querySelector(`[data-room-inbox-filter="${roomInboxFilter}"]`);
     target?.focus({preventScroll: true});
   }
-  function roomInboxStatus(item) {
+  function roomInboxStatus(item, live) {
     const duration = roomInboxDuration(item.duration_s);
     let text;
     if (item.kind === "health") {
-      text = item.active ? "取得異常が継続中" : item.recovered_at ? `取得再開 ${time(item.recovered_at, true)}` : "取得再開時刻は未記録";
+      text = item.active ? live ? "取得異常が継続中" : "記録終了時まで取得再開なし" : item.recovered_at ? `取得再開 ${time(item.recovered_at, true)}` : "取得再開時刻は未記録";
     } else {
-      text = item.active ? "変化が継続中" : item.recovered_at ? `回復 ${time(item.recovered_at, true)}` : "回復時刻は未記録";
+      text = item.active ? live ? "変化が継続中" : "記録終了時まで回復なし" : item.recovered_at ? `回復 ${time(item.recovered_at, true)}` : "回復時刻は未記録";
     }
     return duration ? `${text} · 継続 ${duration}` : text;
   }
@@ -351,11 +439,13 @@
     const key = roomInboxKey(item), isHealth = item.kind === "health";
     const metric = roomMetrics[item.metric] || {label: item.metric || "監視項目", changeUnit: ""};
     const recordLabel = typeof item.label === "string" && item.label.trim() ? item.label.trim() : "記録名なし";
+    const activeJob = state?.active_job;
+    const waitingForCapture = activeJob?.task === "room_watch" && (activeJob.id === item.capture_id || activeJob.capture_id === item.capture_id);
     const card = el("article", `room-inbox-item room-inbox-item-${isHealth ? "health" : "change"}${item.reviewed ? " is-reviewed" : ""}`);
     card.dataset.roomInboxKey = key;
     const heading = el("div", "room-inbox-item-heading"), title = el("div"), labels = el("div", "room-inbox-item-badges");
     title.append(el("p", "room-inbox-kind", isHealth ? "取得異常" : "変化"), el("h3", "", isHealth ? "センサー値を取得できない時間がありました" : `${metric.label}の変化`));
-    labels.append(badge(item.active ? "継続中" : isHealth ? "取得再開" : "回復", item.active ? "wait" : "neutral"), badge(item.reviewed ? "確認済み" : "要確認", item.reviewed ? "ready" : "wait"));
+    labels.append(badge(item.active ? waitingForCapture ? "継続中" : "回復未記録" : isHealth ? "取得再開" : "回復", item.active ? "wait" : "neutral"), badge(item.reviewed ? "確認済み" : "要確認", item.reviewed ? "ready" : "wait"));
     heading.append(title, labels); card.append(heading);
 
     const meta = el("div", "room-inbox-meta"), detected = el("span");
@@ -363,7 +453,7 @@
     if (typeof item.time_utc === "string") detectedTime.dateTime = item.time_utc;
     detected.append("検知 ", detectedTime);
     meta.append(detected, el("span", "room-inbox-record", `記録：${recordLabel}`));
-    card.append(meta, el("p", "room-inbox-state", roomInboxStatus(item)));
+    card.append(meta, el("p", "room-inbox-state", roomInboxStatus(item, waitingForCapture)));
     if (!isHealth) {
       const value = finite(item.value) ? `${number(item.value)}${metric.changeUnit ? ` ${metric.changeUnit}` : ""}` : "未記録";
       const threshold = finite(item.threshold) ? `${number(item.threshold)}${metric.changeUnit ? ` ${metric.changeUnit}` : ""}` : "未設定";
@@ -375,8 +465,6 @@
     review.type = "button"; review.dataset.roomInboxAction = "review"; review.disabled = roomInboxPending.has(key);
     review.setAttribute("aria-label", `${recordLabel}の${isHealth ? "取得異常" : `${metric.label}の変化`}を${item.reviewed ? "未確認に戻す" : "確認済みにする"}`);
     review.addEventListener("click", () => reviewRoomInboxItem(item, review));
-    const activeJob = state?.active_job;
-    const waitingForCapture = activeJob?.task === "room_watch" && (activeJob.id === item.capture_id || activeJob.capture_id === item.capture_id);
     const open = el("button", "button button-subtle", waitingForCapture ? "監視終了後に開けます" : "保存ログを開く");
     open.type = "button"; open.dataset.roomInboxAction = "open";
     open.disabled = waitingForCapture;
@@ -423,7 +511,7 @@
 
     const range = $("room-inbox-range"), rangeParts = [];
     if (total > shown) rangeParts.push(`最新 ${number(shown, 0)} 件を表示（全 ${number(total, 0)} 件）`);
-    if (active) rangeParts.push(`継続中 ${number(active, 0)} 件`);
+    if (active) rangeParts.push(`継続中または回復未記録 ${number(active, 0)} 件`);
     range.textContent = rangeParts.join(" · "); range.hidden = !rangeParts.length;
 
     const ordered = items.map((item, index) => ({item, index})).sort((left, right) => {
@@ -943,7 +1031,7 @@
       $("server-dot").className = "status-dot online"; $("server-status").textContent = "接続中";
       $("last-updated").textContent = new Date().toLocaleTimeString("ja-JP", {hour: "2-digit", minute: "2-digit", second: "2-digit"});
       showError("connection-error", state.discovery_error ? `デバイス確認：${state.discovery_error}` : "");
-      renderDevices(); renderCaptureList(); restoreSelection(); renderRoomInbox(); renderJobs();
+      renderDevices(); renderCaptureList(); restoreSelection(); renderRoomSummary(); renderRoomInbox(); renderJobs();
     } catch (error) {
       online = false; $("server-dot").className = "status-dot offline"; $("server-status").textContent = "接続待ち";
       showError("connection-error", "コンソールに接続できません。サーバーの起動状態を確認してください。自動的に再接続します。");
@@ -963,6 +1051,10 @@
   $("add-limit").addEventListener("click", addLimit);
   $("capture-import").addEventListener("change", (event) => importCapture(event.target.files[0]));
   $("capture-picker")?.addEventListener("change", (event) => { if (event.target.value) selectCapture(event.target.value); });
+  $("room-summary-open-latest").addEventListener("click", () => {
+    const captureId = state?.room_summary?.latest_saved_observation?.capture_id;
+    if (/^[0-9a-f]{32}$/.test(captureId || "")) { switchView("captures"); selectCapture(captureId); }
+  });
   $("info-form").addEventListener("submit", (event) => { event.preventDefault(); startJob({task: "info", serial: $("info-board").value}); });
   $("watch-form").addEventListener("submit", (event) => {
     event.preventDefault(); showError("watch-error", "");
