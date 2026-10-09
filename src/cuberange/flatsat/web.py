@@ -7,7 +7,7 @@ operations, never shell commands, arbitrary port paths, or host file paths.
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ipaddress
 import json
@@ -24,7 +24,8 @@ import uuid
 from . import __main__ as cli
 from .alerts import evaluate_capture, parse_limit, validate_limits
 from .report import _render
-from .room_watch import RoomDetector, compact_events, load_room_capture, run_room_watch, validate_config
+from .room_watch import (DEFAULT_THRESHOLDS, RoomDetector, compact_events, load_room_capture,
+                         run_room_watch, validate_config)
 from .telemetry import METRICS, load_capture
 from .usb import FlatSatError, QUERY_COMMANDS, discover_ports, select_ports
 
@@ -180,6 +181,191 @@ def _room_event_sort_key(item: dict):
     except (ValueError, OverflowError):
         stamp = datetime.min.replace(tzinfo=timezone.utc)
     return stamp, item["capture_id"], item["sequence"]
+
+
+def _room_timestamp(value) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            return None
+        return stamp.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
+        return None
+
+
+def _room_summary(records: list[dict], *, now: datetime | None = None) -> dict:
+    """Summarize validated saved room captures without reinterpreting USB evidence."""
+    now = datetime.now(timezone.utc) if now is None else now
+    if not isinstance(now, datetime) or now.tzinfo is None:
+        raise ValueError("room summary time must include a timezone")
+    now = now.astimezone(timezone.utc)
+    metrics = tuple(DEFAULT_THRESHOLDS)
+    items = [item for record in records for item in record.get("items", [])]
+    timed_items = [(stamp, item, record) for record in records for item in record.get("items", [])
+                   if (stamp := _room_timestamp(item.get("time_utc"))) is not None]
+    all_metric_counts = {metric: 0 for metric in metrics}
+    for item in items:
+        if item.get("kind") == "change" and item.get("metric") in all_metric_counts:
+            all_metric_counts[item["metric"]] += 1
+
+    def unclosed_as_of_now(item: dict) -> bool:
+        detected = _room_timestamp(item.get("time_utc"))
+        recovered = _room_timestamp(item.get("recovered_at"))
+        return (detected is not None and detected <= now and
+                (bool(item.get("active")) or (recovered is not None and recovered > now)))
+
+    all_time_counts = {"incident_count": len(items),
+                       "change_count": sum(item.get("kind") == "change" for item in items),
+                       "health_count": sum(item.get("kind") == "health" for item in items),
+                       "unreviewed_count": sum(not item.get("reviewed") for item in items),
+                       "unclosed_count": sum(unclosed_as_of_now(item) for item in items),
+                       "metric_counts": all_metric_counts}
+
+    def observation_time(record: dict) -> datetime | None:
+        snapshot = record.get("snapshot", {})
+        last = snapshot.get("last_sample") if isinstance(snapshot, dict) else None
+        candidates = [_room_timestamp(last.get("time_utc"))] if isinstance(last, dict) else []
+        if isinstance(snapshot, dict):
+            candidates.extend(_room_timestamp(event.get("time_utc"))
+                              for event in snapshot.get("events", []) if isinstance(event, dict))
+        for item in record.get("items", []):
+            candidates.extend((_room_timestamp(item.get("time_utc")),
+                               _room_timestamp(item.get("recovered_at"))))
+        return max((stamp for stamp in candidates if stamp is not None), default=None)
+
+    def started_time(record: dict) -> datetime | None:
+        return _room_timestamp(record.get("session", {}).get("time_utc"))
+
+    def has_future_time(record: dict) -> bool:
+        candidates = [started_time(record), observation_time(record)]
+        for item in record.get("items", []):
+            candidates.extend((_room_timestamp(item.get("time_utc")),
+                               _room_timestamp(item.get("recovered_at"))))
+        return any(stamp is not None and stamp > now for stamp in candidates)
+
+    def complete(record: dict) -> bool:
+        return record.get("snapshot", {}).get("counts_complete") is not False
+
+    def incomplete_may_overlap(record: dict, window_start: datetime) -> bool:
+        if complete(record):
+            return False
+        session_start = started_time(record)
+        if session_start is None or session_start > now:
+            return False
+        if session_start >= window_start:
+            return True
+        session = record.get("session", {})
+        duration = session.get("duration_s")
+        timeout = session.get("timeout_s", 0)
+        if (not isinstance(duration, (int, float)) or isinstance(duration, bool) or
+                not math.isfinite(duration) or duration < 0 or
+                not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or
+                not math.isfinite(timeout) or timeout < 0):
+            return False
+        try:
+            possible_end = session_start + timedelta(seconds=duration + timeout)
+        except OverflowError:
+            return True
+        return possible_end >= window_start
+
+    observed_records = [(stamp, record) for record in records
+                        if (stamp := observation_time(record)) is not None]
+    clock_warning_count = sum(has_future_time(record) for record in records)
+
+    def window(hours: int) -> dict:
+        started = now - timedelta(hours=hours)
+        selected = [(stamp, item, record) for stamp, item, record in timed_items
+                    if started <= stamp <= now]
+        metric_counts = {metric: 0 for metric in metrics}
+        for _stamp, item, _record in selected:
+            if item.get("kind") == "change" and item.get("metric") in metric_counts:
+                metric_counts[item["metric"]] += 1
+        highest = max(metric_counts.values(), default=0)
+        top_metrics = ([{"metric": metric, "count": count}
+                        for metric, count in metric_counts.items() if count == highest]
+                       if highest else [])
+        closed = [(float(item["duration_s"]), stamp, str(item.get("id", "")), item)
+                  for stamp, item, _record in selected
+                  if (not item.get("active") and isinstance(item.get("duration_s"), (int, float))
+                      and not isinstance(item.get("duration_s"), bool)
+                      and math.isfinite(item["duration_s"]) and item["duration_s"] >= 0
+                      and (recovered := _room_timestamp(item.get("recovered_at"))) is not None
+                      and recovered <= now)]
+        longest = max(closed, default=None, key=lambda entry: entry[:3])
+        longest_public = None
+        if longest is not None:
+            item = longest[3]
+            longest_public = {key: item.get(key) for key in (
+                "id", "capture_id", "kind", "metric", "duration_s", "time_utc",
+                "recovered_at", "label", "report_url")}
+        observed_in_window = [(stamp, record) for stamp, record in observed_records
+                              if started <= stamp <= now]
+        relevant_ids = {record.get("capture_id") for _stamp, _item, record in selected}
+        relevant_ids.update(record.get("capture_id") for _stamp, record in observed_in_window)
+        relevant_ids.update(record.get("capture_id") for record in records
+                            if ((stamp := started_time(record)) is not None and
+                                started <= stamp <= now))
+        relevant_ids.update(record.get("capture_id") for record in records
+                            if incomplete_may_overlap(record, started))
+        relevant_records = [record for record in records if record.get("capture_id") in relevant_ids]
+        return {"starts_at": started.isoformat(), "ends_at": now.isoformat(),
+                "recording_count": len(observed_in_window), "incident_count": len(selected),
+                "change_count": sum(item.get("kind") == "change" for _stamp, item, _record in selected),
+                "health_count": sum(item.get("kind") == "health" for _stamp, item, _record in selected),
+                "unreviewed_count": sum(not item.get("reviewed") for _stamp, item, _record in selected),
+                "unclosed_count": sum(unclosed_as_of_now(item)
+                                      for _stamp, item, _record in selected),
+                "metric_counts": metric_counts, "top_metrics": top_metrics,
+                "longest_closed": longest_public,
+                "history_complete": all(complete(record) for record in relevant_records)}
+
+    candidates = []
+    for record in records:
+        observed, started = observation_time(record), started_time(record)
+        ordering = observed if observed is not None else started
+        if ordering is not None:
+            candidates.append((ordering, str(record.get("capture_id", "")), observed, started, record))
+
+    latest_public = None
+    if candidates:
+        _ordering, _capture_key, observed, started, record = max(candidates, key=lambda entry: entry[:2])
+        session = record.get("session", {})
+        snapshot = record.get("snapshot", {})
+        states = snapshot.get("states") if isinstance(snapshot, dict) else None
+        changed = ([metric for metric in metrics if isinstance(states, dict) and
+                    states.get(metric) == "changed"])
+        last = snapshot.get("last_sample") if isinstance(snapshot, dict) else None
+        incomplete = (snapshot.get("counts_complete") is False or
+                      snapshot.get("reason") == "interrupted" or not isinstance(last, dict))
+        if incomplete:
+            state = "unknown"
+        elif isinstance(states, dict) and any(states.get(metric) == "unavailable" for metric in metrics):
+            state = "unavailable"
+        elif changed:
+            state = "changed"
+        elif isinstance(states, dict) and all(states.get(metric) == "normal" for metric in metrics):
+            state = "normal"
+        elif isinstance(states, dict) and all(states.get(metric) == "calibrating" for metric in metrics):
+            state = "calibrating"
+        else:
+            state = "unknown"
+        latest_public = {"capture_id": record.get("capture_id"),
+                         "label": session.get("label") or "room_watch",
+                         "report_url": record.get("report_url"), "state": state,
+                         "observed_at": observed.isoformat() if observed is not None else None,
+                         "started_at": started.isoformat() if started is not None else None,
+                         "changed_metrics": changed, "termination_reason": snapshot.get("reason"),
+                         "clock_warning": has_future_time(record)}
+
+    return {"scope": "validated_saved_room_captures", "generated_at": now.isoformat(),
+            "capture_count": len(records),
+            "history_complete": all(complete(record) for record in records),
+            "clock_warning_count": clock_warning_count,
+            "all_time_counts": all_time_counts,
+            "latest_saved_observation": latest_public,
+            "windows": {"24h": window(24), "7d": window(24 * 7)}}
 
 
 def _job_request(body: dict) -> dict:
@@ -490,7 +676,8 @@ class FlatSatServer(ThreadingHTTPServer):
                 self.capture_cache.pop(next(iter(self.capture_cache)))
         return result
 
-    def capture_entry(self, capture_id: str, *, data=None, reviewed=None) -> dict:
+    def capture_entry(self, capture_id: str, *, data=None, reviewed=None,
+                      room_items: list[dict] | None = None) -> dict:
         data = self._capture_data(capture_id) if data is None else data
         if reviewed is None:
             with self.lock:
@@ -503,7 +690,8 @@ class FlatSatServer(ThreadingHTTPServer):
                 "report_url": data["report_url"], "raw_url": data["raw_url"]}
         if "room_watch" in data:
             entry["event_count"] = data["room_watch"]["snapshot"]["event_count"]
-            room_items = self._capture_room_items(capture_id, data, reviewed)
+            if room_items is None:
+                room_items = self._capture_room_items(capture_id, data, reviewed)
             entry.update(change_count=sum(item["kind"] == "change" for item in room_items),
                          health_count=sum(item["kind"] == "health" for item in room_items),
                          unreviewed_count=sum(not item["reviewed"] for item in room_items))
@@ -571,13 +759,20 @@ class FlatSatServer(ThreadingHTTPServer):
             active_ids = {job["capture_id"] for job in jobs if job["status"] == "running"}
         captures = []
         completed_inbox = []
+        room_records = []
         for path in sorted(self.data_dir.glob("*.jsonl"), key=lambda path: path.name, reverse=True):
             if path.stem in active_ids or not _ID.fullmatch(path.stem):
                 continue
             try:
                 data = self._capture_data(path.stem)
-                captures.append(self.capture_entry(path.stem, data=data, reviewed=reviewed))
-                completed_inbox.extend(self._capture_room_items(path.stem, data, reviewed))
+                room_items = self._capture_room_items(path.stem, data, reviewed)
+                captures.append(self.capture_entry(path.stem, data=data, reviewed=reviewed,
+                                                   room_items=room_items))
+                completed_inbox.extend(room_items)
+                if "room_watch" in data:
+                    room_records.append({"capture_id": path.stem, "session": data["session"],
+                                         "snapshot": data["room_watch"]["snapshot"],
+                                         "items": room_items, "report_url": data["report_url"]})
             except RequestError:
                 continue
         active_job = next((job for job in jobs if job["status"] == "running"), None)
@@ -594,6 +789,7 @@ class FlatSatServer(ThreadingHTTPServer):
                 "active_job": active_job,
                 "recent_jobs": jobs[:20], "captures": captures[:200],
                 "room_inbox": {"items": visible_items, "counts": inbox_counts},
+                "room_summary": _room_summary(room_records),
                 "csrf_token": self.csrf_token, "metrics": METRICS}
 
     def start_job(self, request: dict) -> dict:

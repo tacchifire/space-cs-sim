@@ -102,11 +102,21 @@ The total query count and the event count describe different things.
 
 The Change inbox reads validated indoor-monitoring recordings and lists only changes that need review and sensor-availability incidents, newest first.
 A baseline-ready event alone does not increase the review count.
-Each change shows its measurement, detection time, difference from baseline, configured threshold and either its recovery time or an ongoing state.
+Each change shows its measurement, detection time, difference from baseline, configured threshold and recovery time.
+The UI labels an item as ongoing only while its monitoring job is running; a saved recording without a recovery event is shown as having no recorded recovery.
 Sensor-availability incidents are kept separate from environmental changes.
 An item can be marked reviewed and returned to unreviewed; the state is shared by phones and computers using the same console.
 Review state is written atomically to a separate management file and never modifies the evidence JSONL.
 The displayed difference and threshold are observation values, not a calibrated assessment of danger or safety.
+
+The Monitoring log summary keeps the running monitor state separate from aggregates over validated saved recordings.
+Its latest saved observation is the state at the end of that recording, not the current state of the room.
+The 24-hour and seven-day counts use the host query timestamps recorded in the logs and separate changes from sensor-availability incidents.
+Saved recordings whose start, observation or event timestamps used by the aggregate fall after the current host time are flagged for clock review.
+Those future observations and events are excluded from the time windows, and the screen says which window an interrupted recording limits to its saved events.
+For that warning, an interrupted recording can affect a window when its configured duration could have extended into it.
+The longest duration includes only incidents with a recorded recovery; the most frequent measurement counts detections under the baseline and thresholds saved in each recording.
+The aggregate does not account for time without monitoring, distinguish recordings from different rooms or duplicate imports, or determine safety or occupancy.
 
 Closing the browser tab does not stop a session while the server remains running.
 Use Stop monitoring to release the USB port; other console USB operations wait until that session ends.

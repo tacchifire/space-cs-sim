@@ -94,6 +94,32 @@
       </section>
 
       <section class="view" id="view-room" aria-labelledby="room-heading" hidden>
+        <article class="card room-summary" aria-labelledby="room-summary-heading">
+          <div class="card-heading room-summary-heading">
+            <div><p class="eyebrow">ROOM LOG SUMMARY</p><h2 id="room-summary-heading">監視ログのまとめ</h2></div>
+            <span id="room-summary-count" class="badge badge-neutral">保存ログ 0 件</span>
+          </div>
+          <p class="muted room-summary-description">現在の監視と、検証済みの保存ログから最近の検知を確認します。</p>
+          <div class="room-summary-observations">
+            <section class="room-summary-observation" aria-labelledby="room-summary-current-label">
+              <span class="room-summary-label" id="room-summary-current-label">現在の監視</span>
+              <div class="room-summary-observation-heading"><strong id="room-summary-current">待機中</strong><span id="room-summary-current-badge" class="badge badge-neutral">停止中</span></div>
+              <p id="room-summary-current-detail" class="caption">室内監視を開始すると、現在の状態を表示します。</p>
+            </section>
+            <section class="room-summary-observation" aria-labelledby="room-summary-latest-label">
+              <span class="room-summary-label" id="room-summary-latest-label">最後の保存観測</span>
+              <div class="room-summary-observation-heading"><strong id="room-summary-latest">保存ログなし</strong><button type="button" class="text-button room-summary-open" id="room-summary-open-latest" hidden>ログを見る</button></div>
+              <p id="room-summary-latest-detail" class="caption">室内監視の保存ログがありません。</p>
+            </section>
+          </div>
+          <dl class="room-summary-grid">
+            <div class="room-summary-stat"><dt>過去24時間</dt><dd><strong id="room-summary-day">—</strong><span id="room-summary-day-detail">期間内の保存観測・イベントなし</span></dd></div>
+            <div class="room-summary-stat"><dt>過去7日</dt><dd><strong id="room-summary-week">—</strong><span id="room-summary-week-detail">期間内の保存観測・イベントなし</span></dd></div>
+            <div class="room-summary-stat"><dt>最長継続（7日）</dt><dd><strong id="room-summary-longest">—</strong><span id="room-summary-longest-detail">期間内の検知なし</span></dd></div>
+            <div class="room-summary-stat"><dt>最多の変化項目（7日）</dt><dd><strong id="room-summary-top">—</strong><span id="room-summary-top-detail">期間内の変化検知なし</span></dd></div>
+          </dl>
+          <p id="room-summary-note" class="caption room-summary-note">集計は保存ログに記録されたホスト時刻を基準にします。監視していない時間、部屋の安全性、在室状況は判定しません。</p>
+        </article>
         <article class="card room-inbox" aria-labelledby="room-inbox-heading">
           <div class="card-heading room-inbox-heading">
             <div><p class="eyebrow">CHANGE INBOX</p><h2 id="room-inbox-heading">変化インボックス</h2></div>

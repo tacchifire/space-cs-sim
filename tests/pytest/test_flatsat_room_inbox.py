@@ -1,7 +1,7 @@
 """Room inbox items are derived from validated evidence and reviewed separately."""
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 import json
 from pathlib import Path
 import stat
@@ -23,6 +23,33 @@ from test_flatsat_web import FakeAdapter, request, running_server  # noqa: E402
 ITEM_FIELDS = {"id", "capture_id", "sequence", "kind", "metric", "time_utc",
                "recovered_at", "duration_s", "active", "value", "threshold",
                "label", "report_url", "reviewed"}
+
+
+def _summary_item(capture_id, sequence, detected_at, *, kind="change", metric="movement_mg",
+                  duration_s=None, active=False, reviewed=False):
+    return {"id": f"{capture_id}:{sequence}", "capture_id": capture_id,
+            "sequence": sequence, "kind": kind, "metric": metric,
+            "time_utc": detected_at.isoformat(),
+            "recovered_at": ((detected_at + timedelta(seconds=duration_s)).isoformat()
+                             if duration_s is not None else None),
+            "duration_s": duration_s, "active": active, "value": None,
+            "threshold": None, "label": "summary", "report_url": f"/reports/{capture_id}",
+            "reviewed": reviewed}
+
+
+def _summary_record(capture_id, started_at, items, *, state="normal", interrupted=False,
+                    label="summary"):
+    states = dict.fromkeys(room.DEFAULT_THRESHOLDS, state)
+    observed_at = max([started_at, *(datetime.fromisoformat(item["time_utc"]) for item in items)])
+    observed_at += timedelta(seconds=1)
+    snapshot = {"phase": "stopped", "reason": "interrupted" if interrupted else "stopped",
+                "counts_complete": not interrupted, "states": states,
+                "last_sample": None if interrupted else {
+                    "time_utc": observed_at.isoformat(), "status": "ok", "completion": "complete"}}
+    return {"capture_id": capture_id,
+            "session": {"time_utc": started_at.isoformat(), "label": label,
+                        "duration_s": 120, "timeout_s": .3},
+            "snapshot": snapshot, "items": items, "report_url": f"/reports/{capture_id}"}
 
 
 def _session(detector, label="room inbox", *, duration=120):
@@ -104,6 +131,10 @@ def test_quiet_capture_has_no_inbox_items(tmp_path):
         assert state["captures"][0]["change_count"] == 0
         assert state["captures"][0]["health_count"] == 0
         assert state["captures"][0]["unreviewed_count"] == 0
+        assert state["room_summary"]["capture_count"] == 1
+        assert state["room_summary"]["all_time_counts"]["incident_count"] == 0
+        assert state["room_summary"]["latest_saved_observation"]["capture_id"] == capture_id
+        assert state["room_summary"]["latest_saved_observation"]["state"] == "normal"
         assert adapter.calls == []
 
 
@@ -192,12 +223,14 @@ def test_active_and_saved_event_use_the_same_stable_id_and_can_be_reviewed(tmp_p
         active_ids = {item["id"] for item in active_state["room_inbox"]["items"]}
         assert active_ids == {f"{capture_id}:2", f"{capture_id}:3"}
         assert active_state["captures"] == []
+        assert active_state["room_summary"]["capture_count"] == 0
         assert request(server, "POST", f"/api/room-inbox/{capture_id}/2/review",
                        {"reviewed": True})[0] == 200
         with server.lock:
             server.jobs.clear()
         saved_state = request(server)[1]
         assert {item["id"] for item in saved_state["room_inbox"]["items"]} == active_ids
+        assert saved_state["room_summary"]["all_time_counts"]["incident_count"] == 2
         assert next(item for item in saved_state["room_inbox"]["items"]
                     if item["sequence"] == 2)["reviewed"] is True
 
@@ -259,6 +292,181 @@ def test_inbox_response_is_bounded_but_counts_cover_all_valid_events(tmp_path):
             "health_count": 0, "active_count": 0, "unreviewed_count": 201}
         assert state["captures"][0]["change_count"] == 201
         assert len({item["id"] for item in state["room_inbox"]["items"]}) == 200
+        assert state["room_summary"]["all_time_counts"]["incident_count"] == 201
+        assert state["room_summary"]["all_time_counts"]["change_count"] == 201
+
+
+def test_room_summary_uses_full_saved_history_and_exact_time_windows():
+    now = EPOCH + timedelta(days=8)
+    current = "a" * 32
+    recent = "b" * 32
+    weekly = "c" * 32
+    old = "d" * 32
+    future = "e" * 32
+    records = [
+        _summary_record(current, now - timedelta(hours=2), [
+            _summary_item(current, 1, now - timedelta(hours=1), duration_s=30),
+            _summary_item(current, 2, now - timedelta(hours=24), metric="temperature_c",
+                          duration_s=60, reviewed=True),
+        ], state="changed", label="latest changed"),
+        _summary_record(recent, now - timedelta(days=2), [
+            _summary_item(recent, 1, now - timedelta(hours=24, microseconds=1),
+                          metric="temperature_c", duration_s=100),
+            _summary_item(recent, 2, now - timedelta(days=2), metric="humidity_percent",
+                          active=True),
+        ]),
+        _summary_record(weekly, now - timedelta(days=6), [
+            _summary_item(weekly, 1, now - timedelta(days=6), kind="health", metric=None,
+                          duration_s=400),
+        ], interrupted=True),
+        _summary_record(old, now - timedelta(days=8), [
+            _summary_item(old, 1, now - timedelta(days=7, microseconds=1),
+                          duration_s=5000),
+        ]),
+        _summary_record(future, now + timedelta(hours=1), [
+            _summary_item(future, 1, now + timedelta(seconds=1), duration_s=9000),
+        ]),
+    ]
+
+    summary = web._room_summary(records, now=now)
+
+    assert summary["scope"] == "validated_saved_room_captures"
+    assert summary["generated_at"] == now.isoformat()
+    assert summary["capture_count"] == 5
+    assert summary["history_complete"] is False
+    assert summary["clock_warning_count"] == 1
+    assert summary["all_time_counts"] == {
+        "incident_count": 7, "change_count": 6, "health_count": 1,
+        "unreviewed_count": 6, "unclosed_count": 1,
+        "metric_counts": {"movement_mg": 3, "temperature_c": 2,
+                          "humidity_percent": 1, "pressure_pa": 0}}
+    latest = summary["latest_saved_observation"]
+    assert latest == {"capture_id": future, "label": "summary",
+                      "report_url": f"/reports/{future}", "state": "normal",
+                      "observed_at": (now + timedelta(seconds=9001)).isoformat(),
+                      "started_at": (now + timedelta(hours=1)).isoformat(),
+                      "changed_metrics": [], "termination_reason": "stopped",
+                      "clock_warning": True}
+    day = summary["windows"]["24h"]
+    assert day["starts_at"] == (now - timedelta(hours=24)).isoformat()
+    assert day["recording_count"] == 2 and day["incident_count"] == 2
+    assert day["history_complete"] is True
+    assert (day["change_count"], day["health_count"], day["unreviewed_count"],
+            day["unclosed_count"]) == (2, 0, 1, 0)
+    assert day["metric_counts"] == {"movement_mg": 1, "temperature_c": 1,
+                                     "humidity_percent": 0, "pressure_pa": 0}
+    assert day["top_metrics"] == [{"metric": "movement_mg", "count": 1},
+                                   {"metric": "temperature_c", "count": 1}]
+    assert day["longest_closed"]["id"] == f"{current}:2"
+    week = summary["windows"]["7d"]
+    assert week["recording_count"] == 4
+    assert week["history_complete"] is False
+    assert (week["incident_count"], week["change_count"], week["health_count"],
+            week["unreviewed_count"], week["unclosed_count"]) == (5, 4, 1, 4, 1)
+    assert week["metric_counts"] == {"movement_mg": 1, "temperature_c": 2,
+                                      "humidity_percent": 1, "pressure_pa": 0}
+    assert week["top_metrics"] == [{"metric": "temperature_c", "count": 2}]
+    assert week["longest_closed"]["id"] == f"{weekly}:1"
+    assert week["longest_closed"]["duration_s"] == 400
+    public = json.dumps(summary)
+    assert "raw_hex" not in public and "confirmation_samples" not in public
+
+
+def test_room_summary_distinguishes_no_capture_quiet_and_interrupted_latest():
+    now = EPOCH + timedelta(days=1)
+    empty = web._room_summary([], now=now)
+    assert empty["capture_count"] == 0
+    assert empty["latest_saved_observation"] is None
+    assert empty["history_complete"] is True
+    assert empty["windows"]["24h"]["incident_count"] == 0
+
+    quiet_id = "8" * 32
+    interrupted_id = "9" * 32
+    records = [
+        _summary_record(quiet_id, now - timedelta(hours=2), [], label="quiet"),
+        _summary_record(interrupted_id, now - timedelta(hours=1), [], interrupted=True,
+                        label="newer interrupted"),
+    ]
+    summary = web._room_summary(records, now=now)
+    assert summary["capture_count"] == 2
+    assert summary["windows"]["24h"]["incident_count"] == 0
+    assert summary["latest_saved_observation"]["capture_id"] == interrupted_id
+    assert summary["latest_saved_observation"]["state"] == "unknown"
+    assert summary["latest_saved_observation"]["observed_at"] is None
+    assert summary["latest_saved_observation"]["started_at"] == (
+        now - timedelta(hours=1)).isoformat()
+    assert summary["latest_saved_observation"]["clock_warning"] is False
+    assert summary["history_complete"] is False
+    assert summary["windows"]["24h"]["history_complete"] is False
+
+
+def test_room_summary_keeps_future_quiet_capture_visible_with_clock_warning():
+    now = EPOCH + timedelta(days=1)
+    current_id = "6" * 32
+    future_id = "7" * 32
+    records = [
+        _summary_record(current_id, now - timedelta(hours=1), [], label="current quiet"),
+        _summary_record(future_id, now + timedelta(minutes=1), [], label="future quiet"),
+    ]
+
+    summary = web._room_summary(records, now=now)
+
+    assert summary["capture_count"] == 2
+    assert summary["clock_warning_count"] == 1
+    latest = summary["latest_saved_observation"]
+    assert latest["capture_id"] == future_id
+    assert latest["state"] == "normal"
+    assert latest["observed_at"] == (now + timedelta(minutes=1, seconds=1)).isoformat()
+    assert latest["started_at"] == (now + timedelta(minutes=1)).isoformat()
+    assert latest["clock_warning"] is True
+    assert summary["windows"]["24h"]["recording_count"] == 1
+
+
+def test_room_summary_excludes_future_recovery_from_longest_closed():
+    now = EPOCH + timedelta(days=1)
+    capture_id = "5" * 32
+    future_recovery = _summary_item(
+        capture_id, 1, now - timedelta(minutes=1), duration_s=120)
+    record = _summary_record(capture_id, now - timedelta(hours=1), [future_recovery])
+
+    summary = web._room_summary([record], now=now)
+
+    assert summary["clock_warning_count"] == 1
+    assert summary["all_time_counts"]["unclosed_count"] == 1
+    assert summary["windows"]["24h"]["incident_count"] == 1
+    assert summary["windows"]["24h"]["unclosed_count"] == 1
+    assert summary["windows"]["24h"]["longest_closed"] is None
+    assert summary["latest_saved_observation"]["clock_warning"] is True
+
+
+def test_room_summary_window_completeness_ignores_old_interrupted_capture():
+    now = EPOCH + timedelta(days=20)
+    old_id = "3" * 32
+    recent_id = "4" * 32
+    records = [
+        _summary_record(old_id, now - timedelta(days=8), [], interrupted=True,
+                        label="old interrupted"),
+        _summary_record(recent_id, now - timedelta(hours=1), [], label="recent quiet"),
+    ]
+
+    summary = web._room_summary(records, now=now)
+
+    assert summary["history_complete"] is False
+    assert summary["windows"]["24h"]["history_complete"] is True
+    assert summary["windows"]["7d"]["history_complete"] is True
+
+
+def test_room_summary_marks_window_when_interrupted_session_could_overlap_it():
+    now = EPOCH + timedelta(days=20)
+    capture_id = "2" * 32
+    record = _summary_record(capture_id, now - timedelta(hours=25), [], interrupted=True)
+    record["session"]["duration_s"] = 2 * 60 * 60
+
+    summary = web._room_summary([record], now=now)
+
+    assert summary["windows"]["24h"]["recording_count"] == 0
+    assert summary["windows"]["24h"]["incident_count"] == 0
+    assert summary["windows"]["24h"]["history_complete"] is False
 
 
 @pytest.mark.parametrize("document", [
