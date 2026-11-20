@@ -73,7 +73,8 @@ def monitor() -> int:
 def all_assigned(satellites: int = MAX_SATELLITES) -> dict[int, str]:
     """Every port this module hands out, mapped to what it is. Used by the collision test."""
     out: dict[int, str] = {monitor(): "monitor", SCRATCH_LINK: "scratch link",
-                           crosslink_injector(): "crosslink injector"}
+                           crosslink_injector(): "crosslink injector",
+                           server_mode(): "server_mode", gui(): "gui"}
     for sat in range(satellites):
         for name, port in (("link", link(sat)), ("injector", injector(sat)),
                            ("channel", channel(sat))):
@@ -89,3 +90,13 @@ CROSSLINK_INJECTOR = BASE + 800
 def crosslink_injector() -> int:
     """The TcpCanInjector attached to the shared crosslink hub. One per emulation."""
     return CROSSLINK_INJECTOR
+
+
+def server_mode() -> int:
+    """Renode WebSocket server; not indexed: one Renode process per emulation."""
+    return BASE + 200
+
+
+def gui() -> int:
+    """Browser HTTP console; not indexed: one local GUI serves the emulation."""
+    return BASE + 210

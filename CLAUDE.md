@@ -460,6 +460,7 @@ src/cuberange/gs/               ground station
 src/cuberange/gs/node.py         a ground station you can run and sit at; two at once
 src/cuberange/channel/          the link proxy an attacker taps; several stations attach
 attacker/TcpCanInjector.cs      90 lines of C# Renode compiles at runtime; raw CAN from a socket
+src/cuberange/gui/              browser server-mode console; not yet run against live Renode
 src/cuberange/ports.py          the port map; one place, with a collision test
 src/cuberange/paths.py          the build directory, unique per checkout; make out prints it
 src/cuberange/safety/           the loopback-only namespace every Renode launch runs in

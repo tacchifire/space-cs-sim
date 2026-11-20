@@ -45,7 +45,7 @@ FLATSAT_PYTHON ?= python3
 
 .PHONY: help out syllabus gs channel ground-stations fleet probe firmware demo spike clean toolchain
 .PHONY: flatsat-devices flatsat-info flatsat-monitor flatsat-watch flatsat-summary flatsat-report flatsat-compare flatsat-ping flatsat-check
-.PHONY: flatsat-alerts flatsat-web
+.PHONY: flatsat-alerts flatsat-web gui
 
 help:
 	@echo "make out        - print this checkout's build directory ($(OUT))"
@@ -57,6 +57,7 @@ help:
 	@echo "make flatsat-report - graph a capture offline (FLATSAT_ARGS supplies its path)"
 	@echo "make flatsat-compare - compare two captures (FLATSAT_ARGS supplies both paths)"
 	@echo "make flatsat-alerts - replay a capture against sensor limits offline"
+	@echo "make gui - start the browser server-mode console"
 	@echo "make flatsat-web - start the local board, capture and exercise web console"
 	@echo "make flatsat-ping - preview a PING packet; sends no bytes"
 	@echo "make syllabus   - the order the exercises are meant to be taken in"
@@ -830,3 +831,6 @@ golden: oracles
 	@echo
 	@echo "Review the diff before committing - these vectors are what the codecs are checked against."
 	@git -C $(CURDIR) diff --stat tests/golden || true
+
+gui:
+	PYTHONPATH=src python3 -m cuberange.gui
