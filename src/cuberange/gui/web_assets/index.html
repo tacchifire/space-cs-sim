@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CubeRange · Browser console</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<body>
+<header><h1>CubeRange <small>Server-mode console</small></h1>
+<label>Renode WebSocket URL <input id="ws-url" type="url"></label>
+<button id="connect">Connect</button><button id="disconnect" disabled>Disconnect</button>
+<strong id="connection" role="status">not connected</strong>
+<p>Implemented against design 4.4. Not yet run against live Renode.</p></header>
+<main>
+<section id="satellite-pane" aria-labelledby="satellite-heading"><h2 id="satellite-heading">Satellite status</h2>
+<p class="connection-note">not connected</p><button id="refresh" data-connected>Refresh machines</button>
+<div id="machines"></div>
+<h3>Peripheral query / control</h3>
+<p>Use full peripheral names. Replies appear below and in the console event log.</p>
+<label>Machine <input id="machine"></label>
+<label>Full peripheral name <input id="peripheral" placeholder="sysbus.gpioPortC.UserButton1"></label>
+<label>Operation <select id="operation"></select></label>
+<label>Handler arguments (JSON object) <textarea id="peripheral-args" rows="4">{}</textarea></label>
+<p>Confirm argument names for your Renode build. Machine, peripheral and operation are copied into the editable payload; no shortened names are used.</p>
+<button id="prepare-peripheral" data-connected>Prepare payload</button>
+<button id="send-peripheral" data-connected>Send peripheral operation</button>
+<p>For button-set, provide the handler’s state argument as a JSON boolean. For sensor-get / sensor-set, provide the full sensor type and its handler arguments. D3 magnetic-flux-density writes are blocked.</p>
+<h3>Latest peripheral replies and pushes</h3><pre id="peripheral-state">not connected</pre>
+</section>
+<section id="console-pane" aria-labelledby="console-heading"><h2 id="console-heading">Operations console</h2>
+<p class="connection-note">not connected</p>
+<form id="monitor-form"><label>Monitor command <input id="monitor-command" required></label><button data-connected>Run exec-monitor</button></form>
+<pre id="monitor-output">not connected</pre>
+<h3>Generic action sender</h3>
+<label>Action <input id="action" list="actions" value="status"></label><datalist id="actions"></datalist>
+<label>Payload — C# handler argument names, JSON object <textarea id="payload" rows="8">{}</textarea></label>
+<button id="send" data-connected>Send action</button>
+<h3>Console event log · server-mode channel</h3>
+<p>Wall-clock timestamps. The decoded-frame bus timeline is not wired up: the ground-station backend wire protocol is undefined in the design.</p>
+<pre id="event-log" role="log">not connected</pre>
+</section>
+<section id="terminal-pane" aria-labelledby="terminal-heading"><h2 id="terminal-heading">Terminals</h2>
+<p class="connection-note">not connected</p>
+<label>Terminal <select id="terminal-select" data-connected></select></label>
+<label>Monitor / UART terminal id <input id="terminal-id"></label><button id="add-terminal" data-connected>Add terminal id</button>
+<p>Use ids returned by Renode. The design does not specify a fixed Monitor id.</p>
+<div id="terminal-links"></div><iframe id="terminal" title="Renode terminal" hidden></iframe>
+</section>
+<section id="exercise-pane" aria-labelledby="exercise-heading"><h2 id="exercise-heading">Exercises</h2>
+<label>Exercise <select id="exercise-select"><option value="">Select an exercise</option></select></label>
+<pre id="exercise-meta"></pre><label>Scenario <input id="scenario" readonly></label>
+<label>Host verification command (copyable) <input id="verify-command" readonly></label>
+<p>Hints and pass/fail judgement are not wired up: no repository data source or design protocol is defined.</p>
+<pre id="readme">Select an exercise to read its README.</pre></section>
+</main></body></html>

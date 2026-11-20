@@ -1,0 +1,11 @@
+:root { color-scheme: dark; font-family: system-ui, sans-serif; background: #0c1420; color: #e0e9f4; }
+body { margin: 0; } header { padding: 1rem 1.5rem; border-bottom: 1px solid #40516a; background: #142238; }
+h1 { margin: 0 0 1rem; font-size: 1.6rem; } small { font-size: .9rem; color: #9cb6d8; }
+main { display: grid; grid-template-columns: minmax(16rem, 1fr) minmax(22rem, 1.6fr) minmax(18rem, 1.2fr); gap: 1rem; padding: 1rem; }
+section { background: #142238; border: 1px solid #40516a; border-radius: .5rem; padding: 1rem; min-width: 0; }
+h2 { margin-top: 0; font-size: 1.2rem; } h3 { font-size: 1rem; color: #acd1ff; }
+label { display: block; margin: .6rem 0; font-size: .85rem; } input, textarea, select { display: block; box-sizing: border-box; width: 100%; margin-top: .3rem; padding: .6rem; background: #0b1728; color: inherit; border: 1px solid #617795; border-radius: .25rem; }
+button { padding: .55rem .8rem; margin: .3rem .2rem .3rem 0; color: #eef7ff; background: #254e7e; border: 1px solid #7b9fc6; border-radius: .25rem; cursor: pointer; } button:disabled { opacity: .4; cursor: default; }
+a { color: #9bcdff; display: block; margin: .4rem 0; } p { color: #b6c5d9; font-size: .85rem; line-height: 1.5; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #0b1728; padding: .75rem; max-height: 28rem; overflow: auto; font-size: .8rem; } iframe { width: 100%; height: 32rem; background: #fff; border: 0; } #exercise-pane { grid-column: 1 / -1; } #readme { max-height: 40rem; } #connection { color: #9fd4b8; }
+@media (max-width: 1000px) { main { grid-template-columns: 1fr; } }

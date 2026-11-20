@@ -421,6 +421,7 @@ src/cuberange/gs/               地上局
 src/cuberange/gs/node.py        走らせて座れる地上局。同時に 2 局
 src/cuberange/channel/          攻撃者が傍受するリンクプロキシ。複数局が接続できる
 attacker/TcpCanInjector.cs      Renode が実行時にコンパイルする 90 行の C#。ソケットから生 CAN
+src/cuberange/gui/              ブラウザの server-mode コンソール。実 Renode では未実行
 src/cuberange/ports.py          ポート表。1 箇所にまとめ、衝突テスト付き
 src/cuberange/paths.py          ビルドディレクトリ。チェックアウトごとに一意。make out が表示する
 src/cuberange/safety/           Renode の全起動が入る、loopback だけの名前空間
