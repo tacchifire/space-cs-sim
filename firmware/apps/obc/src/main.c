@@ -982,16 +982,24 @@ static void resend_report(uint16_t counter)
  *
  * Static and named, so the symbol table carries it: solve.py and the verifier find its address the
  * same way they find the key's.
+ *
+ * Volatile, and that is load-bearing rather than decorative. In the vulnerable build nothing ever
+ * reads this block through the variable - a dump reads whatever address the packet names - so the
+ * refresh writes were dead stores: the compiler deleted them, the linker collected the object, and
+ * the symbol table carried nothing (the mitigated build kept it only because dump_allowed() reads
+ * its address). CI caught exactly that, as a verifier failure against the real ELF. The block is
+ * memory an operator reads from outside the program, which is what volatile means; saying so is
+ * what keeps it in both images.
  */
 #define PUBLIC_BLOCK_MAGIC "CRPUBLIC"
 #define PUBLIC_BLOCK_LEN   64
 
-static uint8_t obc_public_block[PUBLIC_BLOCK_LEN] = PUBLIC_BLOCK_MAGIC;
+static volatile uint8_t obc_public_block[PUBLIC_BLOCK_LEN] = PUBLIC_BLOCK_MAGIC;
 
 static void public_block_refresh(void)
 {
 	const uint32_t now = (uint32_t)k_uptime_get();
-	uint8_t *live = obc_public_block + sizeof(PUBLIC_BLOCK_MAGIC) - 1;
+	volatile uint8_t *live = obc_public_block + sizeof(PUBLIC_BLOCK_MAGIC) - 1;
 
 	live[0] = (uint8_t)(now >> 24); live[1] = (uint8_t)(now >> 16);
 	live[2] = (uint8_t)(now >> 8);  live[3] = (uint8_t)now;
