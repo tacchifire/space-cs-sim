@@ -38,7 +38,8 @@ wrong: probe.sh's 1.5x four-node speed floor, which this eight-core machine clea
 looked like the obvious thing to blame on a two-vCPU runner. The probe passes there in 110
 seconds. Blaming the host was the comfortable guess, and it was the wrong one.
 
-Twenty-three exercises work today. Eight cover an attack origin each: EX-B01 (internal bus), EX-L01
+Twenty-four exercises work today (one of them on paper: EX-F02 is written and has not been run
+yet). Eight cover an attack origin each: EX-B01 (internal bus), EX-L01
 (space link), EX-A01 (ADCS command envelope), EX-F01 (the OBC's own PUS 8 parser), EX-G01 (the
 ground segment that decides what to send), EX-X01 (the crosslink, where the attacker is a
 spacecraft in your own constellation) EX-D01 (the downlink, where the target is the operator
@@ -205,10 +206,25 @@ build reporting no log leaves the ledger nothing to reconcile - what it does not
 (key management, which no control here does) and completeness (the ledger is per-station, so a second
 holder of the key sees the gap move, EX-G03's problem one layer up).
 
-97 assertions, all measured. Three of them each end by naming a limit the next one attacks, and
-in each the fix turned out to be reading something already on the wire: a source id that was
-arriving and ignored, a virtual channel that was being stepped over, a refused request sitting in
-a local variable.
+EX-F02 is the twenty-fourth, and it goes back to the firmware and to EX-F01's place on the space
+link - to read this time, not to overwrite. The SDLS key is a `static const`, so it sits in the
+flash of every image that signs or verifies with it, and the OBC becomes one of those the moment it
+signs its reports, which is EX-D01's fix: the constant that guards the space link is in the
+computer too. One key, several images, and every copy is a place to read it. A PUS 6 memory dump
+that serves any address reads it out to anyone on the link, and what the exercise asserts is not
+that 32 octets came back but that they verify signed reports from the same run while a key one bit
+away does not. The fix is the dump service's own control - an allowlist of the one public block a
+dump is for, refusing too a request that starts inside the block and runs past its end - and it is
+the only difference over a pair that both signs and keeps EX-F01's length check. It ends where
+design 6.5 says it must: an attacker who already runs code does not ask the service, and reads the
+key the way sign_report does. Of design M2 only the handler keeping no copy of what it dumps is
+done; the key's own life in flash is untouched, and the mitigation says so. It was written on a
+machine with no Zephyr toolchain and no Renode, and none of it has been run.
+
+102 assertions, all measured (but EX-F02's five, which nobody has run yet). Three of them each end
+by naming a limit the next one attacks, and in each the fix turned out to be reading something
+already on the wire: a source id that was arriving and ignored, a virtual channel that was being
+stepped over, a refused request sitting in a local variable.
 
 EX-G01 is the host-side one, so the "differ by one flag" proof works differently: one `Scheduler`,
 two `ImportPolicy` objects, and `test_schedule_policy.py` fails if `schedule.py` so much as names

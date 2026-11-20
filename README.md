@@ -9,7 +9,7 @@ attacks you can actually land, and mitigations proven to stop them.
 It is the space analogue of Toyota's [RAMN](https://github.com/ToyotaInfoTech/RAMN) board, which
 made automotive security learnable by putting four MCUs and a CAN bus on one PCB.
 
-**Status: twenty-three exercises, two spacecraft.** A ground station sends a real ECSS PUS 17,1 and
+**Status: twenty-four exercises, two spacecraft.** A ground station sends a real ECSS PUS 17,1 and
 gets a real 17,2 back through CCSDS framing, an emulated UART link, and CSP over CAN between
 emulated STM32H753 nodes. The exercises chain, and each one attacks a limit the previous one's
 mitigation admitted to:
@@ -25,10 +25,15 @@ mitigation admitted to:
   the OBC's PUS 8 handler and returns into a maintenance function no command can reach. Not
   shellcode: SRAM here is execute-never and Renode enforces it, so the payload is an address that
   was already in the image.
+- **EX-F02** — *(written, not yet run)* the key that guards the space link is a `static const`, so
+  it sits in the flash of every image that uses it — the OBC's too, once the OBC signs its reports.
+  A PUS 6 memory dump that serves any address reads it out to anyone on the link, and the octets
+  verify the spacecraft's own reports. An allowlist on the dump stops that; it does not stop code
+  that is already running, which reads the same flash.
 
 - **EX-G01** — no radio, no bus, no operator account. A file written into the ground segment's
   plugin directory becomes a telecommand the operator's own station transmits, while every
-  spacecraft-side control from the four exercises above works exactly as designed.
+  spacecraft-side control from the first four exercises above works exactly as designed.
 
 - **EX-G02** — a ground station that may only watch switches the spacecraft's radio off, using a
   telecommand that differs from an authorised one by a single octet: the source id it honestly

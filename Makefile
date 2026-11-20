@@ -285,7 +285,7 @@ verify:
 	    python3 -m pytest exercises/$(EX)/verify_*.py -v
 
 # Every exercise, both directions. This is the claim the product makes.
-verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-g01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01 firmware-u02 firmware-u03 firmware-s03 firmware-s04 firmware-s05 firmware-s06)
+verify-all: $(call FWDEP,firmware-exl01 firmware-a01 firmware-f01 firmware-f02 firmware-g01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01 firmware-u02 firmware-u03 firmware-s03 firmware-s04 firmware-s05 firmware-s06)
 	$(ISOLATE) env PYTHONPATH=src RENODE_DIR=$(RENODE_DIR) OUT=$(OUT) \
 	    python3 -m pytest exercises/*/verify_*.py -v
 
@@ -337,7 +337,7 @@ firmware-f01: firmware-p1
 # prerequisite once per invocation, so this is one pristine build of each of the seven images
 # rather than the four rounds `check` used to do.
 .PHONY: firmware-all
-firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-sdls firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01 firmware-u02 firmware-u03 firmware-s03 firmware-s04 firmware-s05 firmware-s06
+firmware-all: firmware-exl01 firmware-a01 firmware-f01 firmware-f02 firmware-g02 firmware-g03 firmware-g04 firmware-x01 firmware-sdls firmware-s01 firmware-s02 firmware-d01 firmware-l02 firmware-l03 firmware-u01 firmware-u02 firmware-u03 firmware-s03 firmware-s04 firmware-s05 firmware-s06
 	@echo "all node images built:"
 	@ls -1 $(OUT)/build-*/zephyr/zephyr.elf
 
@@ -685,6 +685,24 @@ firmware-d01:
 	    -DCUBERANGE_OBC_SIGN_REPORTS=1 \
 	    -DEXTRA_CONF_FILE=$(CUBERANGE_REPO)/firmware/apps/obc/pus_auth.conf
 	@ls -l $(OUT)/build-obc-d01-vuln/zephyr/zephyr.elf $(OUT)/build-obc-d01-hard/zephyr/zephyr.elf
+
+firmware-f02: firmware-p1
+	# EX-F02's pair. Both halves sign their reports - EX-D01's fix, and the reason the SDLS key is
+	# in the OBC's flash at all - and both carry EX-F01's length check, so the overflow is not a
+	# second way to the key. Neither verifies telecommands: the attacker sends a plain PUS 6,5 the
+	# way EX-F01's sends a plain PUS 8,1. What differs is whether a PUS 6 dump reads any address or
+	# only the OBC's public block. Depends on firmware-p1 for the COMM and EPS the scenario runs.
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-obc-f02-vuln firmware/apps/obc -- \
+	    -DCUBERANGE_OBC_PUS8_LENGTH_CHECK=1 -DCUBERANGE_OBC_SIGN_REPORTS=1 \
+	    -DCUBERANGE_OBC_PUS6_ALLOWLIST=0 \
+	    -DEXTRA_CONF_FILE=$(CUBERANGE_REPO)/firmware/apps/obc/pus_auth.conf
+	. $(ENV) && ZEPHYR_EXTRA_MODULES=$(LIBCSP) west build -p always -b $(BOARD) \
+	    -d $(OUT)/build-obc-f02-hard firmware/apps/obc -- \
+	    -DCUBERANGE_OBC_PUS8_LENGTH_CHECK=1 -DCUBERANGE_OBC_SIGN_REPORTS=1 \
+	    -DCUBERANGE_OBC_PUS6_ALLOWLIST=1 \
+	    -DEXTRA_CONF_FILE=$(CUBERANGE_REPO)/firmware/apps/obc/pus_auth.conf
+	@ls -l $(OUT)/build-obc-f02-vuln/zephyr/zephyr.elf $(OUT)/build-obc-f02-hard/zephyr/zephyr.elf
 
 firmware-s02:
 	# EX-S02's pair. The vulnerable half is EX-X01's hardened OBC - authority table ON, refusal

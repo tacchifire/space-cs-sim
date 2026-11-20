@@ -20,6 +20,7 @@ Currently intended, and not vulnerabilities:
 | `firmware/apps/adcs` built with `CUBERANGE_ADCS_TORQUE_LIMIT=0` | torque commands are not bounded by the actuator's authority (EX-A01) |
 | `firmware/apps/obc` built with `CUBERANGE_OBC_PUS8_LENGTH_CHECK=0` | the PUS 8 argument copy is unbounded (EX-F01) |
 | `maintenance_inhibit_fdir` in `firmware/apps/obc/src/main.c` | a privileged handler left in the image, disabled rather than removed — EX-F01's target |
+| `firmware/apps/obc` built with `CUBERANGE_OBC_PUS6_ALLOWLIST=0` — every OBC image except `build-obc-f02-hard` | the PUS 6 memory dump reads any address, including the flash that holds `cr_sdls_key` in every image that signs or verifies (EX-F02) |
 | `AcceptAnything` in `src/cuberange/gs/import_policy.py` | the ground segment imports schedule files with no provenance, schema or authority check (EX-G01) |
 | `IMPORT_KEY` in `src/cuberange/gs/import_policy.py` | the plan-signing key, committed in the clear, by design |
 | `POWER_TOKEN` in `firmware/apps/eps/src/main.c` | a shared secret committed in the clear, by design |
