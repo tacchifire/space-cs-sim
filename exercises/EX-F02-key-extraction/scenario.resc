@@ -1,0 +1,66 @@
+:name: EX-F02 - key extraction
+:description: COMM, OBC and EPS on a CAN hub. The attacker is on the space link, asking for a memory dump
+
+# Execution profile (design 4.3; rules G1/G2 of section 9.2). Renode's Monitor has no conditionals,
+# so the profile is a file the harness swaps by overriding $profile - the same mechanism $injector
+# uses, and for the same reason: a relative include inside an included file resolves against
+# Renode's own working directory, not this file.
+#
+# This include is FIRST on purpose. A failing command aborts the rest of a .resc file, so a profile
+# that cannot be found takes the machines down with it and the failure is loud. Last, it would have
+# been silent in the worst way: every node built, running with no quantum set at all.
+$profile?=@~/space-cs-sim/scripts/profiles/interactive.resc
+include $profile
+
+# Every path below hangs off $out, and $out has NO default on purpose - EX-F01's scenario says why
+# at length. Unset, LoadELF fails where you can see it, which beats booting another checkout's
+# firmware. The harness always passes it; for a manual run, so must you:
+#
+#   renode -e '$out=@'"$(make -s out)" -e 'include @<this file>' -e start
+#
+# The OBC is the F02 pair's vulnerable half by default: report signing ON, which is what puts the
+# SDLS key in its flash, and EX-F01's length check ON, so the overflow is not a second way in. The
+# verifier overrides $obc with the hardened half.
+$comm?=$out/build-comm/zephyr/zephyr.elf
+$obc?=$out/build-obc-f02-vuln/zephyr/zephyr.elf
+$eps?=$out/build-eps-hard/zephyr/zephyr.elf
+$commuart?=$out/f02-comm.uart
+$obcuart?=$out/f02-obc.uart
+$epsuart?=$out/f02-eps.uart
+$linkport?=3777
+
+emulation CreateCANHub "canHub"
+
+# The plain radio, as in EX-F01. It frames whatever the OBC sends it, a dump report included.
+mach create "COMM"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $comm
+sysbus.usart3 CreateFileBackend $commuart true
+emulation CreateServerSocketTerminal $linkport "spacelink" false
+connector Connect sysbus.usart2 spacelink
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+mach create "OBC"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $obc
+sysbus.usart3 CreateFileBackend $obcuart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+
+# The EPS is EX-F01's: present and hardened, so the spacecraft around the target is the one EX-F01
+# attacked and only the OBC has changed. It is not a target here and nothing in EX-F02 talks to it.
+mach create "EPS"
+machine LoadPlatformDescription @platforms/boards/nucleo_h753zi.repl
+connector Connect sysbus.fdcan1 canHub
+sysbus LoadELF $eps
+sysbus.usart3 CreateFileBackend $epsuart true
+logLevel 3 sysbus
+logLevel 3 rcc
+logLevel 3 fdcan1
+# No attacker machine and no CAN injector. The attacker holds a radio, as in EX-F01: everything it
+# sends is a telecommand the ground station could have sent, on the operator's own space link.
