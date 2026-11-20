@@ -47,6 +47,9 @@
 #ifndef CUBERANGE_OBC_BEACON_MS
 #define CUBERANGE_OBC_BEACON_MS 2000
 #endif
+#ifndef CUBERANGE_OBC_PUS6_ALLOWLIST
+#define CUBERANGE_OBC_PUS6_ALLOWLIST 0
+#endif
 
 /* Included after the default above, never beside the other headers: a `#if` on a macro that has
  * not been defaulted yet is 0 whatever the build says, and the symptom is a build with the flag
@@ -88,6 +91,20 @@
  * spacecraft has one. */
 #define SERVICE_HOUSEKEEPING 3
 #define SUBTYPE_HK_REPORT    25
+
+/* ECSS-E-ST-70-41C service 6 is memory management. What is implemented here is a SUBSET and is
+ * named as one: DUMP, and nothing else. A TC 6,5 names a memory id, a start address and a length;
+ * the TM 6,6 that answers it carries the same three fields and then the octets. No load, no check,
+ * no catalogue of memories - id 0 is the unified address space and is the only one there is. The
+ * field layout is this range's own, big-endian like everything else here, and is not claimed to be
+ * the standard's.
+ *
+ * It exists because EX-F02 needs the primitive the design's threat model (7.1) takes from Willbold
+ * et al.: a maintenance command that reads memory directly. It is how an operator looks inside a
+ * spacecraft nobody can touch, and it reads whatever it is pointed at. */
+#define SERVICE_MEMORY       6
+#define SUBTYPE_DUMP         5
+#define SUBTYPE_DUMP_REPORT  6
 #define SERVICE_FUNCTION  8
 #define SUBTYPE_PERFORM   1
 
@@ -388,8 +405,16 @@ static size_t sign_report(uint8_t *body, size_t len)
 /* The PUS-auth build carries a 424-octet mbedtls_gcm_context in pus_auth_ok, which runs on this
  * thread. W47 is what happens when a stack is not sized for one: a node that boots, prints, passes
  * its own crypto self-test and then silently stops working, because the overflow corrupts a kernel
- * object rather than faulting. */
-#if CUBERANGE_OBC_REQUIRE_PUS_AUTH
+ * object rather than faulting.
+ *
+ * A build that SIGNS carries one here too: sign_report runs on this thread for every report that
+ * answers a telecommand - send_test_report, the PUS 1 reports, the PUS 6 dump. This keyed on
+ * REQUIRE_PUS_AUTH alone and was right by coincidence, because until EX-F02 no build signed without
+ * also verifying (every SIGN_REPORTS=1 target in the Makefile also sets REQUIRE_PUS_AUTH=1, so
+ * none of them changes). EX-F02's pair signs and does not verify, and would have got 2048 - a size
+ * nobody has measured against a GCM context on this thread, which W47 says is not a thing to find
+ * out in orbit. */
+#if CUBERANGE_OBC_REQUIRE_PUS_AUTH || CUBERANGE_OBC_SIGN_REPORTS
 #define APP_STACK    3584
 #else
 #define APP_STACK    2048
@@ -935,6 +960,198 @@ static void resend_report(uint16_t counter)
 }
 #endif /* CUBERANGE_OBC_REPORT_STORE */
 
+/* --------------------------------------------------------------- EX-F02 -----
+ *
+ * The SDLS key is a `static const` in cuberange_keys.h, so wherever it is used it lives in .rodata:
+ * in flash, at an address the symbol table names, for as long as the image exists. This OBC uses it
+ * as soon as it signs its reports (EX-D01), so the constant that guards the space link is compiled
+ * into the OBC as well as the radio. One key, several images, and every copy is a place to read it.
+ *
+ * Service 6 is how an operator reads memory. The vulnerable build serves any address it is asked
+ * for. The mitigated build serves only the public block below - the thing a dump is FOR here - and
+ * refuses everything else, with a console line that says so.
+ */
+
+/* What an operator is meant to dump: 64 octets of SRAM that the OBC keeps current.
+ *
+ * Eight octets of magic an operator can recognise without a symbol table, then live values written
+ * just before each dump: uptime in milliseconds (4) and the message counter of the report about to
+ * carry the dump (2). The rest is reserved and zero. Nothing secret is ever written here, and that
+ * is the real control: the allowlist does not decide what is sensitive, the layout does, and the
+ * allowlist holds the line drawn around it.
+ *
+ * Static and named, so the symbol table carries it: solve.py and the verifier find its address the
+ * same way they find the key's.
+ */
+#define PUBLIC_BLOCK_MAGIC "CRPUBLIC"
+#define PUBLIC_BLOCK_LEN   64
+
+static uint8_t obc_public_block[PUBLIC_BLOCK_LEN] = PUBLIC_BLOCK_MAGIC;
+
+static void public_block_refresh(void)
+{
+	const uint32_t now = (uint32_t)k_uptime_get();
+	uint8_t *live = obc_public_block + sizeof(PUBLIC_BLOCK_MAGIC) - 1;
+
+	live[0] = (uint8_t)(now >> 24); live[1] = (uint8_t)(now >> 16);
+	live[2] = (uint8_t)(now >> 8);  live[3] = (uint8_t)now;
+	live[4] = (uint8_t)(tm_msg_counter >> 8);
+	live[5] = (uint8_t)tm_msg_counter;
+}
+
+/* One report's worth, and a limit of the packet rather than of security. 128 octets of memory make
+ * a 172-octet TM 6,6 once it is signed, and a CSP buffer holds 256 - libcsp v2.1's Kconfig default,
+ * which prj.conf does not change. v2.1's csp_buffer_get also ignores the size it is asked for, so
+ * an over-long report would not be refused there; it would run off the end of the buffer. Hence
+ * the BUILD_ASSERT. The limit is in both builds and protects nothing: the key is 32 octets. */
+#define PUS6_REQ_LEN     7      /* memory id (1) | start address (4) | length (2) */
+#define PUS6_DUMP_MAX    128
+#define PUS6_MEM_UNIFIED 0
+
+#if CUBERANGE_OBC_SIGN_REPORTS
+#define PUS6_TRAILER_ROOM CR_PUS_AUTH_TRAILER
+#else
+#define PUS6_TRAILER_ROOM 0
+#endif
+BUILD_ASSERT(SP_HEADER_LEN + PUS_TM_SEC_LEN + TIME_LEN + PUS6_REQ_LEN + PUS6_DUMP_MAX
+	     + PUS6_TRAILER_ROOM <= CSP_BUFFER_SIZE,
+	     "a full PUS 6 dump report must fit one CSP buffer");
+
+#if CUBERANGE_OBC_PUS6_ALLOWLIST
+/* The whole mitigation: a dump is served only if EVERY octet of it lies inside the public block.
+ *
+ * As an offset from the block, in 64 bits, rather than as `address + length <= end`. The address
+ * comes off the wire, and 0xFFFFFFF0 + 0x20 is 0x10 in 32 bits - a sum that passes an end check
+ * while describing memory the block is nowhere near. And both edges: a request that STARTS in the
+ * block and runs past its end is the one a start-address check alone would serve, and the verifier
+ * sends exactly that one.
+ */
+static bool dump_allowed(uint32_t address, uint16_t length)
+{
+	const uint64_t start = (uintptr_t)obc_public_block;
+
+	return address >= start && (uint64_t)address - start + length <= sizeof(obc_public_block);
+}
+#endif
+
+/* TM 6,6, built where it leaves from.
+ *
+ * The octets go from wherever they live straight into the CSP buffer that carries them, and this
+ * function keeps nothing: no static, no frame-local array of dumped material. That is the part of
+ * the design's M2 (keep key material's lifetime short) that a dump handler can embody - serving a
+ * dump must not leave a second copy behind in the node that served it. It is also why the report
+ * is not put in the report store (EX-L02) when a build has one: the store keeps reports verbatim,
+ * and a verbatim dump report is exactly that second copy, with a longer life. A lost dump is asked
+ * for again, as a new request.
+ *
+ * What it cannot do is scrub the CSP buffer once libcsp has sent it. v2.1 hands the buffer back to
+ * its pool as it is and wipes it only when it is next given out (CSP_BUFFER_ZERO_CLEAR, which the
+ * library's CMakeLists defaults ON), so a dump's octets sit in a free buffer until then. Read in
+ * the library's source, not measured here.
+ */
+static void send_dump_report(uint16_t dest_id, uint8_t mem_id, uint32_t address, uint16_t length)
+{
+	const size_t data_len = PUS_TM_SEC_LEN + TIME_LEN + PUS6_REQ_LEN + length;
+	const size_t body_len = SP_HEADER_LEN + data_len;
+	csp_packet_t *packet = csp_buffer_get(body_len + PUS6_TRAILER_ROOM);
+
+	if (packet == NULL) {
+		printk("OBC: no CSP buffer for a dump report\n");
+		return;
+	}
+	uint8_t *body = packet->data;
+	uint32_t now = (uint32_t)k_uptime_get();
+
+	uint16_t word0 = (0 << 12) | (1 << 11) | OBC_APID;
+	uint16_t word1 = (uint16_t)((0x3u << 14) | (tm_seq_count++ & 0x3FFF));
+	uint16_t word2 = (uint16_t)(data_len - 1);
+
+	body[0] = (uint8_t)(word0 >> 8);  body[1] = (uint8_t)(word0 & 0xFF);
+	body[2] = (uint8_t)(word1 >> 8);  body[3] = (uint8_t)(word1 & 0xFF);
+	body[4] = (uint8_t)(word2 >> 8);  body[5] = (uint8_t)(word2 & 0xFF);
+
+	uint8_t *sec = body + SP_HEADER_LEN;
+	uint16_t counter = tm_msg_counter++;
+
+	sec[0] = PUS_VERSION << 4;
+	sec[1] = SERVICE_MEMORY;
+	sec[2] = SUBTYPE_DUMP_REPORT;
+	sec[3] = (uint8_t)(counter >> 8);   sec[4] = (uint8_t)(counter & 0xFF);
+	sec[5] = (uint8_t)(dest_id >> 8);   sec[6] = (uint8_t)(dest_id & 0xFF);
+	sec[7] = (uint8_t)(now >> 24); sec[8] = (uint8_t)(now >> 16);
+	sec[9] = (uint8_t)(now >> 8);  sec[10] = (uint8_t)(now & 0xFF);
+
+	uint8_t *app = sec + PUS_TM_SEC_LEN + TIME_LEN;
+
+	app[0] = mem_id;
+	app[1] = (uint8_t)(address >> 24); app[2] = (uint8_t)(address >> 16);
+	app[3] = (uint8_t)(address >> 8);  app[4] = (uint8_t)address;
+	app[5] = (uint8_t)(length >> 8);   app[6] = (uint8_t)length;
+	/* Nothing checks the address beyond what the caller did. On silicon a dump of unmapped space
+	 * would take a BusFault; Renode raises none (ASSURANCE.md, "Specific fidelity limits"), so this
+	 * range cannot show what that would cost a spacecraft. */
+	memcpy(app + PUS6_REQ_LEN, (const void *)(uintptr_t)address, length);
+
+	size_t blen = body_len;
+
+#if CUBERANGE_OBC_SIGN_REPORTS
+	/* Signed like every other report, with the key the vulnerable build will read out into it. */
+	blen = sign_report(body, blen);
+#endif
+	packet->length = (uint16_t)blen;
+
+	csp_conn_t *conn = csp_connect(CSP_PRIO_NORM, COMM_ADDR, CSP_PORT_PUS, 1000, CSP_O_NONE);
+
+	if (conn == NULL) {
+		printk("OBC: no CSP connection for a dump report\n");
+		csp_buffer_free(packet);
+		return;
+	}
+	csp_send(conn, packet);
+	csp_close(conn);
+	printk("OBC: PUS 6 dump of %u octets at 0x%08x sent to source %u\n",
+	       (unsigned int)length, (unsigned int)address, (unsigned int)dest_id);
+}
+
+/* TC 6,5. In both builds: memory dump is the service, not the flaw, and what the flag decides is
+ * which addresses it will read. */
+static void handle_memory_dump(const uint8_t *app, size_t len, uint16_t source_id)
+{
+	if (len < PUS6_REQ_LEN) {
+		printk("OBC: a PUS 6 dump request carries %u octets, got %u\n",
+		       (unsigned int)PUS6_REQ_LEN, (unsigned int)len);
+		return;
+	}
+	const uint8_t mem_id = app[0];
+	const uint32_t address = ((uint32_t)app[1] << 24) | ((uint32_t)app[2] << 16)
+				 | ((uint32_t)app[3] << 8) | (uint32_t)app[4];
+	const uint16_t length = (uint16_t)((app[5] << 8) | app[6]);
+
+	if (mem_id != PUS6_MEM_UNIFIED) {
+		printk("OBC: PUS 6 memory id %u is not implemented - refused\n", (unsigned int)mem_id);
+		return;
+	}
+	if (length == 0 || length > PUS6_DUMP_MAX) {
+		printk("OBC: PUS 6 dump of %u octets refused - one report carries 1 to %u\n",
+		       (unsigned int)length, (unsigned int)PUS6_DUMP_MAX);
+		return;
+	}
+#if CUBERANGE_OBC_PUS6_ALLOWLIST
+	/* After the two checks above, which are about the packet and are in both builds. This one is
+	 * about the memory, and it is the difference. */
+	if (!dump_allowed(address, length)) {
+		printk("OBC: REJECTED PUS 6 dump of %u octets at 0x%08x "
+		       "(public block is %u octets at 0x%08x)\n",
+		       (unsigned int)length, (unsigned int)address,
+		       (unsigned int)sizeof(obc_public_block),
+		       (unsigned int)(uintptr_t)obc_public_block);
+		return;
+	}
+#endif
+	public_block_refresh();
+	send_dump_report(source_id, mem_id, address, length);
+}
+
 static void handle_space_packet(const uint8_t *raw, size_t len, uint16_t via)
 {
 	if (len < SP_HEADER_LEN + PUS_TC_SEC_LEN) {
@@ -1016,6 +1233,9 @@ static void handle_space_packet(const uint8_t *raw, size_t len, uint16_t via)
 		/* `raw` is the Space Packet, and its first four octets ARE the request id. */
 		handle_function(sec + PUS_TC_SEC_LEN, len - SP_HEADER_LEN - PUS_TC_SEC_LEN,
 				source_id, raw);
+	} else if (service == SERVICE_MEMORY && subtype == SUBTYPE_DUMP) {
+		handle_memory_dump(sec + PUS_TC_SEC_LEN, len - SP_HEADER_LEN - PUS_TC_SEC_LEN,
+				   source_id);
 	} else {
 		printk("OBC: service %u,%u is not implemented in P0\n", service, subtype);
 	}

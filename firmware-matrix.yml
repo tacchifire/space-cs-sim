@@ -95,6 +95,19 @@ pairs:
     vuln: { value: "0", build: build-obc-d01-vuln }
     hard: { value: "1", build: build-obc-d01-hard }
 
+  # EX-F02. Both halves hold EX-D01's flag ON, and that is the premise rather than a bystander:
+  # signing is what compiles cr_sdls_key into the OBC's flash, so a hardened half built without it
+  # would refuse to dump a key that was not there and look like a working allowlist. Both also hold
+  # EX-F01's length check ON, so the overflow is not a second way to the key, and REQUIRE_PUS_AUTH
+  # at 0. The PUS 6 dump handler is in both - a memory dump is the service, not the flaw. What
+  # differs is whether it reads any address it is asked for or only the public block the OBC keeps
+  # for the purpose.
+  - id: EX-F02
+    app: firmware/apps/obc
+    flag: CUBERANGE_OBC_PUS6_ALLOWLIST
+    vuln: { value: "0", build: build-obc-f02-vuln }
+    hard: { value: "1", build: build-obc-f02-hard }
+
   - id: EX-L02
     app: firmware/apps/obc
     flag: CUBERANGE_OBC_REPORT_STORE

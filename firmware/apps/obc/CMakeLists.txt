@@ -70,6 +70,14 @@ set(CUBERANGE_OBC_ACK_COMMANDS 0 CACHE STRING
 set(CUBERANGE_OBC_TC_COUNTERS 0 CACHE STRING
     "carry counts of accepted and refused telecommands in the housekeeping beacon")
 
+# EX-F02's only difference. Every OBC image answers a PUS 6 memory dump - the dump is the service,
+# not the flaw - and the SDLS key is a static const in the flash of every image that signs or
+# verifies. This decides whether a dump reads any address it is asked for, or only the public block
+# the OBC keeps for the purpose.
+#   west build ... -- -DCUBERANGE_OBC_PUS6_ALLOWLIST=1
+set(CUBERANGE_OBC_PUS6_ALLOWLIST 0 CACHE STRING
+    "serve PUS 6 memory dumps only from the OBC's public block, not from any address")
+
 include(${CMAKE_CURRENT_LIST_DIR}/../../common/identity.cmake)
 
 target_sources(app PRIVATE src/main.c ../../common/cuberange_proto.c
@@ -86,4 +94,5 @@ target_compile_definitions(app PRIVATE
   CUBERANGE_OBC_REPORT_STORE=${CUBERANGE_OBC_REPORT_STORE}
   CUBERANGE_OBC_BEACON=${CUBERANGE_OBC_BEACON}
   CUBERANGE_OBC_ACK_COMMANDS=${CUBERANGE_OBC_ACK_COMMANDS}
-  CUBERANGE_OBC_TC_COUNTERS=${CUBERANGE_OBC_TC_COUNTERS})
+  CUBERANGE_OBC_TC_COUNTERS=${CUBERANGE_OBC_TC_COUNTERS}
+  CUBERANGE_OBC_PUS6_ALLOWLIST=${CUBERANGE_OBC_PUS6_ALLOWLIST})
