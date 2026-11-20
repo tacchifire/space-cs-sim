@@ -5,6 +5,9 @@ layer: application
 difficulty: advanced
 duration: 45-60 min
 prerequisite: EX-S01
+targets: renode, hw
+hw_class: changed
+hw_evidence: same peer setup as EX-X01 (fdcan2 wiring + peer COMM node)
 ttp:
   # Deliberately empty, as everywhere else here. Mapping these to SPARTA and SPACE-SHIELD means
   # checking each ID against the official STIX exports, and there is no tool in this repository

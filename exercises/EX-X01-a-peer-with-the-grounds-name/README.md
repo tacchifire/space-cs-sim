@@ -5,6 +5,9 @@ layer: crosslink
 difficulty: intermediate
 duration: 45-60 min
 prerequisite: EX-G04
+targets: renode, hw
+hw_class: changed
+hw_evidence: fdcan2 wiring (second transceiver); peer COMM node; crosslink tap/injection port
 ttp:
   # Deliberately empty, as everywhere else here. Mapping these to SPARTA and SPACE-SHIELD means
   # checking each ID against the official STIX exports, and there is no tool in this repository

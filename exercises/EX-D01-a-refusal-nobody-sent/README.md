@@ -5,6 +5,9 @@ layer: downlink
 difficulty: advanced
 duration: 30-45 min
 prerequisite: EX-S02
+targets: renode, hw
+hw_class: changed
+hw_evidence: peer setup as EX-X01; crosslink tap; CAN analyser to check FIFO behaviour
 ttp:
   # Deliberately empty, as everywhere else here. Mapping these to SPARTA and SPACE-SHIELD means
   # checking each ID against the official STIX exports, and there is no tool in this repository

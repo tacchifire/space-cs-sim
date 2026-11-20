@@ -4,6 +4,9 @@ title: Kill the radio from the internal bus
 layer: internal bus
 difficulty: introductory
 duration: 30-45 min
+targets: renode, hw
+hw_class: as-is
+hw_evidence: CAN tap; real EPS rail load switch; per-node power switches; console capture
 ttp:
   # Deliberately empty. Mapping these to SPARTA and SPACE-SHIELD means checking each ID against
   # the official STIX exports, and there is no tool here that does it - so a filled-in list would

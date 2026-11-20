@@ -5,6 +5,9 @@ layer: uplink
 difficulty: advanced
 duration: 30-45 min
 prerequisite: EX-U01
+targets: renode, hw
+hw_class: as-is
+hw_evidence: second transmitter holding the key; beacon/counter readout
 ttp:
   # Deliberately empty, as everywhere else here. Mapping these to SPARTA and SPACE-SHIELD means
   # checking each ID against the official STIX exports, and there is no tool in this repository

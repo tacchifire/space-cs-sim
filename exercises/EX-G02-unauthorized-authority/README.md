@@ -5,6 +5,9 @@ layer: ground segment
 difficulty: intermediate
 duration: 30-45 min
 prerequisite: EX-G01
+targets: renode, hw
+hw_class: as-is
+hw_evidence: GS bridge with two identities; console capture
 ttp:
   # Deliberately empty. Mapping these to SPARTA and SPACE-SHIELD means checking each ID against
   # the official STIX exports, and there is no tool here that does it - so a filled-in list would

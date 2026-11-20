@@ -5,6 +5,9 @@ layer: space link
 difficulty: intermediate
 duration: 45-60 min
 prerequisite: EX-G02
+targets: renode, hw
+hw_class: as-is
+hw_evidence: second sender / second GS identity; link tap
 ttp:
   # 意図的に空にしてある。SPARTA と SPACE-SHIELD への対応付けは、公式の STIX エクスポートで
   # 各 ID の実在を確認する作業であり、それを行うツールはここに無い。埋めた一覧は、引用の形を

@@ -5,6 +5,9 @@ layer: space link
 difficulty: intermediate
 duration: 45-60 min
 prerequisite: EX-G02
+targets: renode, hw
+hw_class: as-is
+hw_evidence: second sender / second GS identity; link tap
 ttp:
   # Deliberately empty. Mapping these to SPARTA and SPACE-SHIELD means checking each ID against
   # the official STIX exports, and there is no tool here that does it - so a filled-in list would
