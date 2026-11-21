@@ -44,6 +44,13 @@ on:
 
 permissions:
   contents: read
+concurrency:
+  # A pull request only ever needs its newest run: a push that supersedes the commit being
+  # checked cancels the old run instead of letting it spend an hour of runner time proving a
+  # result nobody will read. Pushes to main are never cancelled - keyed by run id, each gets
+  # its own group - because a cancelled main run would leave the merge unmeasured.
+  group: check-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # CI pins the build directory instead of taking the per-checkout default. The default exists
 # because two working copies on one machine used to share /tmp/cuberange and overwrite each
