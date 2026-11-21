@@ -1,0 +1,13 @@
+{
+  "name": "CubeRange PR-1 foundation (unverified)",
+  "build": { "dockerfile": "Dockerfile", "context": ".." },
+  "remoteUser": "developer",
+  "forwardPorts": [3987],
+  "portsAttributes": {
+    "3987": { "label": "CubeRange GUI", "onAutoForward": "silent" }
+  },
+  "otherPortsAttributes": { "onAutoForward": "ignore" },
+  "customizations": {
+    "vscode": { "extensions": [], "settings": { "remote.autoForwardPorts": false } }
+  }
+}

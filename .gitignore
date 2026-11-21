@@ -9,3 +9,6 @@ build/
 tests/native/test_proto
 tests/native/test_proto_asan
 tests/native/fuzz_proto
+
+# Local Codespaces verification evidence (paste back; do not commit).
+/codespace-verify-result.log
