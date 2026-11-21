@@ -12,9 +12,19 @@ from typing import Optional
 
 from ..proto.frame import Deframer, wrap
 from .. import ports
+from ..transport import FrameTransport
 
 
-class SpaceLink:
+class SpaceLink(FrameTransport):
+    """The socket implementation of the frame transport boundary (cuberange.transport).
+
+    This class predates the boundary and defined its shape: connect/send_frame/poll/close and the
+    quiet-versus-dead distinction in poll() are the contract because they were this class's
+    behaviour first. Nothing about its public API changed when it became a FrameTransport.
+    """
+
+    capabilities = frozenset({"socket"})
+
     def __init__(self, host: str = "127.0.0.1", port: int = ports.link(0),
                  timeout: float = 0.2):
         self._addr = (host, port)
