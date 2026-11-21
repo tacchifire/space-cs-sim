@@ -61,6 +61,7 @@ VULN = OUT / "build-obc-s02-vuln" / "zephyr" / "zephyr.elf"
 HARD = OUT / "build-obc-s02-hard" / "zephyr" / "zephyr.elf"
 COMM = OUT / "build-comm-s01-sat0" / "zephyr" / "zephyr.elf"
 BOOT_TIMEOUT_S = float(os.environ.get("CUBERANGE_BOOT_TIMEOUT_S", "40"))
+EFFECT_TIMEOUT_S = float(os.environ.get("CUBERANGE_EFFECT_TIMEOUT_S", "60"))
 
 VICTIM, PEER = spacecraft(0), spacecraft(1)
 CSP_PORT_PUS, SPORT = 10, 20
@@ -128,11 +129,41 @@ class Range:
         p = OUT / name
         return p.read_text(errors="replace") if p.exists() else ""
 
-    def uplink(self, frame: bytes, settle: float = 4.0) -> None:
-        self.link.sendall(wrap(frame))
-        time.sleep(settle)
+    def wait_console(self, name: str, needle: str, timeout: float = EFFECT_TIMEOUT_S) -> bool:
+        """Poll a console file until needle appears, the way __enter__ waits for boot.
 
-    def from_the_crosslink(self, dst: int, payload: bytes, settle: float = 5.0) -> None:
+        Returns False on timeout rather than raising: the caller's assert then fails with the
+        full console text attached, which is worth more than a bare timeout here.
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if needle in self.console(name):
+                return True
+            time.sleep(0.2)
+        return False
+
+    def wait_rail(self, want: bool, timeout: float = EFFECT_TIMEOUT_S) -> bool:
+        """EX-G02's rail_settles_to idiom: poll the rail until it reads as wanted."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.power.read_rail() is want:
+                return True
+            time.sleep(0.3)
+        return self.power.read_rail() is want
+
+    def uplink(self, frame: bytes, expect: tuple = ()) -> None:
+        """Send a frame, then wait for its effects instead of a fixed settle.
+
+        expect is a sequence of (console file, marker) pairs the caller is about to assert on.
+        Renode's emulation speed varies with runner load, so a fixed sleep asserts against a
+        clock; polling asserts against the effect itself (PHASE0 report, section 7.1). A test
+        that asserts an ABSENCE passes the positive evidence that its frame was processed.
+        """
+        self.link.sendall(wrap(frame))
+        for name, needle in expect:
+            self.wait_console(name, needle)
+
+    def from_the_crosslink(self, dst: int, payload: bytes, expect: tuple = ()) -> None:
         sock = socket.create_connection(("127.0.0.1", crosslink_injector()), timeout=5)
         try:
             for f in encode_packet(src=PEER.comm, dst=dst, dport=CSP_PORT_PUS,
@@ -140,22 +171,27 @@ class Range:
                 sock.sendall(f"{f.can_id:x} {f.data.hex()}\n".encode())
         finally:
             sock.close()
-        time.sleep(settle)
+        for name, needle in expect:
+            self.wait_console(name, needle)
 
 
-def _uplink_signed(r, packet: bytes, sdls_sn: int = 1, auth_seq: int = 1) -> None:
+def _uplink_signed(r, packet: bytes, sdls_sn: int = 1, auth_seq: int = 1,
+                   expect: tuple = ()) -> None:
     """A telecommand the way a ground station now has to send one: signed, then framed, then
     authenticated again at the frame layer. Both, because both are deployed."""
     r.uplink(sdls.encode_tc(pus_auth.sign(packet, key=SDLS_KEY, seq=auth_seq),
                             key=SDLS_KEY, spi=SDLS_SPI, iv=bytes(range(0xA0, 0xAC)),
                             seq_num=sdls_sn, frame_seq=sdls_sn & 0xFF,
-                            scid=VICTIM.scid, vcid=0))
+                            scid=VICTIM.scid, vcid=0),
+             expect=expect)
 
 
 def test_an_authenticated_telecommand_still_works():
     """Stated first: everything below is about what this control refuses, not about it refusing."""
     with Range(HARD) as r:
-        _uplink_signed(r, _pus(17, 1, GROUND_STATIONS["primary"]))
+        _uplink_signed(r, _pus(17, 1, GROUND_STATIONS["primary"]),
+                       expect=[("s02-sat0-obc.uart", "PUS 17,1 from source"),
+                               ("s02-sat0-obc.uart", "PUS 17,2 report sent")])
         obc = r.console("s02-sat0-obc.uart")
         assert "PUS 17,1 from source" in obc, obc
         assert "PUS 17,2 report sent" in obc, (
@@ -167,7 +203,8 @@ def test_a_telecommand_with_no_trailer_is_refused():
     with Range(HARD) as r:
         r.uplink(sdls.encode_tc(_pus(17, 1, GROUND_STATIONS["primary"]), key=SDLS_KEY,
                                 spi=SDLS_SPI, iv=bytes(range(0xA0, 0xAC)), seq_num=1,
-                                frame_seq=0, scid=VICTIM.scid, vcid=0))
+                                frame_seq=0, scid=VICTIM.scid, vcid=0),
+                 expect=[("s02-sat0-obc.uart", "REJECTED an unauthenticated telecommand")])
         obc = r.console("s02-sat0-obc.uart")
         assert "REJECTED an unauthenticated telecommand" in obc, (
             "a telecommand with no MAC of its own reached a handler\n" + obc)
@@ -178,10 +215,14 @@ def test_the_crosslink_attack_is_refused():
     """EX-X01's attack, byte for byte. It worked in EX-S01 against AES-256-GCM on the uplink."""
     with Range(HARD) as r:
         assert r.power.read_rail() is True
-        r.from_the_crosslink(VICTIM.obc, _rail_off(GROUND_STATIONS["primary"]))
+        r.from_the_crosslink(VICTIM.obc, _rail_off(GROUND_STATIONS["primary"]),
+                             expect=[("s02-sat0-obc.uart",
+                                      f"REJECTED an unauthenticated telecommand from node "
+                                      f"{PEER.comm}")])
         obc = r.console("s02-sat0-obc.uart")
         assert f"REJECTED an unauthenticated telecommand from node {PEER.comm}" in obc, obc
         assert "PUS 8 executed" not in obc, obc
+        r.wait_rail(True)
         assert r.power.read_rail() is True, (
             "the rail went off: the request-level MAC did not stop it\n" + obc)
 
@@ -190,10 +231,13 @@ def test_a_replayed_authenticated_telecommand_is_refused():
     """The counter is inside the MAC, so it cannot be advanced without the key."""
     with Range(HARD) as r:
         packet = pus_auth.sign(_pus(17, 1, GROUND_STATIONS["primary"]), key=SDLS_KEY, seq=9)
-        for sdls_sn in (1, 2):                 # a new frame each time; the same telecommand inside
+        for sdls_sn, marker in ((1, "PUS 17,2 report sent"), (2, "REPLAY - source")):
+            # a new frame each time; the same telecommand inside. Wait for each send's own
+            # effect before the next, so the replay is measured against a settled first accept.
             r.uplink(sdls.encode_tc(packet, key=SDLS_KEY, spi=SDLS_SPI,
                                     iv=bytes(range(0xA0, 0xAC)), seq_num=sdls_sn,
-                                    frame_seq=sdls_sn, scid=VICTIM.scid, vcid=0))
+                                    frame_seq=sdls_sn, scid=VICTIM.scid, vcid=0),
+                     expect=[("s02-sat0-obc.uart", marker)])
         obc = r.console("s02-sat0-obc.uart")
         assert "REPLAY - source" in obc, (
             "the same signed telecommand was accepted twice\n" + obc)
@@ -204,7 +248,9 @@ def test_the_vulnerable_half_still_falls_to_it():
     """Which is what makes the test above a measurement of the flag and not of the scenario."""
     with Range(VULN) as r:
         assert r.power.read_rail() is True
-        r.from_the_crosslink(VICTIM.obc, _rail_off(GROUND_STATIONS["primary"]))
+        r.from_the_crosslink(VICTIM.obc, _rail_off(GROUND_STATIONS["primary"]),
+                             expect=[("s02-sat0-obc.uart", "PUS 8 executed")])
         obc = r.console("s02-sat0-obc.uart")
         assert "PUS 8 executed" in obc, obc
+        r.wait_rail(False)
         assert r.power.read_rail() is False, obc

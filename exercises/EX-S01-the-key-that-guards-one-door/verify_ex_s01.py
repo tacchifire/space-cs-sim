@@ -47,6 +47,7 @@ VULN = OUT / "build-obc-x01-vuln" / "zephyr" / "zephyr.elf"
 HARD = OUT / "build-obc-x01-hard" / "zephyr" / "zephyr.elf"
 COMM = OUT / "build-comm-s01-sat0" / "zephyr" / "zephyr.elf"
 BOOT_TIMEOUT_S = float(os.environ.get("CUBERANGE_BOOT_TIMEOUT_S", "40"))
+EFFECT_TIMEOUT_S = float(os.environ.get("CUBERANGE_EFFECT_TIMEOUT_S", "60"))
 
 VICTIM, PEER = spacecraft(0), spacecraft(1)
 CSP_PORT_PUS, SPORT = 10, 20
@@ -114,11 +115,41 @@ class Range:
         p = OUT / name
         return p.read_text(errors="replace") if p.exists() else ""
 
-    def uplink(self, frame: bytes, settle: float = 4.0) -> None:
-        self.link.sendall(wrap(frame))
-        time.sleep(settle)
+    def wait_console(self, name: str, needle: str, timeout: float = EFFECT_TIMEOUT_S) -> bool:
+        """Poll a console file until needle appears, the way __enter__ waits for boot.
 
-    def from_the_crosslink(self, dst: int, payload: bytes, settle: float = 5.0) -> None:
+        Returns False on timeout rather than raising: the caller's assert then fails with the
+        full console text attached, which is worth more than a bare timeout here.
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if needle in self.console(name):
+                return True
+            time.sleep(0.2)
+        return False
+
+    def wait_rail(self, want: bool, timeout: float = EFFECT_TIMEOUT_S) -> bool:
+        """EX-G02's rail_settles_to idiom: poll the rail until it reads as wanted."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.power.read_rail() is want:
+                return True
+            time.sleep(0.3)
+        return self.power.read_rail() is want
+
+    def uplink(self, frame: bytes, expect: tuple = ()) -> None:
+        """Send a frame, then wait for its effects instead of a fixed settle.
+
+        expect is a sequence of (console file, marker) pairs the caller is about to assert on.
+        Renode's emulation speed varies with runner load, so a fixed sleep asserts against a
+        clock; polling asserts against the effect itself (PHASE0 report, section 7.1). A test
+        that asserts an ABSENCE passes the positive evidence that its frame was processed.
+        """
+        self.link.sendall(wrap(frame))
+        for name, needle in expect:
+            self.wait_console(name, needle)
+
+    def from_the_crosslink(self, dst: int, payload: bytes, expect: tuple = ()) -> None:
         sock = socket.create_connection(("127.0.0.1", crosslink_injector()), timeout=5)
         try:
             for f in encode_packet(src=PEER.comm, dst=dst, dport=CSP_PORT_PUS,
@@ -126,7 +157,8 @@ class Range:
                 sock.sendall(f"{f.can_id:x} {f.data.hex()}\n".encode())
         finally:
             sock.close()
-        time.sleep(settle)
+        for name, needle in expect:
+            self.wait_console(name, needle)
 
 
 def test_the_uplink_is_really_authenticated():
@@ -135,7 +167,9 @@ def test_the_uplink_is_really_authenticated():
         assert "SDLS self-test passed" in r.console("s01-sat0-comm.uart")
         r.uplink(sdls.encode_tc(_pus(17, 1, GROUND_STATIONS["primary"]), key=SDLS_KEY,
                                 spi=SDLS_SPI, iv=bytes(range(0xA0, 0xAC)), seq_num=1,
-                                frame_seq=0, scid=VICTIM.scid, vcid=0))
+                                frame_seq=0, scid=VICTIM.scid, vcid=0),
+                 expect=[("s01-sat0-comm.uart", f"authenticated frame, SPI {SDLS_SPI}"),
+                         ("s01-sat0-obc.uart", "PUS 17,2 report sent")])
         comm, obc = r.console("s01-sat0-comm.uart"), r.console("s01-sat0-obc.uart")
         assert f"authenticated frame, SPI {SDLS_SPI}" in comm, comm
         assert "PUS 17,2 report sent" in obc, obc
@@ -145,7 +179,8 @@ def test_an_unauthenticated_uplink_frame_is_refused():
     """So that "authenticated" is a property and not a log line."""
     with Range(VULN) as r:
         r.uplink(encode_tc_frame(_pus(17, 1, GROUND_STATIONS["primary"]), seq=0,
-                                 scid=VICTIM.scid, vcid=0))
+                                 scid=VICTIM.scid, vcid=0),
+                 expect=[("s01-sat0-comm.uart", "not a well-formed authenticated frame")])
         comm, obc = r.console("s01-sat0-comm.uart"), r.console("s01-sat0-obc.uart")
         #: The specific reason, not just "refused". EX-S03 split COMM's refusals into four
         #: named causes; a plain frame has no security header at all, so it fails the
@@ -158,7 +193,8 @@ def test_the_crosslink_attack_is_unaffected_by_the_uplink_mac():
     """EX-X01's attack, byte for byte, against a spacecraft with cryptography on its uplink."""
     with Range(VULN) as r:
         assert r.power.read_rail() is True
-        r.from_the_crosslink(VICTIM.obc, _rail_off(GROUND_STATIONS["primary"]))
+        r.from_the_crosslink(VICTIM.obc, _rail_off(GROUND_STATIONS["primary"]),
+                             expect=[("s01-sat0-obc.uart", "PUS 8 executed")])
         comm, obc = r.console("s01-sat0-comm.uart"), r.console("s01-sat0-obc.uart")
         #: The packet never reached the MAC check, so COMM has nothing to say about it at all.
         #: That silence is the finding: it did not fail a check, it never met one.
@@ -167,6 +203,7 @@ def test_the_crosslink_attack_is_unaffected_by_the_uplink_mac():
             "path this test says it does not\n" + comm)
         assert f"from source {GROUND_STATIONS['primary']}" in obc, obc
         assert "PUS 8 executed" in obc, obc
+        r.wait_rail(False)
         assert r.power.read_rail() is False, (
             "the rail is still on: the attack did not land\n" + obc)
 
@@ -175,17 +212,20 @@ def test_ex_x01s_mitigation_still_fixes_it():
     """Without this, the file reads as an argument against deploying SDLS. It is not one."""
     with Range(HARD) as r:
         assert r.power.read_rail() is True
-        r.from_the_crosslink(VICTIM.obc, _rail_off(GROUND_STATIONS["primary"]))
+        r.from_the_crosslink(VICTIM.obc, _rail_off(GROUND_STATIONS["primary"]),
+                             expect=[("s01-sat0-obc.uart", "arrived from node")])
         obc = r.console("s01-sat0-obc.uart")
         assert "arrived from node" in obc, obc
         assert "PUS 8 executed" not in obc, obc
+        r.wait_rail(True)
         assert r.power.read_rail() is True, obc
 
         #: And the authenticated uplink still works on the mitigated build - a build that closed
         #: the crosslink by closing everything would pass every test above.
         r.uplink(sdls.encode_tc(_pus(17, 1, GROUND_STATIONS["primary"]), key=SDLS_KEY,
                                 spi=SDLS_SPI, iv=bytes(range(0xA0, 0xAC)), seq_num=1,
-                                frame_seq=0, scid=VICTIM.scid, vcid=0))
+                                frame_seq=0, scid=VICTIM.scid, vcid=0),
+                 expect=[("s01-sat0-obc.uart", "PUS 17,2 report sent")])
         obc = r.console("s01-sat0-obc.uart")
         assert "PUS 17,2 report sent" in obc, (
             "the mitigated build stopped answering its own authenticated ground station\n" + obc)
