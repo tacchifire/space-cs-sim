@@ -4,6 +4,9 @@ title: 内部バスから無線を殺す
 layer: internal bus
 difficulty: introductory
 duration: 30-45 min
+targets: renode, hw
+hw_class: as-is
+hw_evidence: CAN tap; real EPS rail load switch; per-node power switches; console capture
 ttp:
   # 意図的に空にしてある。SPARTA と SPACE-SHIELD への対応付けは、公式の STIX エクスポートに対して
   # ID の実在を確認する作業であり、それをするツールはここに無い。埋めれば、引用の体裁をした推測に

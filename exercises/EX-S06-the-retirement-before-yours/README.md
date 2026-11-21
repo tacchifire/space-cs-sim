@@ -5,6 +5,9 @@ layer: space-link
 difficulty: advanced
 duration: 30-45 min
 prerequisite: EX-S05
+targets: renode, hw
+hw_class: as-is
+hw_evidence: same as EX-S05 (two identities; beacon SA-management log)
 ttp:
   sparta: []
   space_shield: []

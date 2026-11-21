@@ -5,6 +5,9 @@ layer: space link
 difficulty: advanced
 duration: 45-60 min
 prerequisite: EX-D02
+targets: renode, hw
+hw_class: changed
+hw_evidence: GS bridge with seeded loss injection (probability and seed settable, logged)
 ttp:
   # 意図的に空。SPARTA と SPACE-SHIELD への対応付けは各 ID を公式 STIX エクスポートと突き合わせる
   # 作業であり、それを行う道具がこのリポジトリには無い。埋めれば引用の皮をかぶった推測になる。

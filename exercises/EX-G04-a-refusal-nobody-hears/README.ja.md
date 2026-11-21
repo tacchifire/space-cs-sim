@@ -5,6 +5,9 @@ layer: ground segment
 difficulty: intermediate
 duration: 30-45 min
 prerequisite: EX-G03
+targets: renode, hw
+hw_class: as-is
+hw_evidence: GS bridge; node console capture for comparison
 ttp:
   # 意図的に空にしてある。SPARTA と SPACE-SHIELD への対応付けは、公式の STIX エクスポートで
   # 各 ID の実在を確認する作業であり、それを行うツールはここに無い。埋めた一覧は、引用の形を

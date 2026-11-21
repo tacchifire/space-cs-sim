@@ -5,6 +5,9 @@ layer: application
 difficulty: advanced
 duration: 45-60 min
 prerequisite: EX-S01
+targets: renode, hw
+hw_class: changed
+hw_evidence: same peer setup as EX-X01 (fdcan2 wiring + peer COMM node)
 ttp:
   # 意図的に空。SPARTA と SPACE-SHIELD への対応付けは各 ID を公式 STIX エクスポートと突き合わせる
   # 作業であり、それを行う道具がこのリポジトリには無い。埋めれば引用の皮をかぶった推測になる。

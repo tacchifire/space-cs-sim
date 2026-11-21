@@ -5,6 +5,9 @@ layer: ground segment
 difficulty: advanced
 duration: 30-45 min
 prerequisite: EX-S06
+targets: renode, hw
+hw_class: as-is
+hw_evidence: two GS bridges sharing a copy of the operator key; ground-side ledger
 ttp:
   sparta: []
   space_shield: []

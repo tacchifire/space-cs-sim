@@ -16,33 +16,31 @@ written; a cycle sends them in one.
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 EXERCISES = REPO / "exercises"
 
-FIELDS = ("id", "title", "layer", "difficulty", "duration", "prerequisite")
+# The front-matter parser itself lives in exactly one place, src/cuberange/exercises.py -
+# this tool and the GUI catalog both delegate to it. That module uses only the standard
+# library, so this file still runs with no third-party dependencies on a machine that has
+# not installed anything; the sys.path bootstrap below is what lets a bare
+# `python3 tools/syllabus.py` find it without an install step.
+sys.path.insert(0, str(REPO / "src"))
+
+from cuberange import exercises as _exercises_module  # noqa: E402
+
+FIELDS = _exercises_module.FIELDS
 
 
 def front_matter(readme: Path) -> dict:
-    """The YAML-ish header, parsed with a regex on purpose.
+    """The YAML-ish header of one README (delegated to cuberange.exercises).
 
-    A real YAML parse would also swallow the `ttp:` block, whose whole point is that it is
-    deliberately empty and must stay visible; and this file must run with no dependencies so an
-    instructor can read the order on a machine that has not installed anything.
+    Kept under this name because existing callers - the flatsat console catalog and the
+    tests - import it from here.
     """
-    text = readme.read_text()
-    m = re.match(r"^---\n(.*?)\n---\n", text, re.S)
-    if not m:
-        raise ValueError(f"{readme} has no front matter")
-    out = {}
-    for line in m.group(1).splitlines():
-        km = re.match(r"^([a-z_]+):\s*(.*)$", line)
-        if km and km.group(1) in FIELDS:
-            out[km.group(1)] = km.group(2).strip()
-    return out
+    return _exercises_module.parse_front_matter(readme)
 
 
 def exercises() -> dict:

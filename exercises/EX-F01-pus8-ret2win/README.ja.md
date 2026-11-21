@@ -5,6 +5,9 @@ layer: firmware
 difficulty: intermediate
 duration: 60-90 min
 prerequisite: EX-L01
+targets: renode, hw
+hw_class: as-is
+hw_evidence: GS serial bridge; FDIR GPIO as LED/test point; SWD reflash + NRST/BOOT control
 ttp:
   # 意図的に空にしてある。SPARTA と SPACE-SHIELD への対応付けは、公式の STIX エクスポートに対して
   # ID の実在を確認する作業であり、それをするツールはここに無い。埋めれば、引用の体裁をした推測に

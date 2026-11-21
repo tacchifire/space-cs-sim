@@ -5,6 +5,9 @@ layer: space-link
 difficulty: advanced
 duration: 30-45 min
 prerequisite: EX-S04
+targets: renode, hw
+hw_class: as-is
+hw_evidence: GS bridge with two identities; beacon reception and verification
 ttp:
   sparta: []
   space_shield: []

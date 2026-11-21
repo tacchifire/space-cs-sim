@@ -5,6 +5,9 @@ layer: space-link
 difficulty: advanced
 duration: 30-45 min
 prerequisite: EX-U02
+targets: renode, hw
+hw_class: as-is
+hw_evidence: GS bridge with SA/key switching; console capture
 ttp:
   sparta: []
   space_shield: []
