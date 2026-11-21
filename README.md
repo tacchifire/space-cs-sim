@@ -6,12 +6,89 @@ A hands-on range for **space cybersecurity**: satellite firmware running at inst
 [Renode](https://renode.io), a CubeSat's internal CAN bus, an RF link, and a ground station — with
 attacks you can actually land, and mitigations proven to stop them.
 
-It is the space analogue of Toyota's [RAMN](https://github.com/ToyotaInfoTech/RAMN) board, which
-made automotive security learnable by putting four MCUs and a CAN bus on one PCB.
+## Status
 
 **Status: twenty-four exercises, two spacecraft.** A ground station sends a real ECSS PUS 17,1 and
 gets a real 17,2 back through CCSDS framing, an emulated UART link, and CSP over CAN between
-emulated STM32H753 nodes. The exercises chain, and each one attacks a limit the previous one's
+emulated STM32H753 nodes.
+
+```
+$ make demo-p0
+COMM: uplink frame seq=0 carrying 11 octets -> OBC
+COMM: forwarded 11 octets to OBC on port 10
+OBC:  accepted a connection from 5 on port 10
+OBC:  APID 0x0a9 PUS 17,1 from source 66
+OBC:  PUS 17,2 report sent to COMM (counter 0)
+COMM: downlink 17 octets from node 1
+```
+
+## Getting started
+
+Needs Linux (WSL2 is fine), Python ≥ 3.10, ~8 GB of disk. No root, no Docker.
+
+On a minimal image, install these first. `bc` is not optional — the probe's arithmetic is six
+calls to it. `libicu` and OpenSSL 3 are dlopened by Renode's bundled .NET at startup, and a C
+compiler is needed because `make check` compiles the shared codec.
+
+```bash
+sudo apt install -y bc build-essential python3-dev libicu-dev libssl3
+pip install -r requirements.txt
+```
+
+**No root?** [docs/host-setup-without-root.md](docs/host-setup-without-root.md) is the path that
+was walked on a host with no `sudo`, `gcc`, `pip` or `make`, with the numbers it produced. Nothing
+in this repository needs a package manager.
+
+GTK is *not* needed: every invocation here passes `--disable-xwt`, so Renode never builds a UI.
+
+```bash
+# 1. Renode 1.16.1 portable, extracted to ~/tools/renode_1.16.1-dotnet_portable
+#    Both architectures unpack to that same directory name.
+case "$(uname -m)" in
+  x86_64)  RENODE_ASSET=renode-1.16.1.linux-portable-dotnet.tar.gz ;;
+  aarch64) RENODE_ASSET=renode-1.16.1.linux-arm64-portable-dotnet.tar.gz ;;
+esac
+curl -L -o /tmp/renode.tar.gz \
+  "https://github.com/renode/renode/releases/download/v1.16.1/$RENODE_ASSET"
+mkdir -p ~/tools && tar xzf /tmp/renode.tar.gz -C ~/tools
+
+# 2. Zephyr v4.1.0 + SDK (see tools/setup-toolchain.sh for why these exact versions)
+./tools/setup-toolchain.sh
+git clone --depth 1 --branch v2.1 https://github.com/libcsp/libcsp ~/libcsp
+
+# 3. Check the ground under your feet, then run the thing
+make probe
+make demo-p0
+```
+
+| Target | What it does |
+| --- | --- |
+| `make probe` | Verifies every Renode capability the design depends on. 40 checks, including five deliberate-failure self-tests |
+| `make firmware-p0` | Builds the COMM and OBC images |
+| `make firmware-f01` | Every satellite-0 image: COMM, OBC (both), both EPS profiles, both ADCS profiles |
+| `make firmware-g01` | The hardened OBC and EPS EX-G01 needs — the exercise is about every spacecraft-side control working |
+| `make firmware-sat1` | The same four roles built as spacecraft 1: different CSP addresses, different SCID |
+| `tools/ci.sh` | The gate as one command: environment check, then `make check`. What CI runs |
+| `make constellation` | Eight nodes, two spacecraft, one emulation — and the bus isolation between them |
+| `make demo-p0` | Runs the PUS round trip and asserts it |
+| `make demo` | The R0 smoke test: two nodes exchanging CSP pings over CAN |
+| `make determinism` | Runs one scenario three times under the CI profile and requires byte-identical guest output |
+| `make pair-gate` | Proves every vulnerable/mitigated pair differs by exactly one build flag, and nothing else |
+| `make spike` | Injects raw CAN frames from Python with no privileges, and drives virtual time over Renode's External Control API |
+| `make verify-all` | Every exercise, both directions: attacks land, mitigations block, features survive |
+| `make soak-p0` | Thirty consecutive round trips under a watchdog |
+| `make check` | All of the above plus the codec suites |
+
+`make probe` is sensitive to host contention — a clean run is about 6 minutes, and it took 35 with
+two other Renode workloads on the machine. Check the load before reading a slow probe as a
+regression.
+
+For USB inventory and diagnostics on an owner-operated FlatSat RP2040 teaching board, see [docs/flatsat.md](docs/flatsat.md).
+Run `make flatsat-web` for the [local web console](docs/flatsat-web.md), which manages board queries and recordings and presents the exercise catalog.
+
+## Exercises
+
+The exercises chain, and each one attacks a limit the previous one's
 mitigation admitted to:
 
 - **EX-B01** — an attacker with nothing but bus access silences the satellite. Fixed by
@@ -25,7 +102,7 @@ mitigation admitted to:
   the OBC's PUS 8 handler and returns into a maintenance function no command can reach. Not
   shellcode: SRAM here is execute-never and Renode enforces it, so the payload is an address that
   was already in the image.
-- **EX-F02** — *(written, not yet run)* the key that guards the space link is a `static const`, so
+- **EX-F02** — *(verified in CI)* the key that guards the space link is a `static const`, so
   it sits in the flash of every image that uses it — the OBC's too, once the OBC signs its reports.
   A PUS 6 memory dump that serves any address reads it out to anyone on the link, and the octets
   verify the spacecraft's own reports. An allowlist on the dump stops that; it does not stop code
@@ -147,6 +224,8 @@ own constellation, the downlink the operator reads, and the uplink nobody watche
 exceeding its authority, a legitimate origin exceeding nothing at all, and a control that works
 and cannot be heard working.
 
+## Ground stations and the constellation
+
 **Two ground stations, two consoles.** `make ground-stations` runs both as separate nodes
 against one spacecraft, and `make gs STATION=backup` is a console to sit at while a scenario runs
 elsewhere. They are nodes, not two integers in one process: each has its own identity on the wire,
@@ -171,89 +250,6 @@ the hub it belongs to so that "nothing happened" means the hub and not a typo.
 
 See [the design](docs/superpowers/specs/2026-08-28-cuberange-design.md) for where this is going.
 
-```
-$ make demo-p0
-COMM: uplink frame seq=0 carrying 11 octets -> OBC
-COMM: forwarded 11 octets to OBC on port 10
-OBC:  accepted a connection from 5 on port 10
-OBC:  APID 0x0a9 PUS 17,1 from source 66
-OBC:  PUS 17,2 report sent to COMM (counter 0)
-COMM: downlink 17 octets from node 1
-```
-
-## Why not just use NOS3 or a CTF
-
-NASA's [NOS3](https://github.com/nasa/nos3) simulates at the **operations** level: cFS runs
-natively on Linux and the buses are middleware. Hack-A-Sat's tooling emulated firmware but was a
-one-off, unmaintained since 2020. CubeRange sits at the **firmware and silicon** level and stays
-there: real Zephyr images on a real MCU model, a real CAN bus, and a real link — which is what
-makes memory-corruption, key extraction, bus injection and fault-injection exercises honest rather
-than scripted.
-
-## Getting started
-
-Needs Linux (WSL2 is fine), Python ≥ 3.10, ~8 GB of disk. No root, no Docker.
-
-On a minimal image, install these first. `bc` is not optional — the probe's arithmetic is six
-calls to it. `libicu` and OpenSSL 3 are dlopened by Renode's bundled .NET at startup, and a C
-compiler is needed because `make check` compiles the shared codec.
-
-```bash
-sudo apt install -y bc build-essential python3-dev libicu-dev libssl3
-pip install -r requirements.txt
-```
-
-**No root?** [docs/host-setup-without-root.md](docs/host-setup-without-root.md) is the path that
-was walked on a host with no `sudo`, `gcc`, `pip` or `make`, with the numbers it produced. Nothing
-in this repository needs a package manager.
-
-GTK is *not* needed: every invocation here passes `--disable-xwt`, so Renode never builds a UI.
-
-```bash
-# 1. Renode 1.16.1 portable, extracted to ~/tools/renode_1.16.1-dotnet_portable
-#    Both architectures unpack to that same directory name.
-case "$(uname -m)" in
-  x86_64)  RENODE_ASSET=renode-1.16.1.linux-portable-dotnet.tar.gz ;;
-  aarch64) RENODE_ASSET=renode-1.16.1.linux-arm64-portable-dotnet.tar.gz ;;
-esac
-curl -L -o /tmp/renode.tar.gz \
-  "https://github.com/renode/renode/releases/download/v1.16.1/$RENODE_ASSET"
-mkdir -p ~/tools && tar xzf /tmp/renode.tar.gz -C ~/tools
-
-# 2. Zephyr v4.1.0 + SDK (see tools/setup-toolchain.sh for why these exact versions)
-./tools/setup-toolchain.sh
-git clone --depth 1 --branch v2.1 https://github.com/libcsp/libcsp ~/libcsp
-
-# 3. Check the ground under your feet, then run the thing
-make probe
-make demo-p0
-```
-
-| Target | What it does |
-| --- | --- |
-| `make probe` | Verifies every Renode capability the design depends on. 40 checks, including five deliberate-failure self-tests |
-| `make firmware-p0` | Builds the COMM and OBC images |
-| `make firmware-f01` | Every satellite-0 image: COMM, OBC (both), both EPS profiles, both ADCS profiles |
-| `make firmware-g01` | The hardened OBC and EPS EX-G01 needs — the exercise is about every spacecraft-side control working |
-| `make firmware-sat1` | The same four roles built as spacecraft 1: different CSP addresses, different SCID |
-| `tools/ci.sh` | The gate as one command: environment check, then `make check`. What CI runs |
-| `make constellation` | Eight nodes, two spacecraft, one emulation — and the bus isolation between them |
-| `make demo-p0` | Runs the PUS round trip and asserts it |
-| `make demo` | The R0 smoke test: two nodes exchanging CSP pings over CAN |
-| `make determinism` | Runs one scenario three times under the CI profile and requires byte-identical guest output |
-| `make pair-gate` | Proves every vulnerable/mitigated pair differs by exactly one build flag, and nothing else |
-| `make spike` | Injects raw CAN frames from Python with no privileges, and drives virtual time over Renode's External Control API |
-| `make verify-all` | Every exercise, both directions: attacks land, mitigations block, features survive |
-| `make soak-p0` | Thirty consecutive round trips under a watchdog |
-| `make check` | All of the above plus the codec suites |
-
-`make probe` is sensitive to host contention — a clean run is about 6 minutes, and it took 35 with
-two other Renode workloads on the machine. Check the load before reading a slow probe as a
-regression.
-
-For USB inventory and diagnostics on an owner-operated FlatSat RP2040 teaching board, see [docs/flatsat.md](docs/flatsat.md).
-Run `make flatsat-web` for the [local web console](docs/flatsat-web.md), which manages board queries and recordings and presents the exercise catalog.
-
 ## How it fits together
 
 ```
@@ -265,6 +261,15 @@ ground station (Python)  --TCP-->  COMM.usart2  --CSP/CAN-->  OBC
 console delivers 9239 bytes of boot banner before the first application byte. The attacker injects
 raw CAN frames through a runtime-compiled C# peripheral on a bare Renode machine — no privileges,
 no SocketCAN, no attacker firmware.
+
+## Why not just use NOS3 or a CTF
+
+NASA's [NOS3](https://github.com/nasa/nos3) simulates at the **operations** level: cFS runs
+natively on Linux and the buses are middleware. Hack-A-Sat's tooling emulated firmware but was a
+one-off, unmaintained since 2020. CubeRange sits at the **firmware and silicon** level and stays
+there: real Zephyr images on a real MCU model, a real CAN bus, and a real link — which is what
+makes memory-corruption, key extraction, bus injection and fault-injection exercises honest rather
+than scripted.
 
 ## The evidence rule
 
